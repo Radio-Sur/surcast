@@ -65,8 +65,15 @@ impl IcecastManager {
         }
     }
 
-    fn write_config(&self, port: i32, source_password: &str, admin_user: &str, admin_password: &str) -> Result<(), String> {
-        let config = generate_config(self.dir(), port, source_password, admin_user, admin_password);
+    fn write_config(
+        &self,
+        port: i32,
+        source_password: &str,
+        admin_user: &str,
+        admin_password: &str,
+        drop_privileges: bool,
+    ) -> Result<(), String> {
+        let config = generate_config(self.dir(), port, source_password, admin_user, admin_password, drop_privileges);
         let config_path = self.config_path();
         std::fs::write(&config_path, &config).map_err(|e| format!("Failed to write config: {e}"))?;
         std::fs::set_permissions(&config_path, std::fs::Permissions::from_mode(0o600)).ok();
@@ -114,7 +121,12 @@ impl IcecastManager {
         self.copy_share_files();
 
         *self.port.lock().unwrap_or_else(|e| e.into_inner()) = Some(port);
-        self.write_config(port, source_password, admin_user, admin_password)?;
+        let root = running_as_root();
+        if root {
+            tracing::info!("Running as root, dropping Icecast privileges to icecast2");
+            chown_icecast_dir(self.dir());
+        }
+        self.write_config(port, source_password, admin_user, admin_password, root)?;
 
         let child = self.spawn_process(&binary).await?;
         *guard = Some(child);
@@ -163,8 +175,21 @@ impl IcecastManager {
     }
 }
 
-fn generate_config(dir: &Path, port: i32, source_password: &str, admin_user: &str, admin_password: &str) -> String {
+fn generate_config(dir: &Path, port: i32, source_password: &str, admin_user: &str, admin_password: &str, drop_privileges: bool) -> String {
     let logdir = dir.display();
+    let security = if drop_privileges {
+        r#"
+    <security>
+        <chroot>0</chroot>
+        <changeowner>
+            <user>icecast2</user>
+            <group>icecast2</group>
+        </changeowner>
+    </security>"#
+            .to_string()
+    } else {
+        String::new()
+    };
     format!(
         r#"<icecast>
     <limits>
@@ -196,7 +221,7 @@ fn generate_config(dir: &Path, port: i32, source_password: &str, admin_user: &st
         <adminroot>{logdir}/admin</adminroot>
         <mime-types>{logdir}/mime.types</mime-types>
     </paths>
-    <fileserve>1</fileserve>
+    <fileserve>1</fileserve>{security}
 </icecast>"#
     )
 }
@@ -215,12 +240,30 @@ application/xml xml
 application/octet-stream bin
 "#;
 
+fn running_as_root() -> bool {
+    std::process::Command::new("id")
+        .arg("-u")
+        .output()
+        .ok()
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim() == "0")
+        .unwrap_or(false)
+}
+
+fn chown_icecast_dir(dir: &Path) {
+    let _ = std::process::Command::new("chown")
+        .args(["-R", "icecast2:icecast2"])
+        .arg(dir)
+        .output();
+}
+
 fn find_icecast() -> Option<String> {
-    if let Ok(output) = std::process::Command::new("which").arg("icecast").output() {
-        if output.status.success() {
-            let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if !path.is_empty() {
-                return Some(path);
+    for name in ["icecast", "icecast2"] {
+        if let Ok(output) = std::process::Command::new("which").arg(name).output() {
+            if output.status.success() {
+                let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                if !path.is_empty() {
+                    return Some(path);
+                }
             }
         }
     }
@@ -234,7 +277,14 @@ fn find_icecast() -> Option<String> {
         }
     }
 
-    for path in &["/usr/bin/icecast", "/usr/local/bin/icecast", "/opt/homebrew/bin/icecast"] {
+    for path in [
+        "/usr/bin/icecast",
+        "/usr/bin/icecast2",
+        "/usr/local/bin/icecast",
+        "/usr/local/bin/icecast2",
+        "/opt/homebrew/bin/icecast",
+        "/opt/homebrew/bin/icecast2",
+    ] {
         if std::path::Path::new(path).exists() {
             return Some(path.to_string());
         }
@@ -318,19 +368,31 @@ mod tests {
     #[test]
     fn test_generate_config_contains_values() {
         let dir = std::path::Path::new("/tmp/icecast");
-        let config = generate_config(dir, 8000, "sourcepass", "adminuser", "adminpass");
+        let config = generate_config(dir, 8000, "sourcepass", "adminuser", "adminpass", false);
         assert!(config.contains("8000"));
         assert!(config.contains("sourcepass"));
         assert!(config.contains("adminuser"));
         assert!(config.contains("adminpass"));
         assert!(config.contains("<icecast>"));
         assert!(config.contains("</icecast>"));
+        assert!(!config.contains("changeowner"));
+    }
+
+    #[test]
+    fn test_generate_config_privilege_drop() {
+        let dir = std::path::Path::new("/tmp/icecast");
+        let root_config = generate_config(dir, 8000, "spw", "au", "ap", true);
+        assert!(root_config.contains("changeowner"));
+        assert!(root_config.contains("<user>icecast2</user>"));
+        assert!(root_config.contains("<group>icecast2</group>"));
+        let non_root_config = generate_config(dir, 8000, "spw", "au", "ap", false);
+        assert!(!non_root_config.contains("changeowner"));
     }
 
     #[test]
     fn test_generate_config_different_port() {
         let dir = std::path::Path::new("/tmp/icecast");
-        let config = generate_config(dir, 9000, "pw", "au", "ap");
+        let config = generate_config(dir, 9000, "pw", "au", "ap", false);
         assert!(config.contains("9000"));
         assert!(!config.contains("8000"));
     }

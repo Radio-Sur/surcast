@@ -37,6 +37,7 @@ Copy `.env.example` to `.env` and adjust the values:
 | `UPLOAD_DIR`          | Directory for uploaded audio                  | `./../uploads`              |
 | `RUST_LOG`            | Logging directives                            | `surcast_backend=debug,tower_http=debug` |
 | `LASTFM_API_KEY`      | Optional Last.fm key                          | –                            |
+| `ICECAST_PUBLIC_URL`  | Public base URL of the Icecast stream         | – (falls back to `<host>:8000`) |
 
 ### Docker
 
@@ -89,6 +90,26 @@ Found in `scripts/` (and on `PATH` inside the Nix dev shell):
 | `pg-start`   | Start the development PostgreSQL instance (port 5433) |
 | `pg-stop`    | Stop it                                       |
 | `pg-status`  | Show build status                               |
+
+## Deployment
+
+The Docker image is built by GitHub Actions and published to the GitHub
+Container Registry as
+[`ghcr.io/radio-sur/surcast`](https://github.com/Radio-Sur/surcast/pkgs/container/surcast)
+
+### From the registry (recommended)
+
+```bash
+docker compose pull
+docker compose up -d --no-build
+```
+
+### Building the image yourself
+
+```bash
+git clone --recurse-submodules <repo-url>
+docker compose up --build                # build + run locally
+```
 
 ## License
 

@@ -16,6 +16,7 @@ pub fn test_config() -> Config {
         server_port: 0,
         upload_dir: std::env::temp_dir().to_string_lossy().to_string(),
         lastfm_api_key: None,
+        icecast_public_url: String::new(),
     }
 }
 

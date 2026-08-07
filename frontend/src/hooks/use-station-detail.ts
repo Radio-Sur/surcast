@@ -1,5 +1,6 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
+import { useAppConfig } from "@/hooks/use-config";
 import { useElapsedTimer } from "@/hooks/use-elapsed-timer";
 import { usePlaylists } from "@/hooks/use-playlists";
 import { useSongs } from "@/hooks/use-songs";
@@ -67,7 +68,8 @@ export function useStationDetail(id: string | undefined) {
 
   const { status: streamStatus, queue: wsQueue, connected, listeners: liveListeners } = useLiveStation(station?.id);
 
-  const icecastHost = import.meta.env.VITE_ICECAST_HOST || "http://localhost:8000";
+  const icecastHost =
+    useAppConfig().data?.icecast_public_url || import.meta.env.VITE_ICECAST_HOST || "http://localhost:8000";
   const mount = station?.stream_url || (station ? `${station.name}.mp3` : "");
   const streamUrl = station
     ? `${icecastHost}/${encodeURIComponent(mount.endsWith(".mp3") ? mount : `${mount}.mp3`)}`

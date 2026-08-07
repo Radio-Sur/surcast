@@ -29,6 +29,7 @@ tokio-stream = "0.1"
 base64 = "0.22"
 async-trait = "0.1"
 quick-xml = "0.37"
+mime_guess = "2"
 autocue-rs = { path = "../autocue-rs" }
 
 [dev-dependencies]

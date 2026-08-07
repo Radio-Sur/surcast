@@ -1,4 +1,5 @@
 use axum::extract::DefaultBodyLimit;
+use axum::http::header;
 use axum::http::{StatusCode, Uri};
 use axum::middleware;
 use axum::response::{Html, IntoResponse};
@@ -234,6 +235,7 @@ pub fn create_router(db: PgPool, config: Config, icecast_manager: IcecastManager
 
     Router::new()
         .route("/api/health", get(health_check))
+        .route("/api/config", get(config_info))
         .route("/api/setup/status", get(auth::handlers::setup_status))
         .route("/api/setup/init", axum::routing::post(auth::handlers::setup_init))
         .route("/api/auth/login", axum::routing::post(auth::handlers::login))
@@ -256,6 +258,10 @@ async fn health_check() -> axum::Json<serde_json::Value> {
     axum::Json(serde_json::json!({ "status": "ok" }))
 }
 
+async fn config_info(axum::extract::State(config): axum::extract::State<Config>) -> axum::Json<serde_json::Value> {
+    axum::Json(serde_json::json!({ "icecast_public_url": config.icecast_public_url }))
+}
+
 async fn docs_page() -> Html<&'static str> {
     Html(include_str!("../../static/docs.html"))
 }
@@ -272,13 +278,20 @@ async fn fallback_handler(uri: Uri) -> impl axum::response::IntoResponse {
             axum::Json(serde_json::json!({ "error": format!("Route not found: {path}") })),
         )
             .into_response()
+    } else if path.contains("..") {
+        (StatusCode::NOT_FOUND, "Not found").into_response()
     } else {
-        let frontend_path = Path::new("../frontend/dist");
-        let index_path = frontend_path.join("index.html");
-        if let Ok(index) = tokio::fs::read_to_string(&index_path).await {
-            (StatusCode::OK, [("content-type", "text/html")], index).into_response()
-        } else {
-            (StatusCode::NOT_FOUND, "Not found").into_response()
+        let root = Path::new("../frontend/dist");
+        let file_path = root.join(path.trim_start_matches('/'));
+        match tokio::fs::read(&file_path).await {
+            Ok(bytes) => {
+                let content_type = mime_guess::from_path(&file_path).first_or_octet_stream();
+                (StatusCode::OK, [(header::CONTENT_TYPE, content_type.as_ref())], bytes).into_response()
+            }
+            Err(_) => match tokio::fs::read(root.join("index.html")).await {
+                Ok(index) => (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], index).into_response(),
+                Err(_) => (StatusCode::NOT_FOUND, "Not found").into_response(),
+            },
         }
     }
 }

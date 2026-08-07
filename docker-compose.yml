@@ -1,6 +1,7 @@
 services:
   postgres:
     image: postgres:16-alpine
+    restart: unless-stopped
     environment:
       POSTGRES_USER: surcast
       POSTGRES_PASSWORD: surcast
@@ -9,6 +10,8 @@ services:
       - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
+    networks:
+      - surcast
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U surcast"]
       interval: 5s
@@ -16,9 +19,11 @@ services:
       retries: 5
 
   backend:
+    image: ghcr.io/radio-sur/surcast:latest
     build:
       context: .
       dockerfile: Dockerfile
+    restart: unless-stopped
     env_file: .env
     environment:
       DATABASE_URL: postgres://surcast:surcast@postgres:5432/surcast
@@ -27,10 +32,22 @@ services:
       - "8000:8000"
     volumes:
       - uploads:/workspace/uploads
+    networks:
+      - surcast
     depends_on:
       postgres:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:3001/api/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
 
 volumes:
   pgdata:
   uploads:
+
+networks:
+  surcast:
+    driver: bridge

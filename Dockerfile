@@ -12,20 +12,22 @@ RUN apt-get update \
 WORKDIR /workspace
 ENV CARGO_TARGET_DIR=/workspace/target
 
-COPY autocue-rs/Cargo.toml autocue-rs/Cargo.lock autocue-rs/src ./autocue-rs/
+COPY autocue-rs/ ./autocue-rs/
 
 COPY backend/Cargo.toml backend/Cargo.lock ./backend/
 RUN mkdir -p backend/src && echo "fn main() {}" > backend/src/main.rs
 RUN cargo build --release --manifest-path backend/Cargo.toml 2>/dev/null || true
 
 RUN rm -rf backend/src
-COPY backend/src backend/static backend/migrations ./backend/
+COPY backend/ ./backend/
 RUN cargo build --release --manifest-path backend/Cargo.toml
 
 FROM debian:bookworm-slim
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends ca-certificates icecast2 ffmpeg \
-  && rm -rf /var/lib/apt/lists/*
+  && apt-get install -y --no-install-recommends ca-certificates icecast2 ffmpeg curl \
+  && rm -rf /var/lib/apt/lists/* \
+  && (groupadd -r icecast2 || true) \
+  && usermod -g icecast2 icecast2
 WORKDIR /workspace/backend
 
 COPY --from=backend-builder /workspace/target/release/surcast-backend ./

@@ -10,6 +10,7 @@ pub struct Config {
     pub server_port: u16,
     pub lastfm_api_key: Option<String>,
     pub upload_dir: String,
+    pub icecast_public_url: String,
 }
 
 impl Config {
@@ -32,6 +33,7 @@ impl Config {
                 .expect("SERVER_PORT must be a number"),
             lastfm_api_key: env::var("LASTFM_API_KEY").ok(),
             upload_dir: env::var("UPLOAD_DIR").unwrap_or_else(|_| "./uploads".to_string()),
+            icecast_public_url: env::var("ICECAST_PUBLIC_URL").unwrap_or_default(),
         }
     }
 }
@@ -51,6 +53,7 @@ mod tests {
         env::remove_var("SERVER_PORT");
         env::remove_var("LASTFM_API_KEY");
         env::remove_var("UPLOAD_DIR");
+        env::remove_var("ICECAST_PUBLIC_URL");
     }
 
     #[test]
