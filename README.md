@@ -90,6 +90,26 @@ Found in `scripts/` (and on `PATH` inside the Nix dev shell):
 | `pg-stop`    | Stop it                                       |
 | `pg-status`  | Show build status                               |
 
+## Deployment
+
+The Docker image is built by GitHub Actions and published to the GitHub
+Container Registry as
+[`ghcr.io/pengwius/surcast`](https://github.com/pengwius/surcast/pkgs/container/surcast).
+
+### From the registry (recommended)
+
+```bash
+docker compose pull
+docker compose up -d --no-build
+```
+
+### Building the image yourself
+
+```bash
+git clone --recurse-submodules <repo-url>
+docker compose up --build                # build + run locally
+```
+
 ## License
 
 GPL-3.0 — see [LICENSE](LICENSE).
