@@ -25,9 +25,12 @@ services:
     ports:
       - "80:3001"
       - "8000:8000"
+    volumes:
+      - uploads:/workspace/uploads
     depends_on:
       postgres:
         condition: service_healthy
 
 volumes:
   pgdata:
+  uploads:

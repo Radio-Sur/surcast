@@ -1,0 +1,7 @@
+**/target
+node_modules
+frontend/dist
+test-results
+uploads
+.pgdata
+.git
