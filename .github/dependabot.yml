@@ -1,0 +1,50 @@
+version: 2
+
+updates:
+  - package-ecosystem: "cargo"
+    directory: "/backend"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "18:00"
+      timezone: "Europe/Warsaw"
+    open-pull-requests-limit: 10
+    labels: ["dependencies", "backend"]
+    commit-message:
+      prefix: "chore(deps)"
+      prefix-development: "chore(deps-dev)"
+    rebase-strategy: "auto"
+    groups:
+      rust-minor:
+        applies-to: version-updates
+        update-types: ["minor", "patch"]
+        patterns: ["*"]
+
+  - package-ecosystem: "bun"
+    directory: "/frontend"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "18:00"
+      timezone: "Europe/Warsaw"
+    labels: ["dependencies", "frontend"]
+    commit-message:
+      prefix: "chore(deps)"
+      prefix-development: "chore(deps-dev)"
+    rebase-strategy: "auto"
+    groups:
+      frontend-minor:
+        applies-to: version-updates
+        update-types: ["minor", "patch"]
+        patterns: ["*"]
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "18:00"
+      timezone: "Europe/Warsaw"
+    labels: ["dependencies", "ci"]
+    commit-message:
+      prefix: "chore(deps)"
