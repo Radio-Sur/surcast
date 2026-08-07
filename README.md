@@ -20,6 +20,10 @@ Internet radio broadcast management software.
 
 ### Configuration
 
+```bash
+git clone --recurse-submodules https://github.com/Radio-Sur/surcast.git
+```
+
 Copy `.env.example` to `.env` and adjust the values:
 
 | Variable              | Description                                   | Default                     |
