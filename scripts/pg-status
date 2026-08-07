@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+set -e
+
+PGDATA="${SURCAST_PGDATA:-$PWD/.pgdata}"
+
+if [ ! -d "$PGDATA" ]; then
+  echo "❌ .pgdata does not exist – run pg-start"
+  exit 1
+fi
+
+pg_ctl -D "$PGDATA" status

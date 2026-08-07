@@ -1,0 +1,183 @@
+mod api_common;
+mod common;
+
+use axum_test::TestServer;
+use serde_json::json;
+
+async fn setup_auth() -> (TestServer, String) {
+    let pool = common::setup_db().await;
+    let app = api_common::create_test_app(pool);
+    let server = TestServer::new(app).expect("server");
+
+    server
+        .post("/api/setup/init")
+        .json(&json!({"username": "admin", "password": "admin123"}))
+        .await;
+
+    let login_resp = server
+        .post("/api/auth/login")
+        .json(&json!({"username": "admin", "password": "admin123"}))
+        .await;
+
+    let token = login_resp.json::<serde_json::Value>()["access_token"].as_str().unwrap().to_string();
+
+    (server, token)
+}
+
+#[tokio::test]
+async fn test_create_playlist_returns_201() {
+    let (server, token) = setup_auth().await;
+
+    let resp = server
+        .post("/api/playlists")
+        .add_header("Authorization", &format!("Bearer {token}"))
+        .json(&json!({"name": "My Playlist", "description": "A test playlist"}))
+        .await;
+    assert_eq!(resp.status_code(), 201);
+    let body = resp.json::<serde_json::Value>();
+    assert_eq!(body["name"].as_str().unwrap(), "My Playlist");
+    assert_eq!(body["song_count"].as_i64().unwrap(), 0);
+}
+
+#[tokio::test]
+async fn test_list_playlists_returns_200() {
+    let (server, token) = setup_auth().await;
+
+    server
+        .post("/api/playlists")
+        .add_header("Authorization", &format!("Bearer {token}"))
+        .json(&json!({"name": "Playlist A"}))
+        .await;
+
+    let resp = server
+        .get("/api/playlists")
+        .add_header("Authorization", &format!("Bearer {token}"))
+        .await;
+    assert_eq!(resp.status_code(), 200);
+    let list = resp.json::<Vec<serde_json::Value>>();
+    assert!(!list.is_empty());
+}
+
+#[tokio::test]
+async fn test_get_playlist_returns_200() {
+    let (server, token) = setup_auth().await;
+
+    let create_resp = server
+        .post("/api/playlists")
+        .add_header("Authorization", &format!("Bearer {token}"))
+        .json(&json!({"name": "Specific Playlist"}))
+        .await;
+    let playlist_id = create_resp.json::<serde_json::Value>()["id"].as_str().unwrap().to_string();
+
+    let resp = server
+        .get(&format!("/api/playlists/{playlist_id}"))
+        .add_header("Authorization", &format!("Bearer {token}"))
+        .await;
+    assert_eq!(resp.status_code(), 200);
+    assert_eq!(resp.json::<serde_json::Value>()["name"].as_str().unwrap(), "Specific Playlist");
+}
+
+#[tokio::test]
+async fn test_update_playlist_returns_200() {
+    let (server, token) = setup_auth().await;
+
+    let create_resp = server
+        .post("/api/playlists")
+        .add_header("Authorization", &format!("Bearer {token}"))
+        .json(&json!({"name": "Old Name"}))
+        .await;
+    let playlist_id = create_resp.json::<serde_json::Value>()["id"].as_str().unwrap().to_string();
+
+    let resp = server
+        .put(&format!("/api/playlists/{playlist_id}"))
+        .add_header("Authorization", &format!("Bearer {token}"))
+        .json(&json!({"name": "New Name", "description": "Updated"}))
+        .await;
+    assert_eq!(resp.status_code(), 200);
+    assert_eq!(resp.json::<serde_json::Value>()["name"].as_str().unwrap(), "New Name");
+}
+
+#[tokio::test]
+async fn test_delete_playlist_returns_204() {
+    let (server, token) = setup_auth().await;
+
+    let create_resp = server
+        .post("/api/playlists")
+        .add_header("Authorization", &format!("Bearer {token}"))
+        .json(&json!({"name": "To Delete"}))
+        .await;
+    let playlist_id = create_resp.json::<serde_json::Value>()["id"].as_str().unwrap().to_string();
+
+    let resp = server
+        .delete(&format!("/api/playlists/{playlist_id}"))
+        .add_header("Authorization", &format!("Bearer {token}"))
+        .await;
+    assert_eq!(resp.status_code(), 204);
+}
+
+#[tokio::test]
+async fn test_list_playlist_songs_empty_returns_200() {
+    let (server, token) = setup_auth().await;
+
+    let create_resp = server
+        .post("/api/playlists")
+        .add_header("Authorization", &format!("Bearer {token}"))
+        .json(&json!({"name": "Empty Playlist"}))
+        .await;
+    let playlist_id = create_resp.json::<serde_json::Value>()["id"].as_str().unwrap().to_string();
+
+    let resp = server
+        .get(&format!("/api/playlists/{playlist_id}/songs"))
+        .add_header("Authorization", &format!("Bearer {token}"))
+        .await;
+    assert_eq!(resp.status_code(), 200);
+    let body = resp.json::<serde_json::Value>();
+    assert!(body["songs"].as_array().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn test_add_playlist_songs_needs_songs_first() {
+    let (server, token) = setup_auth().await;
+
+    let create_resp = server
+        .post("/api/playlists")
+        .add_header("Authorization", &format!("Bearer {token}"))
+        .json(&json!({"name": "Playlist With Songs"}))
+        .await;
+    let playlist_id = create_resp.json::<serde_json::Value>()["id"].as_str().unwrap().to_string();
+
+    let resp = server
+        .get(&format!("/api/playlists/{playlist_id}/songs"))
+        .add_header("Authorization", &format!("Bearer {token}"))
+        .await;
+    assert_eq!(resp.status_code(), 200);
+    let body = resp.json::<serde_json::Value>();
+    assert!(body["songs"].as_array().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn test_add_playlist_to_queue() {
+    let (server, token) = setup_auth().await;
+
+    let create_resp = server
+        .post("/api/playlists")
+        .add_header("Authorization", &format!("Bearer {token}"))
+        .json(&json!({"name": "Queue Playlist"}))
+        .await;
+    let playlist_id = create_resp.json::<serde_json::Value>()["id"].as_str().unwrap().to_string();
+
+    let station_resp = server
+        .post("/api/stations")
+        .add_header("Authorization", &format!("Bearer {token}"))
+        .json(&json!({"name": "Test Station"}))
+        .await;
+    let station_id = station_resp.json::<serde_json::Value>()["id"].as_str().unwrap().to_string();
+
+    let resp = server
+        .post(&format!("/api/playlists/{playlist_id}/add-to-queue/{station_id}"))
+        .add_header("Authorization", &format!("Bearer {token}"))
+        .await;
+    assert_eq!(resp.status_code(), 201);
+    let body = resp.json::<serde_json::Value>();
+    assert_eq!(body["added"].as_i64().unwrap(), 0);
+}

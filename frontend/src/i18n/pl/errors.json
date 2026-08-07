@@ -1,0 +1,6 @@
+{
+  "station_create": "Nie udało się utworzyć stacji",
+  "station_update": "Nie udało się zaktualizować stacji",
+  "login": "Logowanie nieudane",
+  "setup": "Konfiguracja nieudana"
+}

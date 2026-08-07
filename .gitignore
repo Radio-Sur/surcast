@@ -1,0 +1,37 @@
+# Rust
+backend/target/
+
+# Node / Bun
+node_modules/
+frontend/node_modules/
+frontend/dist/
+package-lock.json
+frontend/package-lock.json
+
+.pgdata/
+
+.icecast/
+
+uploads/
+
+# Env
+.env
+
+# Direnv
+.direnv/
+.envrc
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build artifacts
+*.tsbuildinfo
+
+# Tests
+test-results/
+playwright-report/

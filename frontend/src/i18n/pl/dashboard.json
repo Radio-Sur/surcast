@@ -1,0 +1,16 @@
+{
+  "welcome": "Witaj ponownie, {{name}}",
+  "subtitle": "Oto przegląd Twoich stacji radiowych.",
+  "total_stations": "Liczba stacji",
+  "user_role": "Rola użytkownika",
+  "fallback": "-",
+  "recent_stations": "Ostatnie stacje",
+  "get_started_title": "Rozpocznij",
+  "get_started_text": "Utwórz swoją pierwszą stację radiową, aby rozpocząć.",
+  "listeners_title": "Słuchacze",
+  "listeners_now": "Słuchają teraz",
+  "listeners_by_hour": "Średnia liczba słuchaczy według godziny",
+  "listeners_by_weekday": "Średnia liczba słuchaczy według dnia",
+  "listeners_per_station": "Słuchacze na stację",
+  "listeners_load_error": "Nie udało się wczytać danych o słuchaczach."
+}

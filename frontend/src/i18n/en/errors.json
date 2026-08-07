@@ -1,0 +1,6 @@
+{
+  "station_create": "Failed to create station",
+  "station_update": "Failed to update station",
+  "login": "Login failed",
+  "setup": "Setup failed"
+}

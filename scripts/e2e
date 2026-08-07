@@ -1,0 +1,68 @@
+#!/usr/bin/env bash
+set -e
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$ROOT"
+
+START=$SECONDS
+
+cleanup() {
+  echo ""
+  echo "==> Cleaning up..."
+  kill $BACKEND_PID $FRONTEND_PID 2>/dev/null || true
+  wait 2>/dev/null || true
+  echo "Done (took $((SECONDS - START))s)"
+}
+trap cleanup EXIT INT TERM
+
+echo "==> PostgreSQL"
+./scripts/pg-start
+
+echo "==> Building backend (if needed)"
+cd backend
+if [ ! -f target/release/surcast-backend ]; then
+  cargo build --release
+fi
+
+echo "==> Starting backend"
+./target/release/surcast-backend &
+BACKEND_PID=$!
+cd "$ROOT"
+
+echo "==> Waiting for backend (port 3001)"
+for i in $(seq 1 30); do
+  if curl -s http://localhost:3001/api/setup/status > /dev/null 2>&1; then
+    break
+  fi
+  sleep 1
+done
+
+echo "==> Ensuring admin user exists"
+STATUS=$(curl -s http://localhost:3001/api/setup/status)
+if echo "$STATUS" | grep -q '"setup_complete":false'; then
+  curl -s -X POST http://localhost:3001/api/setup/init \
+    -H 'Content-Type: application/json' \
+    -d '{"username":"admin","password":"password123","name":"Admin"}'
+fi
+
+echo "==> Starting frontend dev server"
+cd frontend
+if [ ! -d node_modules ]; then
+  bun install
+fi
+bun run dev &
+FRONTEND_PID=$!
+cd "$ROOT"
+
+echo "==> Waiting for frontend (port 6767)"
+for i in $(seq 1 30); do
+  if curl -s http://localhost:6767 > /dev/null 2>&1; then
+    break
+  fi
+  sleep 1
+done
+
+echo "==> Running Playwright E2E tests"
+cd frontend
+npx playwright test "$@"
+cd "$ROOT"

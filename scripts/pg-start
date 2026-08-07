@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+set -e
+
+PGDATA="${SURCAST_PGDATA:-$PWD/.pgdata}"
+
+if [ ! -d "$PGDATA" ]; then
+  initdb --auth=trust --username=postgres --no-locale --encoding=UTF8 -D "$PGDATA"
+  cat > "$PGDATA/postgresql.conf" <<-EOF
+unix_socket_directories = '$PGDATA'
+listen_addresses = 'localhost'
+port = 5433
+max_connections = 100
+shared_buffers = 128MB
+EOF
+fi
+
+if pg_ctl -D "$PGDATA" status > /dev/null 2>&1; then
+  echo "PostgreSQL already running (PID $(head -1 $PGDATA/postmaster.pid 2>/dev/null))"
+  exit 0
+fi
+
+pg_ctl -D "$PGDATA" -l "$PGDATA/pg.log" start
+sleep 2
+
+if ! pg_ctl -D "$PGDATA" status > /dev/null 2>&1; then
+  echo "⚠️  PostgreSQL not started. Log:"
+  tail -5 "$PGDATA/pg.log"
+  exit 1
+fi
+
+PGPORT=5433 psql -U postgres -tc \
+  "SELECT 1 FROM pg_roles WHERE rolname='surcast'" | grep -q 1 || \
+  PGPORT=5433 psql -U postgres -c "CREATE USER surcast WITH PASSWORD 'surcast';"
+PGPORT=5433 psql -U postgres -tc \
+  "SELECT 1 FROM pg_database WHERE datname='surcast'" | grep -q 1 || \
+  PGPORT=5433 psql -U postgres -c "CREATE DATABASE surcast OWNER surcast;"
+
+echo "PostgreSQL runs on port 5433: $PGDATA"

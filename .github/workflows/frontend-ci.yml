@@ -1,0 +1,85 @@
+name: Frontend Build, Lint and Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  frontend:
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: ./frontend
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          working-directory: ./backend
+
+      - uses: actions/cache@v4
+        with:
+          path: backend/target
+          key: cargo-${{ runner.os }}-${{ hashFiles('backend/Cargo.lock') }}
+          restore-keys: |
+            cargo-${{ runner.os }}-
+
+      - run: bun install --frozen-lockfile
+
+      - name: Lint
+        run: bun run lint
+
+      - name: Typecheck
+        run: bun run typecheck
+
+      - name: Build frontend
+        run: bun run build
+
+      - name: Unit & Integration Tests
+        run: bun run test
+
+      # - name: Build backend
+      #   working-directory: ./backend
+      #   run: cargo build --release
+      #   env:
+      #     DATABASE_URL: postgres://surcast:surcast@localhost:5433/surcast
+      #     JWT_SECRET: ci-test-secret
+
+      # - name: Start backend
+      #   working-directory: ./backend
+      #   run: |
+      #     ./target/release/surcast-backend &
+      #     echo "BACKEND_PID=$!" >> $GITHUB_ENV
+      #     for i in $(seq 1 30); do
+      #       if curl -s http://localhost:3001/api/setup/status > /dev/null 2>&1; then break; fi
+      #       sleep 1
+      #     done
+      #   env:
+      #     DATABASE_URL: postgres://surcast:surcast@localhost:5433/surcast
+      #     JWT_SECRET: ci-test-secret
+      #     SERVER_HOST: 0.0.0.0
+      #     SERVER_PORT: 3001
+
+      # - name: Seed admin user
+      #   run: |
+      #     curl -s -X POST http://localhost:3001/api/setup/init \
+      #       -H 'Content-Type: application/json' \
+      #       -d '{"username":"admin","password":"password123","name":"Admin"}'
+
+      # - name: Install Playwright Browsers
+      #   run: npx playwright install --with-deps chromium
+
+      # - name: E2E Tests
+      #   run: npx playwright test
+      #   env:
+      #     CI: true

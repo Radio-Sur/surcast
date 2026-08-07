@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+set -e
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$ROOT"
+
+echo "==> PostgreSQL"
+./scripts/pg-start
+
+if [ ! -d frontend/node_modules ]; then
+  cd frontend && bun install && cd "$ROOT"
+fi
+
+cleanup() {
+  kill $BACKEND_PID $FRONTEND_PID 2>/dev/null || true
+  wait 2>/dev/null || true
+}
+trap cleanup EXIT INT TERM
+
+cd backend
+cargo watch -x run &
+BACKEND_PID=$!
+cd "$ROOT"
+
+cd frontend
+bun run dev &
+FRONTEND_PID=$!
+cd "$ROOT"
+
+wait

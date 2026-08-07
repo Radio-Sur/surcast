@@ -1,0 +1,19 @@
+{
+  "title": "Users",
+  "subtitle": "Manage user accounts and roles.",
+  "table_username": "Username",
+  "table_name": "Name",
+  "table_role": "Role",
+  "table_created": "Created",
+  "empty": "No users found.",
+  "edit": "Edit",
+  "delete": "Delete",
+  "edit_title": "Edit User",
+  "name_label": "Name",
+  "role_label": "Role",
+  "role_admin": "admin",
+  "role_manager": "manager",
+  "role_viewer": "viewer",
+  "delete_title": "Delete User",
+  "delete_message": "This action cannot be undone. The user will lose access immediately."
+}

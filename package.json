@@ -1,0 +1,11 @@
+{
+  "name": "surcast",
+  "private": true,
+  "scripts": {
+    "dev": "bash scripts/dev",
+    "frontend": "cd frontend && bun run dev",
+    "frontend:build": "cd frontend && bun run build",
+    "docker:up": "docker compose up --build",
+    "docker:down": "docker compose down"
+  }
+}

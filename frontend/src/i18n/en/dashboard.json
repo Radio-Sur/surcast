@@ -1,0 +1,16 @@
+{
+  "welcome": "Welcome back, {{name}}",
+  "subtitle": "Here's an overview of your radio stations.",
+  "total_stations": "Total Stations",
+  "user_role": "User Role",
+  "fallback": "-",
+  "recent_stations": "Recent Stations",
+  "get_started_title": "Get Started",
+  "get_started_text": "Create your first radio station to get started.",
+  "listeners_title": "Listeners",
+  "listeners_now": "Listening now",
+  "listeners_by_hour": "Average listeners by hour",
+  "listeners_by_weekday": "Average listeners by day",
+  "listeners_per_station": "Listeners per station",
+  "listeners_load_error": "Failed to load listener data."
+}

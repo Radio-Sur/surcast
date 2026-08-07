@@ -1,0 +1,19 @@
+{
+  "title": "Użytkownicy",
+  "subtitle": "Zarządzaj kontami i rolami użytkowników.",
+  "table_username": "Nazwa użytkownika",
+  "table_name": "Imię i nazwisko",
+  "table_role": "Rola",
+  "table_created": "Utworzono",
+  "empty": "Nie znaleziono użytkowników.",
+  "edit": "Edytuj",
+  "delete": "Usuń",
+  "edit_title": "Edytuj użytkownika",
+  "name_label": "Imię i nazwisko",
+  "role_label": "Rola",
+  "role_admin": "admin",
+  "role_manager": "menedżer",
+  "role_viewer": "przeglądający",
+  "delete_title": "Usuń użytkownika",
+  "delete_message": "Tej operacji nie można cofnąć. Użytkownik natychmiast straci dostęp."
+}

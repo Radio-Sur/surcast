@@ -1,0 +1,15 @@
+{
+  "dashboard": "Panel",
+  "stations": "Stacje",
+  "music": "Muzyka",
+  "playlists": "Playlisty",
+  "api_keys": "Klucze API",
+  "users": "Użytkownicy",
+  "admin": "ADMIN",
+  "icecast": "Icecast",
+  "brand_sur": "Sur",
+  "brand_cast": "cast",
+  "brand_full": "Surcast",
+  "log_out": "Wyloguj",
+  "language": "Język"
+}

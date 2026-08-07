@@ -1,0 +1,74 @@
+name: Backend Build, Lint, and Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: surcast
+          POSTGRES_PASSWORD: surcast
+          POSTGRES_DB: surcast
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U surcast"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          working-directory: ./backend
+
+      - uses: actions/cache@v4
+        with:
+          path: backend/target
+          key: cargo-${{ runner.os }}-${{ hashFiles('backend/Cargo.lock') }}
+          restore-keys: |
+            cargo-${{ runner.os }}-
+
+      - name: Check formatting
+        working-directory: ./backend
+        run: cargo fmt --all -- --check
+
+      - name: Lint with clippy
+        working-directory: ./backend
+        run: cargo clippy -- -D warnings
+        env:
+          DATABASE_URL: postgres://surcast:surcast@localhost:5433/surcast
+          JWT_SECRET: ci-lint-secret
+
+      - name: Run unit tests
+        working-directory: ./backend
+        run: cargo test --lib
+        env:
+          DATABASE_URL: postgres://surcast:surcast@localhost:5433/surcast
+          JWT_SECRET: ci-test-secret
+
+      - name: Run integration tests
+        working-directory: ./backend
+        run: cargo test --tests -- --test-threads=1
+        env:
+          DATABASE_URL: postgres://surcast:surcast@localhost:5433/surcast
+          JWT_SECRET: ci-test-secret
+
+      - name: Build release
+        working-directory: ./backend
+        run: cargo build --release
+        env:
+          DATABASE_URL: postgres://surcast:surcast@localhost:5433/surcast
+          JWT_SECRET: ci-build-secret

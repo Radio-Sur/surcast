@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+set -e
+
+PGDATA="${SURCAST_PGDATA:-$PWD/.pgdata}"
+
+if pg_ctl -D "$PGDATA" status > /dev/null 2>&1; then
+  pg_ctl -D "$PGDATA" stop
+  echo "PostgreSQL stopped"
+else
+  echo "PostgreSQL not running"
+fi
