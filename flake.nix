@@ -25,6 +25,13 @@
             nodejs_22
             bun
             icecast
+            gst_all_1.gstreamer
+            gst_all_1.gst-plugins-base
+            gst_all_1.gst-plugins-good
+            gst_all_1.gst-plugins-bad
+            gst_all_1.gst-plugins-ugly
+            gst_all_1.gst-libav
+
 
             # Playwright / Chromium system deps
             nss nspr atk at-spi2-atk cups libdrm pango expat
@@ -40,6 +47,14 @@
             alsa-lib libgbm dbus systemd libGL stdenv.cc.cc
             glib gtk3 cairo libthai freetype fontconfig harfbuzz
             bzip2 zlib libpng libjpeg
+            gst_all_1.gstreamer gst_all_1.gst-plugins-base
+          ];
+          GST_PLUGIN_SYSTEM_PATH_1_0 = with pkgs; lib.makeSearchPath "lib/gstreamer-1.0" [
+            gst_all_1.gst-plugins-base
+            gst_all_1.gst-plugins-good
+            gst_all_1.gst-plugins-bad
+            gst_all_1.gst-plugins-ugly
+            gst_all_1.gst-libav
           ];
 
 
