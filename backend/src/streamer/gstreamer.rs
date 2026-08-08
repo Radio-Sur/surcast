@@ -70,7 +70,7 @@ impl GStreamerPipelineFactory {
         Ok(())
     }
 
-    fn build_backbone(&self, config: &PipelineConfig) -> Result<(gst::Pipeline, gst::Element, gst::Element), PipelineError> {
+    fn build_backbone(&self, config: &PipelineConfig) -> Result<(gst::Pipeline, gst::Element, gst::Element, gst::Element), PipelineError> {
         self.validate()?;
         let pipeline = gst::Pipeline::new();
         let mixer = element("audiomixer")?;
@@ -132,7 +132,7 @@ impl GStreamerPipelineFactory {
             &sink,
         ])
         .map_err(|error| PipelineError::Pipeline(error.to_string()))?;
-        Ok((pipeline, mixer, sink))
+        Ok((pipeline, mixer, sink, clock_gate))
     }
 }
 
@@ -151,6 +151,7 @@ pub(crate) struct GStreamerPipeline {
     mixer: gst::Element,
     sink: Mutex<gst::Element>,
     branches: Mutex<Vec<(Vec<gst::Element>, gst::Pad)>>,
+    active: Arc<Mutex<Option<(u64, super::pipeline::TrackKey)>>>,
     snapshot: Mutex<PipelineSnapshot>,
     events: mpsc::UnboundedSender<PipelineEvent>,
 }
@@ -184,7 +185,7 @@ impl GStreamerPipeline {
         }
     }
 
-    fn attach_track(&self, track: &super::pipeline::PipelineTrack) -> Result<(), PipelineError> {
+    fn attach_track(&self, track: &super::pipeline::PipelineTrack, generation: u64) -> Result<(), PipelineError> {
         let uri = gst::glib::filename_to_uri(&track.path, None).map_err(|error| PipelineError::Pipeline(error.to_string()))?;
         let source = element("uridecodebin")?;
         source.set_property("uri", uri.as_str());
@@ -226,7 +227,7 @@ impl GStreamerPipeline {
         source.connect_no_more_pads(move |_| {
             if !no_audio_sink.is_linked() {
                 let _ = events.send(PipelineEvent::DecodeFailed {
-                    generation: 0,
+                    generation,
                     track: key.clone(),
                     message: "decoder exposed no audio/x-raw pad".into(),
                 });
@@ -258,13 +259,14 @@ impl GStreamerPipeline {
 #[async_trait]
 impl PlaybackPipeline for GStreamerPipeline {
     async fn replace(&self, plan: PairPlan) -> Result<(), PipelineError> {
+        *self.active.lock().unwrap_or_else(|error| error.into_inner()) = Some((plan.generation, plan.current.key.clone()));
         self.clear_branches();
-        self.attach_track(&plan.current)?;
+        self.attach_track(&plan.current, plan.generation)?;
         self.set_state(PipelineState::Playing)
     }
 
     async fn append(&self, plan: PairPlan) -> Result<(), PipelineError> {
-        self.attach_track(&plan.current)
+        self.attach_track(&plan.current, plan.generation)
     }
 
     async fn set_playing(&self, playing: bool) -> Result<(), PipelineError> {
@@ -277,10 +279,17 @@ impl PlaybackPipeline for GStreamerPipeline {
     }
 
     async fn snapshot(&self) -> Result<PipelineSnapshot, PipelineError> {
-        Ok(self.snapshot.lock().unwrap_or_else(|error| error.into_inner()).clone())
+        let mut snapshot = self.snapshot.lock().unwrap_or_else(|error| error.into_inner());
+        if snapshot.state != PipelineState::Stopped {
+            if let Some(position) = self.pipeline.query_position::<gst::ClockTime>() {
+                snapshot.elapsed = Duration::from_nanos(position.nseconds());
+            }
+        }
+        Ok(snapshot.clone())
     }
 
     async fn stop(&self) -> Result<(), PipelineError> {
+        *self.active.lock().unwrap_or_else(|error| error.into_inner()) = None;
         self.set_state(PipelineState::Stopped)
     }
 }
@@ -288,14 +297,31 @@ impl PlaybackPipeline for GStreamerPipeline {
 #[async_trait]
 impl PlaybackPipelineFactory for GStreamerPipelineFactory {
     async fn create(&self, config: PipelineConfig) -> Result<PipelineInstance, PipelineError> {
-        let (pipeline, mixer, sink) = self.build_backbone(&config)?;
+        let (pipeline, mixer, sink, clock_gate) = self.build_backbone(&config)?;
         let (events, receiver) = mpsc::unbounded_channel();
+        let active = Arc::new(Mutex::new(None));
+        let probe_active = active.clone();
+        let probe_events = events.clone();
+        let clock_gate_src = clock_gate
+            .static_pad("src")
+            .ok_or_else(|| PipelineError::Pipeline("clock gate has no source pad".into()))?;
+        clock_gate_src.add_probe(gst::PadProbeType::EVENT_DOWNSTREAM, move |_, info| {
+            if let Some(gst::PadProbeData::Event(event)) = &info.data {
+                if event.type_() == gst::EventType::Eos {
+                    if let Some((generation, current)) = probe_active.lock().unwrap_or_else(|error| error.into_inner()).clone() {
+                        let _ = probe_events.send(PipelineEvent::CurrentEos { generation, current });
+                    }
+                }
+            }
+            gst::PadProbeReturn::Ok
+        });
         Ok(PipelineInstance {
             pipeline: Arc::new(GStreamerPipeline {
                 pipeline,
                 mixer,
                 sink: Mutex::new(sink),
                 branches: Mutex::new(Vec::new()),
+                active,
                 snapshot: Mutex::new(PipelineSnapshot {
                     state: PipelineState::Stopped,
                     elapsed: Duration::ZERO,
@@ -353,17 +379,17 @@ mod tests {
         wav.extend(std::iter::repeat_n(0u8, 8_820));
         std::fs::write(file.path(), wav).unwrap();
 
-        let instance = GStreamerPipelineFactory::with_test_sink().create(config()).await.unwrap();
-        instance
-            .pipeline
+        let PipelineInstance { pipeline, mut events } = GStreamerPipelineFactory::with_test_sink().create(config()).await.unwrap();
+        let key = TrackKey {
+            queue_item_id: Uuid::new_v4(),
+            song_id: Uuid::new_v4(),
+            position: 0,
+        };
+        pipeline
             .replace(PairPlan {
                 generation: 1,
                 current: PipelineTrack {
-                    key: TrackKey {
-                        queue_item_id: Uuid::new_v4(),
-                        song_id: Uuid::new_v4(),
-                        position: 0,
-                    },
+                    key: key.clone(),
                     path: file.path().to_path_buf(),
                     cue_in: Duration::ZERO,
                     cue_out: Duration::ZERO,
@@ -375,8 +401,12 @@ mod tests {
             })
             .await
             .unwrap();
-        assert_eq!(instance.pipeline.snapshot().await.unwrap().state, PipelineState::Playing);
-        instance.pipeline.stop().await.unwrap();
+        assert_eq!(pipeline.snapshot().await.unwrap().state, PipelineState::Playing);
+        assert!(matches!(
+            tokio::time::timeout(Duration::from_secs(3), events.recv()).await.unwrap(),
+            Some(PipelineEvent::CurrentEos { generation: 1, current }) if current == key
+        ));
+        pipeline.stop().await.unwrap();
     }
 
     #[tokio::test]

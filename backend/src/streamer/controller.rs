@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -14,6 +15,7 @@ use super::{QueueManager, SongInfo, StatusEvent};
 pub(crate) struct StationController {
     queue: Arc<QueueManager>,
     pipeline: Arc<dyn PlaybackPipeline>,
+    generation: AtomicU64,
 }
 impl StationController {
     pub(crate) async fn new(
@@ -40,6 +42,7 @@ impl StationController {
             Self {
                 queue,
                 pipeline: instance.pipeline,
+                generation: AtomicU64::new(0),
             },
             instance.events,
         ))
@@ -48,13 +51,20 @@ impl StationController {
     pub(crate) fn start_events(self: Arc<Self>, mut events: mpsc::UnboundedReceiver<PipelineEvent>) {
         tokio::spawn(async move {
             while let Some(event) = events.recv().await {
-                if let PipelineEvent::DecodeFailed { track, .. } = event {
-                    let current = self.queue.current_song_info().map(|song| song.queue_item_id);
-                    if current == Some(track.queue_item_id) {
-                        if let Err(error) = self.skip().await {
-                            tracing::error!(station_id = %self.queue.station_id, error = %error, "failed to skip undecodable current track");
+                match event {
+                    PipelineEvent::DecodeFailed { generation, track, .. }
+                    | PipelineEvent::CurrentEos {
+                        generation,
+                        current: track,
+                    } => {
+                        let current = self.queue.current_song_info().map(|song| song.queue_item_id);
+                        if generation == self.generation.load(Ordering::Acquire) && current == Some(track.queue_item_id) {
+                            if let Err(error) = self.skip().await {
+                                tracing::error!(station_id = %self.queue.station_id, error = %error, "failed to advance completed or undecodable current track");
+                            }
                         }
                     }
+                    PipelineEvent::Handover { .. } | PipelineEvent::SinkDisconnected { .. } => {}
                 }
             }
         });
@@ -99,7 +109,7 @@ impl StationController {
         );
         self.pipeline
             .replace(PairPlan {
-                generation: 0,
+                generation: self.generation.fetch_add(1, Ordering::AcqRel) + 1,
                 current: current_track,
                 next: next_track,
                 transition,
@@ -208,5 +218,155 @@ impl StationController {
             .await
             .map(|snapshot| snapshot.state == PipelineState::Playing)
             .unwrap_or(false)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use async_trait::async_trait;
+    use tokio::sync::{broadcast, mpsc};
+    use uuid::Uuid;
+
+    use super::*;
+
+    struct FakePipeline {
+        replacements: AtomicUsize,
+        stops: AtomicUsize,
+    }
+
+    #[async_trait]
+    impl PlaybackPipeline for FakePipeline {
+        async fn replace(&self, _: PairPlan) -> Result<(), PipelineError> {
+            self.replacements.fetch_add(1, Ordering::Release);
+            Ok(())
+        }
+
+        async fn append(&self, _: PairPlan) -> Result<(), PipelineError> {
+            Ok(())
+        }
+
+        async fn set_playing(&self, _: bool) -> Result<(), PipelineError> {
+            Ok(())
+        }
+
+        async fn reconnect(&self, _: IcecastTarget) -> Result<(), PipelineError> {
+            Ok(())
+        }
+
+        async fn snapshot(&self) -> Result<PipelineSnapshot, PipelineError> {
+            Ok(PipelineSnapshot {
+                state: PipelineState::Stopped,
+                elapsed: Duration::ZERO,
+            })
+        }
+
+        async fn stop(&self) -> Result<(), PipelineError> {
+            self.stops.fetch_add(1, Ordering::Release);
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn stale_decode_failure_does_not_replace_the_current_plan() {
+        let song = SongInfo {
+            queue_item_id: Uuid::new_v4(),
+            song_id: Uuid::new_v4(),
+            title: "current".into(),
+            artist: String::new(),
+            duration: 1,
+            file_path: String::new(),
+            position: 0,
+            cue_in: 0.0,
+            cue_out: 0.0,
+            cross_start_next: 0.0,
+            analyzed: false,
+        };
+        let (status_tx, _) = broadcast::channel(1);
+        let (queue_tx, _) = broadcast::channel(1);
+        let queue = Arc::new(QueueManager::new(
+            sqlx::postgres::PgPoolOptions::new()
+                .connect_lazy("postgres://surcast:surcast@localhost:5433/surcast")
+                .unwrap(),
+            Uuid::new_v4(),
+            String::new(),
+            vec![song.clone()],
+            0,
+            status_tx,
+            queue_tx,
+        ));
+        let pipeline = Arc::new(FakePipeline {
+            replacements: AtomicUsize::new(0),
+            stops: AtomicUsize::new(0),
+        });
+        let controller = Arc::new(StationController {
+            queue,
+            pipeline: pipeline.clone(),
+            generation: AtomicU64::new(1),
+        });
+        let (events, receiver) = mpsc::unbounded_channel();
+        controller.clone().start_events(receiver);
+        events
+            .send(PipelineEvent::DecodeFailed {
+                generation: 0,
+                track: StationController::track(song).key,
+                message: "stale".into(),
+            })
+            .unwrap();
+
+        tokio::time::sleep(Duration::from_millis(25)).await;
+        assert_eq!(pipeline.replacements.load(Ordering::Acquire), 0);
+    }
+
+    #[tokio::test]
+    async fn current_eos_stops_an_exhausted_queue() {
+        let song = SongInfo {
+            queue_item_id: Uuid::new_v4(),
+            song_id: Uuid::new_v4(),
+            title: "current".into(),
+            artist: String::new(),
+            duration: 1,
+            file_path: String::new(),
+            position: 0,
+            cue_in: 0.0,
+            cue_out: 0.0,
+            cross_start_next: 0.0,
+            analyzed: false,
+        };
+        let (status_tx, _) = broadcast::channel(1);
+        let (queue_tx, _) = broadcast::channel(1);
+        let queue = Arc::new(QueueManager::new(
+            sqlx::postgres::PgPoolOptions::new()
+                .connect_lazy("postgres://surcast:surcast@localhost:5433/surcast")
+                .unwrap(),
+            Uuid::new_v4(),
+            String::new(),
+            vec![song.clone()],
+            0,
+            status_tx,
+            queue_tx,
+        ));
+        let pipeline = Arc::new(FakePipeline {
+            replacements: AtomicUsize::new(0),
+            stops: AtomicUsize::new(0),
+        });
+        let controller = Arc::new(StationController {
+            queue,
+            pipeline: pipeline.clone(),
+            generation: AtomicU64::new(1),
+        });
+        let (events, receiver) = mpsc::unbounded_channel();
+        controller.clone().start_events(receiver);
+        events
+            .send(PipelineEvent::CurrentEos {
+                generation: 1,
+                current: StationController::track(song).key,
+            })
+            .unwrap();
+
+        tokio::time::sleep(Duration::from_millis(25)).await;
+        assert_eq!(pipeline.stops.load(Ordering::Acquire), 1);
+        assert_eq!(pipeline.replacements.load(Ordering::Acquire), 0);
     }
 }
