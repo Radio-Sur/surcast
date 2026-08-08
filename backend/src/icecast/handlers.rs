@@ -6,10 +6,24 @@ use sqlx::PgPool;
 use std::time::Duration;
 use tokio::net::TcpStream;
 
+use crate::api::router::StreamersMap;
 use crate::errors::AppError;
 use crate::icecast::IcecastManager;
 
 use super::models::{self, IcecastMode, IcecastSettingsUpdate};
+
+async fn reconnect_streamers(streamers: &StreamersMap) {
+    let active = {
+        let streamers = streamers.lock().unwrap_or_else(|error| error.into_inner());
+        streamers.values().cloned().collect::<Vec<_>>()
+    };
+    futures::future::join_all(active.into_iter().map(|streamer| async move {
+        if let Err(error) = streamer.reconnect().await {
+            tracing::warn!(%error, "failed to reconnect streamer after Icecast restart");
+        }
+    }))
+    .await;
+}
 
 pub async fn get_settings(State(db): State<PgPool>, State(icecast_manager): State<IcecastManager>) -> Result<impl IntoResponse, AppError> {
     let settings = models::get_settings(&db).await?;
@@ -26,6 +40,7 @@ pub async fn get_settings(State(db): State<PgPool>, State(icecast_manager): Stat
 
 pub async fn patch_settings(
     State(db): State<PgPool>,
+    State(streamers): State<StreamersMap>,
     State(icecast_manager): State<IcecastManager>,
     Json(update): Json<IcecastSettingsUpdate>,
 ) -> Result<impl IntoResponse, AppError> {
@@ -36,7 +51,7 @@ pub async fn patch_settings(
             tracing::warn!("Failed to stop icecast during patch: {e}");
         }
     } else if settings.enabled {
-        if let Err(e) = icecast_manager
+        if let Err(error) = icecast_manager
             .restart(
                 settings.port,
                 &settings.source_password,
@@ -45,7 +60,9 @@ pub async fn patch_settings(
             )
             .await
         {
-            tracing::warn!("Failed to restart icecast during patch: {e}");
+            tracing::warn!(%error, "failed to restart Icecast during patch");
+        } else {
+            reconnect_streamers(&streamers).await;
         }
     } else {
         if let Err(e) = icecast_manager.stop().await {

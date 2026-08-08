@@ -15,6 +15,7 @@ use super::{QueueManager, SongInfo, StatusEvent};
 pub(crate) struct StationController {
     queue: Arc<QueueManager>,
     pipeline: Arc<dyn PlaybackPipeline>,
+    target: IcecastTarget,
     generation: AtomicU64,
 }
 impl StationController {
@@ -31,7 +32,7 @@ impl StationController {
         let target = IcecastTarget::parse(&endpoint, password, mount, mount.trim_matches('/').to_owned())?;
         let instance = factory
             .create(PipelineConfig {
-                target,
+                target: target.clone(),
                 prebuffer_bytes: prebuffer_bytes.max(0) as usize,
                 sample_rate: 44_100,
                 channels: 2,
@@ -42,6 +43,7 @@ impl StationController {
             Self {
                 queue,
                 pipeline: instance.pipeline,
+                target,
                 generation: AtomicU64::new(0),
             },
             instance.events,
@@ -132,6 +134,10 @@ impl StationController {
 
     pub(crate) async fn stop(&self) -> Result<(), PipelineError> {
         self.pipeline.stop().await
+    }
+
+    pub(crate) async fn reconnect(&self) -> Result<(), PipelineError> {
+        self.pipeline.reconnect(self.target.clone()).await
     }
 
     pub(crate) async fn skip(&self) -> Result<(), PipelineError> {
@@ -303,6 +309,7 @@ mod tests {
         let controller = Arc::new(StationController {
             queue,
             pipeline: pipeline.clone(),
+            target: IcecastTarget::parse("localhost:8000", "secret".into(), "test", "test".into()).unwrap(),
             generation: AtomicU64::new(1),
         });
         let (events, receiver) = mpsc::unbounded_channel();
@@ -354,6 +361,7 @@ mod tests {
         let controller = Arc::new(StationController {
             queue,
             pipeline: pipeline.clone(),
+            target: IcecastTarget::parse("localhost:8000", "secret".into(), "test", "test".into()).unwrap(),
             generation: AtomicU64::new(1),
         });
         let (events, receiver) = mpsc::unbounded_channel();

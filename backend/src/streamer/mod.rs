@@ -106,6 +106,10 @@ impl StationStreamer {
         self.controller.stop().await
     }
 
+    pub(crate) async fn reconnect(&self) -> Result<(), PipelineError> {
+        self.controller.reconnect().await
+    }
+
     pub async fn shutdown(&self) {
         let _ = self.stop().await;
     }
