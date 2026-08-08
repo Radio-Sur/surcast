@@ -66,7 +66,10 @@ impl StationController {
                             }
                         }
                     }
-                    PipelineEvent::Handover { .. } | PipelineEvent::SinkDisconnected { .. } => {}
+                    PipelineEvent::Handover { .. } => {}
+                    PipelineEvent::SinkDisconnected { generation, message } => {
+                        tracing::error!(station_id = %self.queue.station_id, generation, %message, "GStreamer output disconnected");
+                    }
                 }
             }
         });

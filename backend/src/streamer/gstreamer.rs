@@ -215,6 +215,7 @@ impl GStreamerPipeline {
         source.connect_pad_added(move |_, pad| {
             let is_audio = pad
                 .current_caps()
+                .or_else(|| Some(pad.query_caps(None)))
                 .and_then(|caps| caps.structure(0).map(|structure| structure.name().starts_with("audio/x-raw")))
                 .unwrap_or(false);
             if is_audio && !audio_sink.is_linked() {
@@ -314,6 +315,22 @@ impl PlaybackPipelineFactory for GStreamerPipelineFactory {
                 }
             }
             gst::PadProbeReturn::Ok
+        });
+        let bus = pipeline
+            .bus()
+            .ok_or_else(|| PipelineError::Pipeline("pipeline has no bus".into()))?;
+        let bus_events = events.clone();
+        let bus_active = active.clone();
+        bus.set_sync_handler(move |_, message| {
+            if let gst::MessageView::Error(error) = message.view() {
+                if let Some((generation, _)) = bus_active.lock().unwrap_or_else(|error| error.into_inner()).clone() {
+                    let _ = bus_events.send(PipelineEvent::SinkDisconnected {
+                        generation,
+                        message: error.error().to_string(),
+                    });
+                }
+            }
+            gst::BusSyncReply::Pass
         });
         Ok(PipelineInstance {
             pipeline: Arc::new(GStreamerPipeline {
