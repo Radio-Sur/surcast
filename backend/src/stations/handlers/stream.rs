@@ -8,7 +8,7 @@ use crate::api::StreamersMap;
 use crate::config::Config;
 use crate::errors::AppError;
 use crate::stations::repository;
-use crate::streamer::connection::IcecastBackend;
+use crate::streamer::gstreamer::GStreamerPipelineFactory;
 use crate::streamer::{SongInfo, StationStreamer};
 
 pub(crate) async fn resolve_station_id(db: &PgPool, id_or_slug: &str) -> Result<Uuid, AppError> {
@@ -26,12 +26,16 @@ async fn get_or_create_streamer(
     station_name: &str,
     songs: Vec<SongInfo>,
     prebuffer_bytes: i32,
-) -> Arc<StationStreamer> {
-    {
+) -> Result<Arc<StationStreamer>, AppError> {
+    if let Some(existing) = {
         let map = streamers.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(existing) = map.get(&station_id) {
-            return existing.clone();
-        }
+        map.get(&station_id).cloned()
+    } {
+        existing
+            .play()
+            .await
+            .map_err(|_| AppError::Internal("Stream playback failed".into()))?;
+        return Ok(existing);
     }
     let streamer = StationStreamer::new(
         songs,
@@ -40,12 +44,22 @@ async fn get_or_create_streamer(
         db.clone(),
         prebuffer_bytes,
         upload_dir,
-        Arc::new(IcecastBackend),
+        Arc::new(GStreamerPipelineFactory::default()),
     )
-    .await;
-    let mut map = streamers.lock().unwrap_or_else(|e| e.into_inner());
-    map.insert(station_id, streamer.clone());
-    streamer
+    .await
+    .map_err(|error| {
+        tracing::error!(station_id = %station_id, error = %error, "GStreamer pipeline initialization failed");
+        AppError::Internal("Stream initialization failed".into())
+    })?;
+    let winner = {
+        let mut map = streamers.lock().unwrap_or_else(|e| e.into_inner());
+        map.entry(station_id).or_insert_with(|| streamer.clone()).clone()
+    };
+    winner
+        .play()
+        .await
+        .map_err(|_| AppError::Internal("Stream playback failed".into()))?;
+    Ok(winner)
 }
 
 pub(crate) async fn sync_streamer_songs(db: &PgPool, streamers: &StreamersMap, upload_dir: &str, station_id: Uuid) -> Result<(), AppError> {
@@ -64,20 +78,25 @@ pub(crate) async fn sync_streamer_songs(db: &PgPool, streamers: &StreamersMap, u
             title: r.1,
             artist: r.2,
             duration: r.3,
-            song_id: r.4,
-            position: r.5,
-            cue_in: r.6,
-            cue_out: r.7,
-            cross_start_next: r.8,
-            analyzed: r.9,
+            queue_item_id: r.4,
+            song_id: r.5,
+            position: r.6,
+            cue_in: r.7,
+            cue_out: r.8,
+            cross_start_next: r.9,
+            analyzed: r.10,
         })
         .collect();
 
-    {
+    let streamer = {
         let map = streamers.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(streamer) = map.get(&station_id) {
-            streamer.reload_songs(songs);
-        }
+        map.get(&station_id).cloned()
+    };
+    if let Some(streamer) = streamer {
+        streamer
+            .reload_songs(songs)
+            .await
+            .map_err(|_| AppError::Internal("Stream reload failed".into()))?;
     }
     if let Some(streamer) = {
         let map = streamers.lock().unwrap_or_else(|e| e.into_inner());
@@ -114,21 +133,22 @@ pub(crate) async fn get_or_create_streamer_for_station(
             title: r.1,
             artist: r.2,
             duration: r.3,
-            song_id: r.4,
-            position: r.5,
-            cue_in: r.6,
-            cue_out: r.7,
-            cross_start_next: r.8,
-            analyzed: r.9,
+            queue_item_id: r.4,
+            song_id: r.5,
+            position: r.6,
+            cue_in: r.7,
+            cue_out: r.8,
+            cross_start_next: r.9,
+            analyzed: r.10,
         })
         .collect();
 
     if songs.is_empty() {
         tracing::info!("Station queue is empty, creating idle streamer for {station_id}");
     }
-
     let mount = station.mount();
-    Ok(get_or_create_streamer(db, streamers, upload_dir, station_id, &mount, songs, station.prebuffer_bytes).await)
+
+    get_or_create_streamer(db, streamers, upload_dir, station_id, &mount, songs, station.prebuffer_bytes).await
 }
 
 pub async fn stream_skip(
@@ -142,7 +162,7 @@ pub async fn stream_skip(
         map.get(&station_id).cloned()
     };
     if let Some(streamer) = streamer {
-        streamer.skip().await;
+        streamer.skip().await.map_err(|_| AppError::Internal("Stream skip failed".into()))?;
         Ok(Json(serde_json::json!({ "ok": true, "song_index": streamer.current_song_index() })))
     } else {
         Err(AppError::BadRequest("No active stream".into()))
@@ -155,9 +175,15 @@ pub async fn stream_play(
     Path(station_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let station_id = resolve_station_id(&db, &station_id).await?;
-    let map = streamers.lock().unwrap_or_else(|e| e.into_inner());
-    if let Some(streamer) = map.get(&station_id) {
-        streamer.play();
+    let streamer = {
+        let map = streamers.lock().unwrap_or_else(|e| e.into_inner());
+        map.get(&station_id).cloned()
+    };
+    if let Some(streamer) = streamer {
+        streamer
+            .play()
+            .await
+            .map_err(|_| AppError::Internal("Stream playback failed".into()))?;
         Ok(Json(serde_json::json!({ "ok": true })))
     } else {
         Err(AppError::BadRequest("No active stream".into()))
@@ -170,9 +196,15 @@ pub async fn stream_pause(
     Path(station_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let station_id = resolve_station_id(&db, &station_id).await?;
-    let map = streamers.lock().unwrap_or_else(|e| e.into_inner());
-    if let Some(streamer) = map.get(&station_id) {
-        streamer.pause();
+    let streamer = {
+        let map = streamers.lock().unwrap_or_else(|e| e.into_inner());
+        map.get(&station_id).cloned()
+    };
+    if let Some(streamer) = streamer {
+        streamer
+            .pause()
+            .await
+            .map_err(|_| AppError::Internal("Stream pause failed".into()))?;
         Ok(Json(serde_json::json!({ "ok": true })))
     } else {
         Err(AppError::BadRequest("No active stream".into()))
@@ -185,9 +217,12 @@ pub async fn stream_stop(
     Path(station_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let station_id = resolve_station_id(&db, &station_id).await?;
-    let mut map = streamers.lock().unwrap_or_else(|e| e.into_inner());
-    if let Some(streamer) = map.remove(&station_id) {
-        streamer.stop();
+    let streamer = {
+        let mut map = streamers.lock().unwrap_or_else(|e| e.into_inner());
+        map.remove(&station_id)
+    };
+    if let Some(streamer) = streamer {
+        streamer.stop().await.map_err(|_| AppError::Internal("Stream stop failed".into()))?;
         Ok(Json(serde_json::json!({ "ok": true })))
     } else {
         Err(AppError::BadRequest("No active stream".into()))
@@ -201,11 +236,12 @@ pub async fn stream_restart(
     Path(station_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let station_id = resolve_station_id(&db, &station_id).await?;
-    {
+    let stopped = {
         let mut map = streamers.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(streamer) = map.remove(&station_id) {
-            streamer.stop();
-        }
+        map.remove(&station_id)
+    };
+    if let Some(streamer) = stopped {
+        streamer.stop().await.map_err(|_| AppError::Internal("Stream stop failed".into()))?;
     }
     get_or_create_streamer_for_station(&db, &streamers, &config.upload_dir, station_id).await?;
     Ok(Json(serde_json::json!({ "ok": true })))
@@ -217,12 +253,15 @@ pub async fn stream_status(
     Path(station_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let station_id = resolve_station_id(&db, &station_id).await?;
-    let map = streamers.lock().unwrap_or_else(|e| e.into_inner());
-    if let Some(s) = map.get(&station_id) {
-        Ok(Json(s.status_json()))
+    let streamer = {
+        let map = streamers.lock().unwrap_or_else(|e| e.into_inner());
+        map.get(&station_id).cloned()
+    };
+    if let Some(streamer) = streamer {
+        Ok(Json(streamer.status_json().await))
     } else {
         Ok(Json(serde_json::json!({
-            "playing": false, "song_index": 0, "total": 0, "title": "", "artist": "", "duration": 0,
+            "playing": false, "song_index": 0, "total": 0, "elapsed": 0, "title": "", "artist": "", "duration": 0,
         })))
     }
 }

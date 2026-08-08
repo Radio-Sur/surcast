@@ -8,37 +8,24 @@ use super::SongInfo;
 use super::StatusEvent;
 use crate::stations::repository;
 
-/// Resolves the "now playing" index for a freshly loaded song list. Keeps the
-/// pointer anchored on the song that was playing (by `song_id` and its
-/// occurrence rank, so duplicated entries resolve uniquely) across queue edits
-/// (reorder / insert / remove). When that song is gone, falls back to the first
-/// song whose `position` is at or after `saved_position`, then to the end of the
-/// list (so the engine idles and refills).
-pub(crate) fn resolve_index(anchor: Option<(&str, usize)>, songs: &[SongInfo], saved_position: i32) -> usize {
-    if let Some((id, rank)) = anchor {
-        if rank > 0 {
-            let mut seen = 0usize;
-            for (i, s) in songs.iter().enumerate() {
-                if s.song_id == id {
-                    seen += 1;
-                    if seen == rank {
-                        return i;
-                    }
-                }
-            }
-        }
-    }
-    songs.iter().position(|s| s.position >= saved_position).unwrap_or(songs.len())
+/// Resolves the "now playing" index after a queue reload. Queue item identity
+/// survives duplicate songs and queue reordering; if the active item was
+/// removed, resume at the saved queue position or leave the engine at the end.
+pub(crate) fn resolve_index(anchor: Option<Uuid>, songs: &[SongInfo], saved_position: i32) -> usize {
+    anchor
+        .and_then(|queue_item_id| songs.iter().position(|song| song.queue_item_id == queue_item_id))
+        .or_else(|| songs.iter().position(|song| song.position >= saved_position))
+        .unwrap_or(songs.len())
 }
 
-pub struct QueueManager {
-    pub db: PgPool,
-    pub station_id: Uuid,
-    pub upload_dir: String,
-    pub songs: Mutex<Vec<SongInfo>>,
-    pub current_idx: AtomicUsize,
-    pub status_tx: broadcast::Sender<StatusEvent>,
-    pub queue_tx: broadcast::Sender<String>,
+pub(crate) struct QueueManager {
+    pub(crate) db: PgPool,
+    pub(crate) station_id: Uuid,
+    pub(crate) upload_dir: String,
+    pub(crate) songs: Mutex<Vec<SongInfo>>,
+    pub(crate) current_idx: AtomicUsize,
+    pub(crate) status_tx: broadcast::Sender<StatusEvent>,
+    pub(crate) queue_tx: broadcast::Sender<String>,
 }
 
 impl QueueManager {
@@ -62,35 +49,12 @@ impl QueueManager {
         }
     }
 
-    pub async fn advance_song(&self) {
-        self.persist_index().await;
-        self.trim_played_items().await;
-        self.reload_from_db().await;
-
-        let upcoming = {
-            let songs = self.songs.lock().unwrap_or_else(|e| e.into_inner());
-            songs.len().saturating_sub(self.current_idx.load(Ordering::Acquire) + 1) as i64
-        };
-
-        if let Err(e) =
-            crate::scheduling::service::fill_queue_from_schedule(&self.db, self.station_id, Some(upcoming), &self.upload_dir).await
-        {
-            tracing::warn!(station_id = %self.station_id, error = ?e, "AutoDJ advance error");
-        }
-        self.reload_from_db().await;
-        self.push_queue_update().await;
-    }
-
     pub async fn reload_from_db(&self) {
         let anchor = {
             let songs = self.songs.lock().unwrap_or_else(|e| e.into_inner());
             let idx = self.current_idx.load(Ordering::Acquire);
-            songs.get(idx).map(|s| {
-                let rank = songs[..=idx].iter().filter(|x| x.song_id == s.song_id).count();
-                (s.song_id.clone(), rank)
-            })
+            songs.get(idx).map(|song| song.queue_item_id)
         };
-        let anchor_ref = anchor.as_ref().map(|(id, rank)| (id.as_str(), *rank));
 
         let rows = repository::find_station_song_info(&self.db, self.station_id)
             .await
@@ -98,17 +62,20 @@ impl QueueManager {
         let songs: Vec<SongInfo> = rows
             .into_iter()
             .map(
-                |(file_path, title, artist, duration, song_id, position, cue_in, cue_out, cross_start_next, analyzed)| SongInfo {
-                    file_path: crate::songs::handlers::resolve_audio_path(&self.upload_dir, &file_path),
-                    title,
-                    artist,
-                    duration,
-                    song_id,
-                    position,
-                    cue_in,
-                    cue_out,
-                    cross_start_next,
-                    analyzed,
+                |(file_path, title, artist, duration, queue_item_id, song_id, position, cue_in, cue_out, cross_start_next, analyzed)| {
+                    SongInfo {
+                        file_path: crate::songs::handlers::resolve_audio_path(&self.upload_dir, &file_path),
+                        title,
+                        artist,
+                        duration,
+                        queue_item_id,
+                        song_id,
+                        position,
+                        cue_in,
+                        cue_out,
+                        cross_start_next,
+                        analyzed,
+                    }
                 },
             )
             .collect();
@@ -122,7 +89,7 @@ impl QueueManager {
             .unwrap_or(0)
             .max(0);
 
-        let new_idx = resolve_index(anchor_ref, &songs, saved_index);
+        let new_idx = resolve_index(anchor, &songs, saved_index);
 
         {
             let mut list = self.songs.lock().unwrap_or_else(|e| e.into_inner());
@@ -131,51 +98,19 @@ impl QueueManager {
         self.current_idx.store(new_idx, Ordering::Release);
     }
 
-    /// Replaces the in-memory song list (used after queue edits) while keeping
-    /// the "now playing" pointer anchored on the same song (id + duplicate rank).
+    /// Replaces the in-memory song list after queue edits while retaining the
+    /// active queue item when it still exists.
     pub fn reload_songs(&self, new_songs: Vec<SongInfo>) {
         let anchor = {
             let songs = self.songs.lock().unwrap_or_else(|e| e.into_inner());
             let idx = self.current_idx.load(Ordering::Acquire);
-            songs.get(idx).map(|s| {
-                let rank = songs[..=idx].iter().filter(|x| x.song_id == s.song_id).count();
-                (s.song_id.clone(), rank)
-            })
+            songs.get(idx).map(|song| song.queue_item_id)
         };
-        let anchor_ref = anchor.as_ref().map(|(id, rank)| (id.as_str(), *rank));
-        let new_idx = resolve_index(anchor_ref, &new_songs, 0);
+        let new_idx = resolve_index(anchor, &new_songs, 0);
 
         let mut songs = self.songs.lock().unwrap_or_else(|e| e.into_inner());
         *songs = new_songs;
         self.current_idx.store(new_idx, Ordering::Release);
-    }
-
-    async fn persist_index(&self) {
-        let saved_index = sqlx::query_scalar::<_, i32>("SELECT current_song_index FROM stations WHERE id = $1")
-            .bind(self.station_id)
-            .fetch_optional(&self.db)
-            .await
-            .ok()
-            .flatten()
-            .unwrap_or(0);
-
-        let idx = self.current_idx.load(Ordering::Acquire);
-        let position = {
-            let songs = self.songs.lock().unwrap_or_else(|e| e.into_inner());
-            songs
-                .get(idx)
-                .map(|s| s.position)
-                .unwrap_or_else(|| songs.last().map(|s| s.position + 1).unwrap_or(saved_index))
-        };
-
-        if let Err(e) = sqlx::query("UPDATE stations SET current_song_index = $1 WHERE id = $2")
-            .bind(position)
-            .bind(self.station_id)
-            .execute(&self.db)
-            .await
-        {
-            tracing::warn!("Failed to persist current_song_index: {e}");
-        }
     }
 
     pub async fn trim_played_items(&self) {
@@ -375,27 +310,79 @@ impl QueueManager {
         self.song_info(idx + 1)
     }
 
-    pub fn current_idx(&self) -> usize {
-        self.current_idx.load(Ordering::Acquire)
+    fn successor_in(songs: &[SongInfo], key: &super::pipeline::TrackKey) -> Option<SongInfo> {
+        let start = songs
+            .iter()
+            .position(|song| song.queue_item_id == key.queue_item_id)
+            .map(|index| index + 1)
+            .unwrap_or_else(|| songs.iter().position(|song| song.position > key.position).unwrap_or(songs.len()));
+        songs.get(start).cloned()
     }
 
-    pub fn advance_idx(&self, delta: usize) {
-        self.current_idx.fetch_add(delta, Ordering::Release);
+    pub fn successor_after(&self, key: &super::pipeline::TrackKey) -> Option<SongInfo> {
+        let songs = self.songs.lock().unwrap_or_else(|error| error.into_inner());
+        Self::successor_in(&songs, key)
+    }
+
+    pub async fn commit_current(&self, key: &super::pipeline::TrackKey) -> Option<super::pipeline::TrackKey> {
+        let position = {
+            let songs = self.songs.lock().unwrap_or_else(|error| error.into_inner());
+            let index = songs.iter().position(|song| song.queue_item_id == key.queue_item_id);
+            if let Some(index) = index {
+                self.current_idx.store(index, Ordering::Release);
+            }
+            index
+                .and_then(|index| songs.get(index).map(|song| song.position))
+                .unwrap_or(key.position)
+        };
+
+        if let Err(error) = sqlx::query("UPDATE stations SET current_song_index = $1 WHERE id = $2")
+            .bind(position)
+            .bind(self.station_id)
+            .execute(&self.db)
+            .await
+        {
+            tracing::warn!(station_id = %self.station_id, %error, "failed to persist current queue item");
+        }
+        self.trim_played_items().await;
+
+        let upcoming = {
+            let songs = self.songs.lock().unwrap_or_else(|error| error.into_inner());
+            let start = songs
+                .iter()
+                .position(|song| song.queue_item_id == key.queue_item_id)
+                .map(|index| index + 1)
+                .unwrap_or_else(|| songs.iter().position(|song| song.position > key.position).unwrap_or(songs.len()));
+            songs.len().saturating_sub(start) as i64
+        };
+        if let Err(error) =
+            crate::scheduling::service::fill_queue_from_schedule(&self.db, self.station_id, Some(upcoming), &self.upload_dir).await
+        {
+            tracing::warn!(station_id = %self.station_id, %error, "AutoDJ successor refill error");
+        }
+        self.reload_from_db().await;
+        self.push_queue_update().await;
+        self.successor_after(key).map(|song| super::pipeline::TrackKey {
+            queue_item_id: song.queue_item_id,
+            song_id: song.song_id,
+            position: song.position,
+        })
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::resolve_index;
-    use super::SongInfo;
+    use super::*;
+    use crate::streamer::pipeline::TrackKey;
 
-    fn song(id: &str, position: i32) -> SongInfo {
+    fn song(queue_item_id: Uuid, song_id: Uuid, position: i32) -> SongInfo {
         SongInfo {
-            song_id: id.into(),
-            title: "t".into(),
-            artist: "a".into(),
-            duration: 10,
-            file_path: "/tmp/x.mp3".into(),
+            queue_item_id,
+            song_id,
+            title: String::new(),
+            artist: String::new(),
+            duration: 1,
+            file_path: String::new(),
             position,
             cue_in: 0.0,
             cue_out: 0.0,
@@ -405,57 +392,39 @@ mod tests {
     }
 
     #[test]
-    fn test_resolve_index_keeps_same_song_after_reorder() {
-        // playing A; user moved C to the top -> [C, A, B]
-        let songs = vec![song("C", 0), song("A", 1), song("B", 2)];
-        assert_eq!(resolve_index(Some(("A", 1)), &songs, 0), 1);
-        assert_eq!(resolve_index(Some(("B", 1)), &songs, 0), 2);
-        assert_eq!(resolve_index(Some(("C", 1)), &songs, 0), 0);
+    fn successor_uses_queue_item_identity_for_duplicate_songs() {
+        let repeated_song = Uuid::new_v4();
+        let first_item = Uuid::new_v4();
+        let second_item = Uuid::new_v4();
+        let songs = vec![
+            song(first_item, repeated_song, 1),
+            song(second_item, repeated_song, 2),
+            song(Uuid::new_v4(), Uuid::new_v4(), 3),
+        ];
+
+        let successor = QueueManager::successor_in(
+            &songs,
+            &TrackKey {
+                queue_item_id: first_item,
+                song_id: repeated_song,
+                position: 1,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(successor.queue_item_id, second_item);
     }
 
     #[test]
-    fn test_resolve_index_keeps_pointer_stable_without_edits() {
-        let songs = vec![song("A", 0), song("B", 1), song("C", 2)];
-        assert_eq!(resolve_index(Some(("A", 1)), &songs, 0), 0);
-        assert_eq!(resolve_index(Some(("B", 1)), &songs, 0), 1);
-    }
+    fn resolve_index_keeps_active_queue_item_after_reorder() {
+        let repeated_song = Uuid::new_v4();
+        let active_item = Uuid::new_v4();
+        let songs = vec![
+            song(Uuid::new_v4(), Uuid::new_v4(), 0),
+            song(active_item, repeated_song, 1),
+            song(Uuid::new_v4(), repeated_song, 2),
+        ];
 
-    #[test]
-    fn test_resolve_index_missing_anchor_uses_saved_position() {
-        // current song removed; fall back to first song at/after saved position
-        let songs = vec![song("X", 0), song("Y", 1)];
-        assert_eq!(resolve_index(Some(("GONE", 1)), &songs, 0), 0);
-        assert_eq!(resolve_index(Some(("GONE", 1)), &songs, 1), 1);
-        assert_eq!(resolve_index(Some(("GONE", 1)), &songs, 3), songs.len());
-    }
-
-    #[test]
-    fn test_resolve_index_no_anchor_uses_saved_position() {
-        let songs = vec![song("A", 0), song("B", 1), song("C", 2)];
-        assert_eq!(resolve_index(None, &songs, 1), 1);
-        assert_eq!(resolve_index(None, &songs, 5), songs.len());
-    }
-
-    #[test]
-    fn test_resolve_index_empty_list() {
-        assert_eq!(resolve_index(Some(("A", 1)), &[], 0), 0);
-        assert_eq!(resolve_index(None, &[], 0), 0);
-    }
-
-    #[test]
-    fn test_resolve_index_duplicate_songs_rank_uniquely() {
-        // [A, A, B] — playing the SECOND copy of A must stay on it, not jump to the first
-        let songs = vec![song("A", 0), song("A", 1), song("B", 2)];
-        assert_eq!(resolve_index(Some(("A", 1)), &songs, 0), 0);
-        assert_eq!(resolve_index(Some(("A", 2)), &songs, 1), 1);
-        assert_eq!(resolve_index(Some(("B", 1)), &songs, 0), 2);
-    }
-
-    #[test]
-    fn test_resolve_index_duplicates_survive_reorder() {
-        // A (1st copy) playing; reorder brings another song to the front
-        let songs = vec![song("A", 0), song("B", 1), song("A", 2), song("C", 3)];
-        assert_eq!(resolve_index(Some(("A", 1)), &songs, 0), 0);
-        assert_eq!(resolve_index(Some(("A", 2)), &songs, 0), 2);
+        assert_eq!(resolve_index(Some(active_item), &songs, 0), 1);
     }
 }

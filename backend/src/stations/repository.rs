@@ -206,9 +206,9 @@ pub async fn verify_station_exists(db: &PgPool, station_id: Uuid) -> Result<(), 
 pub async fn find_station_song_info(
     db: &PgPool,
     station_id: Uuid,
-) -> Result<Vec<(String, String, String, i32, String, i32, f64, f64, f64, bool)>, AppError> {
-    sqlx::query_as::<_, (String, String, String, i32, String, i32, f64, f64, f64, bool)>(
-        r#"SELECT s.file_path, s.title, s.artist, s.duration, s.id::text, sq.position,
+) -> Result<Vec<(String, String, String, i32, Uuid, Uuid, i32, f64, f64, f64, bool)>, AppError> {
+    sqlx::query_as::<_, (String, String, String, i32, Uuid, Uuid, i32, f64, f64, f64, bool)>(
+        r#"SELECT s.file_path, s.title, s.artist, s.duration, sq.id, s.id, sq.position,
                   s.cue_in, s.cue_out, s.cross_start_next,
                   (s.analyzed_at IS NOT NULL)::bool AS analyzed
            FROM station_queue sq

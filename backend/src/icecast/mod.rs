@@ -293,14 +293,17 @@ fn find_icecast() -> Option<String> {
     None
 }
 
+fn is_icecast_executable(path: &Path) -> bool {
+    matches!(path.file_name().and_then(|name| name.to_str()), Some("icecast" | "icecast2"))
+}
+
 async fn kill_zombie_icecast() {
     if let Ok(proc) = std::fs::read_dir("/proc") {
         for entry in proc.flatten() {
             let pid_str = entry.file_name().to_string_lossy().to_string();
             if let Ok(pid) = pid_str.parse::<i32>() {
                 if let Ok(exe) = std::fs::read_link(format!("/proc/{pid}/exe")) {
-                    let name = exe.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
-                    if name == "icecast" || name == "icecast2" {
+                    if is_icecast_executable(&exe) {
                         tracing::warn!("Killing zombie icecast PID {pid}");
                         let _ = std::process::Command::new("kill").arg("-9").arg(pid.to_string()).output();
                     }
@@ -417,5 +420,13 @@ mod tests {
         let manager = IcecastManager::new(std::path::Path::new("/tmp/icecast-test").to_path_buf());
         let config = manager.config_path();
         assert!(config.ends_with("icecast.xml"));
+    }
+
+    #[test]
+    fn test_icecast_executable_detection_excludes_test_binaries() {
+        assert!(is_icecast_executable(Path::new("/nix/store/hash-icecast/bin/icecast")));
+        assert!(is_icecast_executable(Path::new("/usr/bin/icecast2")));
+        assert!(!is_icecast_executable(Path::new("/workspace/target/debug/api_icecast")));
+        assert!(!is_icecast_executable(Path::new("/usr/bin/not-icecast")));
     }
 }

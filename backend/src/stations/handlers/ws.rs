@@ -271,7 +271,7 @@ async fn ws_recv_task(
                 subs.insert(station_id, handle);
                 let _ = out_tx.send(Outbound::Status {
                     station_id,
-                    data: streamer.status(),
+                    data: streamer.status().await,
                 });
                 streamer.push_queue_update().await;
             }
@@ -285,21 +285,21 @@ async fn ws_recv_task(
             Inbound::Skip { station_id } => {
                 if let Ok(id) = resolve_station_id(&db, &station_id).await {
                     if let Some(s) = get_streamer(&streamers, &id) {
-                        s.skip().await;
+                        let _ = s.skip().await;
                     }
                 }
             }
             Inbound::Play { station_id } => {
                 if let Ok(id) = resolve_station_id(&db, &station_id).await {
                     if let Some(s) = get_streamer(&streamers, &id) {
-                        s.play();
+                        let _ = s.play().await;
                     }
                 }
             }
             Inbound::Pause { station_id } => {
                 if let Ok(id) = resolve_station_id(&db, &station_id).await {
                     if let Some(s) = get_streamer(&streamers, &id) {
-                        s.pause();
+                        let _ = s.pause().await;
                     }
                 }
             }
