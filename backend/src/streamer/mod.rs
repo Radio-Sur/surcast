@@ -119,23 +119,14 @@ impl StationStreamer {
     pub(crate) async fn status_json(&self) -> serde_json::Value {
         self.controller.status_json().await
     }
-    pub(crate) async fn is_playing(&self) -> bool {
-        self.controller.is_playing().await
-    }
     pub(crate) fn current_song_index(&self) -> usize {
         self.queue.current_song_index()
-    }
-    pub(crate) fn song_count(&self) -> usize {
-        self.queue.song_count()
     }
     pub(crate) fn subscribe_status(&self) -> broadcast::Receiver<StatusEvent> {
         self.queue.subscribe_status()
     }
     pub(crate) fn subscribe_queue(&self) -> broadcast::Receiver<String> {
         self.queue.subscribe_queue()
-    }
-    pub(crate) fn publish_status(&self, event: StatusEvent) {
-        self.queue.publish_status(event)
     }
     pub(crate) async fn push_queue_update(&self) {
         self.queue.push_queue_update().await

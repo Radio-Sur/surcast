@@ -220,14 +220,6 @@ impl StationController {
             StatusEvent::SongChange { .. } => unreachable!(),
         }
     }
-
-    pub(crate) async fn is_playing(&self) -> bool {
-        self.pipeline
-            .snapshot()
-            .await
-            .map(|snapshot| snapshot.state == PipelineState::Playing)
-            .unwrap_or(false)
-    }
 }
 
 #[cfg(test)]
