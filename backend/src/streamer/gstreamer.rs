@@ -166,6 +166,10 @@ impl GStreamerPipeline {
         self.pipeline
             .set_state(target)
             .map_err(|error| PipelineError::Pipeline(error.to_string()))?;
+        self.pipeline
+            .state(gst::ClockTime::from_seconds(5))
+            .0
+            .map_err(|error| PipelineError::Pipeline(error.to_string()))?;
         let mut snapshot = self.snapshot.lock().unwrap_or_else(|error| error.into_inner());
         snapshot.state = state;
         if state == PipelineState::Stopped {
