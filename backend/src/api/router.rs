@@ -71,11 +71,17 @@ impl FromRef<AppState> for Arc<ListenersState> {
     }
 }
 
-pub fn create_router(db: PgPool, config: Config, icecast_manager: IcecastManager, listeners: Arc<ListenersState>) -> Router {
+pub fn create_router(
+    db: PgPool,
+    config: Config,
+    streamers: StreamersMap,
+    icecast_manager: IcecastManager,
+    listeners: Arc<ListenersState>,
+) -> Router {
     let state = AppState {
         db,
         config,
-        streamers: Arc::new(Mutex::new(HashMap::new())),
+        streamers,
         icecast_manager,
         listeners,
     };

@@ -105,6 +105,10 @@ impl StationStreamer {
     pub(crate) async fn stop(&self) -> Result<(), PipelineError> {
         self.controller.stop().await
     }
+
+    pub async fn shutdown(&self) {
+        let _ = self.stop().await;
+    }
     pub(crate) async fn status(&self) -> StatusEvent {
         self.controller.status().await
     }

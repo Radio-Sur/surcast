@@ -1,5 +1,7 @@
 use axum::Router;
 use sqlx::PgPool;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
 use surcast_backend::api::router;
 use surcast_backend::config::Config;
@@ -24,5 +26,5 @@ pub fn create_test_app(pool: PgPool) -> Router {
     let config = test_config();
     let icecast_manager = IcecastManager::new(std::path::PathBuf::from("../.icecast"));
     let listeners = ListenersState::new();
-    router::create_router(pool, config, icecast_manager, listeners)
+    router::create_router(pool, config, Arc::new(Mutex::new(HashMap::new())), icecast_manager, listeners)
 }
