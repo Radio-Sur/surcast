@@ -31,10 +31,10 @@ async fn get_or_create_streamer(
         let map = streamers.lock().unwrap_or_else(|e| e.into_inner());
         map.get(&station_id).cloned()
     } {
-        existing
-            .play()
-            .await
-            .map_err(|_| AppError::Internal("Stream playback failed".into()))?;
+        existing.play().await.map_err(|error| {
+            tracing::error!(station_id = %station_id, %error, "stream playback failed");
+            AppError::Internal("Stream playback failed".into())
+        })?;
         return Ok(existing);
     }
     let streamer = StationStreamer::new(
@@ -55,10 +55,10 @@ async fn get_or_create_streamer(
         let mut map = streamers.lock().unwrap_or_else(|e| e.into_inner());
         map.entry(station_id).or_insert_with(|| streamer.clone()).clone()
     };
-    winner
-        .play()
-        .await
-        .map_err(|_| AppError::Internal("Stream playback failed".into()))?;
+    winner.play().await.map_err(|error| {
+        tracing::error!(station_id = %station_id, %error, "stream playback failed");
+        AppError::Internal("Stream playback failed".into())
+    })?;
     Ok(winner)
 }
 
