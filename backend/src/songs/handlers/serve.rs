@@ -3,7 +3,7 @@ use axum::response::{IntoResponse, Response};
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use super::upload_helper::{resolve_audio_path, resolve_cover_path};
+use super::upload_helper::{cover_mime_from_filename, resolve_audio_path, resolve_cover_path};
 use crate::config::Config;
 use crate::errors::AppError;
 use crate::songs::repository;
@@ -35,7 +35,7 @@ pub async fn serve_song_cover(State(db): State<PgPool>, State(config): State<Con
         .await
         .map_err(|_| AppError::NotFound("Cover file not found on disk".into()))?;
 
-    let mime = if cover_path.ends_with(".png") { "image/png" } else { "image/jpeg" };
+    let mime = cover_mime_from_filename(&cover_path);
 
     Ok(([(axum::http::header::CONTENT_TYPE, mime)], content).into_response())
 }

@@ -19,6 +19,7 @@ pub use crud::search_songs;
 pub use crud::update_song;
 pub use serve::serve_song_cover;
 pub use serve::serve_song_file;
+pub(crate) use upload_helper::cover_extension_from_mime;
 pub(crate) use upload_helper::ext_from_filename;
 pub(crate) use upload_helper::mime_from_ext;
 pub(crate) use upload_helper::resolve_audio_path;

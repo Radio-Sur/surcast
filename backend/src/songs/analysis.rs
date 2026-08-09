@@ -1,14 +1,25 @@
+use gst_pbutils::prelude::*;
 use gstreamer as gst;
 use gstreamer_pbutils as gst_pbutils;
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::songs::handlers::resolve_audio_path;
+use crate::songs::handlers::{cover_extension_from_mime, resolve_audio_path};
 use crate::songs::repository;
 
-/// Cue/loudness analysis result attached to a song. Duration discovery uses
-/// GStreamer when cue analysis is unavailable; cue and loudness data then
-/// fall back to defaults.
+/// Metadata and duration discovered from decoded media by GStreamer.
+#[derive(Debug, Default)]
+pub(crate) struct DiscoveredMedia {
+    pub(crate) duration: Option<i32>,
+    pub(crate) title: Option<String>,
+    pub(crate) artist: Option<String>,
+    pub(crate) album: Option<String>,
+    pub(crate) cover_data: Option<(Vec<u8>, String)>,
+}
+
+/// Cue/loudness analysis result attached to a song. Metadata discovery is
+/// performed separately so upload and background analysis share one decoder-
+/// independent fallback duration.
 #[derive(Debug, Default)]
 pub struct SongAnalysis {
     pub duration: Option<i32>,
@@ -33,12 +44,101 @@ fn duration_seconds(value: f64) -> Option<i32> {
     }
 }
 
+fn usable_tag_text(value: &str) -> bool {
+    value.split('\0').any(|part| !part.trim().is_empty())
+}
+
+fn cover_from_sample(sample: &gst::Sample) -> Option<(Vec<u8>, String)> {
+    let buffer = sample.buffer()?;
+    let mapped = buffer.map_readable().ok()?;
+    if mapped.is_empty() {
+        return None;
+    }
+    let mime = sample.caps()?.structure(0)?.name().to_string();
+    cover_extension_from_mime(&mime)?;
+    Some((mapped.as_slice().to_vec(), mime))
+}
+
+fn cover_from_tags(tags: &gst::TagListRef) -> Option<(Vec<u8>, String)> {
+    tags.iter_tag::<gst::tags::Image>()
+        .find_map(|value| cover_from_sample(&value.get()))
+        .or_else(|| {
+            tags.iter_tag::<gst::tags::PreviewImage>()
+                .find_map(|value| cover_from_sample(&value.get()))
+        })
+}
+
+fn apply_tags(media: &mut DiscoveredMedia, tags: &gst::TagListRef) {
+    if media.title.is_none() {
+        media.title = tags
+            .iter_tag::<gst::tags::Title>()
+            .map(|value| value.get().to_string())
+            .find(|value| usable_tag_text(value));
+    }
+    if media.artist.is_none() {
+        media.artist = tags
+            .iter_tag::<gst::tags::Artist>()
+            .map(|value| value.get().to_string())
+            .find(|value| usable_tag_text(value));
+    }
+    if media.album.is_none() {
+        media.album = tags
+            .iter_tag::<gst::tags::Album>()
+            .map(|value| value.get().to_string())
+            .find(|value| usable_tag_text(value));
+    }
+    if media.cover_data.is_none() {
+        media.cover_data = cover_from_tags(tags);
+    }
+}
+
+fn discover_info(path: &std::path::Path) -> Result<gst_pbutils::DiscovererInfo, String> {
+    gst::init().map_err(|error| error.to_string())?;
+    let uri = gst::glib::filename_to_uri(path, None).map_err(|error| error.to_string())?;
+    let discoverer = gst_pbutils::Discoverer::new(gst::ClockTime::from_seconds(10)).map_err(|error| error.to_string())?;
+    discoverer.discover_uri(uri.as_str()).map_err(|error| error.to_string())
+}
+
 fn discover_duration(path: &std::path::Path) -> Option<i32> {
-    gst::init().ok()?;
-    let uri = gst::glib::filename_to_uri(path, None).ok()?;
-    let discoverer = gst_pbutils::Discoverer::new(gst::ClockTime::from_seconds(10)).ok()?;
-    let info = discoverer.discover_uri(uri.as_str()).ok()?;
-    info.duration().and_then(|duration| duration_seconds(duration.seconds_f64()))
+    discover_info(path)
+        .ok()?
+        .duration()
+        .and_then(|duration| duration_seconds(duration.seconds_f64()))
+}
+
+fn discover_media_blocking(path: &std::path::Path) -> Result<DiscoveredMedia, String> {
+    let info = discover_info(path)?;
+
+    let mut media = DiscoveredMedia {
+        duration: info.duration().and_then(|duration| duration_seconds(duration.seconds_f64())),
+        ..Default::default()
+    };
+    for container in info.container_streams() {
+        if let Some(tags) = container.tags() {
+            apply_tags(&mut media, &tags);
+        }
+    }
+    for audio in info.audio_streams() {
+        if let Some(tags) = audio.tags() {
+            apply_tags(&mut media, &tags);
+        }
+    }
+    Ok(media)
+}
+
+pub(crate) async fn discover_media(audio_full_path: &str) -> DiscoveredMedia {
+    let path = std::path::PathBuf::from(audio_full_path);
+    match tokio::task::spawn_blocking(move || discover_media_blocking(&path)).await {
+        Ok(Ok(media)) => media,
+        Ok(Err(error)) => {
+            tracing::debug!(path = %audio_full_path, %error, "GStreamer media discovery failed");
+            DiscoveredMedia::default()
+        }
+        Err(error) => {
+            tracing::warn!(path = %audio_full_path, %error, "GStreamer media discovery task failed");
+            DiscoveredMedia::default()
+        }
+    }
 }
 
 fn finite(v: f64) -> Option<f32> {
@@ -49,10 +149,22 @@ fn finite(v: f64) -> Option<f32> {
     }
 }
 
-/// Runs duration discovery and autocue-rs cue/loudness analysis off the async
-/// runtime. Failures are returned as defaults; `analyzed_at` remains `None`
-/// when cue analysis did not complete.
-pub async fn analyze_audio(audio_full_path: &str) -> SongAnalysis {
+#[derive(Clone, Copy)]
+enum DurationFallback {
+    Discover,
+    AlreadyDiscovered(Option<i32>),
+}
+
+impl DurationFallback {
+    fn known(self) -> Option<i32> {
+        match self {
+            Self::Discover => None,
+            Self::AlreadyDiscovered(duration) => duration,
+        }
+    }
+}
+
+async fn analyze_audio_inner(audio_full_path: &str, duration_fallback: DurationFallback) -> SongAnalysis {
     let path = std::path::PathBuf::from(audio_full_path);
     let opts = autocue_rs::CueOptions::default();
 
@@ -62,7 +174,10 @@ pub async fn analyze_audio(audio_full_path: &str) -> SongAnalysis {
             .as_ref()
             .ok()
             .and_then(|cues| duration_seconds(cues.duration))
-            .or_else(|| discover_duration(&path));
+            .or_else(|| match duration_fallback {
+                DurationFallback::Discover => discover_duration(&path),
+                DurationFallback::AlreadyDiscovered(duration) => duration,
+            });
         (cues, duration)
     })
     .await;
@@ -91,9 +206,22 @@ pub async fn analyze_audio(audio_full_path: &str) -> SongAnalysis {
         }
         Err(error) => {
             tracing::warn!(path = %audio_full_path, %error, "audio analysis task failed, using defaults");
-            SongAnalysis::default()
+            SongAnalysis {
+                duration: duration_fallback.known(),
+                ..Default::default()
+            }
         }
     }
+}
+
+/// Runs autocue-rs cue/loudness analysis off the async runtime and discovers a
+/// fallback duration only if cue analysis fails.
+pub async fn analyze_audio(audio_full_path: &str) -> SongAnalysis {
+    analyze_audio_inner(audio_full_path, DurationFallback::Discover).await
+}
+
+pub(crate) async fn analyze_audio_with_discovered_duration(audio_full_path: &str, duration: Option<i32>) -> SongAnalysis {
+    analyze_audio_inner(audio_full_path, DurationFallback::AlreadyDiscovered(duration)).await
 }
 
 /// Fire-and-forget: analyze a song in the background when it is added to a
@@ -143,6 +271,51 @@ pub fn spawn_analysis(db: &PgPool, song_id: Uuid, station_id: Uuid, upload_dir: 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use base64::Engine;
+    use id3::TagLike;
+
+    const COVER_BASE64: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Zl1sAAAAASUVORK5CYII=";
+
+    fn cover_bytes() -> Vec<u8> {
+        base64::engine::general_purpose::STANDARD.decode(COVER_BASE64).unwrap()
+    }
+
+    #[test]
+    fn tag_text_requires_content_after_sanitization() {
+        assert!(!usable_tag_text("\0 \0"));
+        assert!(usable_tag_text("Artist\0Guest"));
+    }
+
+    fn write_tagged_mp3(path: &std::path::Path) {
+        gst::init().unwrap();
+        let pipeline = gst::parse::launch(
+            "audiotestsrc num-buffers=128 ! audioconvert ! lamemp3enc target=bitrate cbr=true bitrate=128 ! mpegaudioparse ! filesink name=output",
+        )
+        .unwrap()
+        .downcast::<gst::Pipeline>()
+        .unwrap();
+        pipeline.by_name("output").unwrap().set_property("location", path.to_str().unwrap());
+        pipeline.set_state(gst::State::Playing).unwrap();
+        let message = pipeline
+            .bus()
+            .unwrap()
+            .timed_pop_filtered(gst::ClockTime::from_seconds(10), &[gst::MessageType::Eos, gst::MessageType::Error])
+            .expect("MP3 encoder pipeline must reach EOS");
+        pipeline.set_state(gst::State::Null).unwrap();
+        assert_eq!(message.type_(), gst::MessageType::Eos, "{message:?}");
+
+        let mut tag = id3::Tag::new();
+        tag.set_title("GStreamer Title");
+        tag.set_artist("GStreamer Artist");
+        tag.set_album("GStreamer Album");
+        tag.add_frame(id3::frame::Picture {
+            mime_type: "image/png".to_string(),
+            picture_type: id3::frame::PictureType::CoverFront,
+            description: String::new(),
+            data: cover_bytes(),
+        });
+        tag.write_to_path(path, id3::Version::Id3v24).unwrap();
+    }
 
     fn write_wav(path: &std::path::Path, duration_seconds: u32) {
         let sample_rate = 44_100u32;
@@ -174,7 +347,19 @@ mod tests {
         write_wav(file.path(), 2);
 
         let analysis = analyze_audio(file.path().to_str().unwrap()).await;
-
         assert_eq!(analysis.duration, Some(2));
+    }
+
+    #[tokio::test]
+    async fn discover_media_reads_text_and_cover_tags() {
+        let file = tempfile::Builder::new().suffix(".mp3").tempfile().unwrap();
+        write_tagged_mp3(file.path());
+
+        let media = discover_media(file.path().to_str().unwrap()).await;
+
+        assert_eq!(media.title.as_deref(), Some("GStreamer Title"));
+        assert_eq!(media.artist.as_deref(), Some("GStreamer Artist"));
+        assert_eq!(media.album.as_deref(), Some("GStreamer Album"));
+        assert_eq!(media.cover_data, Some((cover_bytes(), "image/png".to_string())));
     }
 }

@@ -34,6 +34,29 @@ pub(crate) fn mime_from_ext(filename: &str) -> &'static str {
     }
 }
 
+pub(crate) fn cover_extension_from_mime(mime: &str) -> Option<&'static str> {
+    match mime {
+        "image/jpeg" | "image/jpg" => Some("jpg"),
+        "image/png" => Some("png"),
+        "image/webp" => Some("webp"),
+        "image/gif" => Some("gif"),
+        "image/avif" => Some("avif"),
+        "image/bmp" => Some("bmp"),
+        _ => None,
+    }
+}
+
+pub(crate) fn cover_mime_from_filename(filename: &str) -> &'static str {
+    match filename.rsplit('.').next().unwrap_or("") {
+        "png" => "image/png",
+        "webp" => "image/webp",
+        "gif" => "image/gif",
+        "avif" => "image/avif",
+        "bmp" => "image/bmp",
+        _ => "image/jpeg",
+    }
+}
+
 pub(crate) fn is_audio_file(name: &str) -> bool {
     let ext = name.rsplit('.').next().unwrap_or("").to_lowercase();
     matches!(ext.as_str(), "mp3" | "wav" | "ogg" | "flac" | "aac" | "m4a" | "wma" | "opus")
@@ -163,6 +186,17 @@ mod tests {
     fn test_resolve_cover_path_with_subdir() {
         let result = resolve_cover_path("/uploads", "sub/cover.jpg");
         assert_eq!(result, "sub/cover.jpg");
+    }
+
+    #[test]
+    fn test_cover_format_preserves_supported_image_type() {
+        assert_eq!(cover_extension_from_mime("image/webp"), Some("webp"));
+        assert_eq!(cover_mime_from_filename("cover.webp"), "image/webp");
+    }
+
+    #[test]
+    fn test_cover_format_rejects_raw_samples() {
+        assert_eq!(cover_extension_from_mime("video/x-raw"), None);
     }
 
     #[tokio::test]
