@@ -12,6 +12,7 @@ pub(super) struct Branch {
     pub(super) elements: Vec<gst::Element>,
     pub(super) source: gst::Element,
     pub(super) volume: gst::Element,
+    pub(super) timing_pad: gst::Pad,
     pub(super) mixer_pad: gst::Pad,
 }
 
@@ -100,6 +101,7 @@ pub(super) fn attach(
         elements,
         source,
         volume,
+        timing_pad: volume_src,
         mixer_pad,
     })
 }
@@ -151,5 +153,5 @@ pub(super) fn seek(branch: &Branch, start: Duration, end: Option<Duration>) -> R
 }
 
 pub(super) fn set_offset(branch: &Branch, offset: Duration) {
-    branch.mixer_pad.set_offset(offset.as_nanos().min(i64::MAX as u128) as i64);
+    branch.timing_pad.set_offset(offset.as_nanos().min(i64::MAX as u128) as i64);
 }

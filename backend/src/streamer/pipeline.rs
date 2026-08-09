@@ -346,6 +346,10 @@ pub(crate) fn resolve_transition(
             if duration < Duration::from_millis(200) {
                 naive(fallback_fade)
             } else {
+                // `autocue_cap` limits overlap duration. Preserve cue_out and move
+                // the overlap start later when the analyzed tail is longer than
+                // the cap; truncating current_end would create an artificial EOS.
+                let fade_start = current_end.saturating_sub(duration).max(fade_start);
                 TransitionPlan::AutoCueCrossfade {
                     current_start,
                     fade_start,
@@ -488,6 +492,27 @@ mod tests {
         );
     }
 
+    #[test]
+    fn autocue_cap_moves_fade_start_without_truncating_cue_out() {
+        let current = track(true, 1, 20, 10);
+        let next = track(true, 2, 30, 0);
+        let plan = TransitionPlanner::plan(
+            config(TransitionMode::AutoCue, Duration::ZERO, Duration::from_secs(5)),
+            &current,
+            Some(&next),
+        );
+        assert_eq!(
+            resolve_transition(plan, Some(Duration::from_secs(25)), Some(Duration::from_secs(30)), true, true),
+            TransitionPlan::AutoCueCrossfade {
+                current_start: Duration::from_secs(1),
+                fade_start: Duration::from_secs(15),
+                current_end: Duration::from_secs(20),
+                next_start: Duration::from_secs(2),
+                duration: Duration::from_secs(5),
+                fallback_fade: Duration::ZERO,
+            }
+        );
+    }
     #[test]
     fn icecast_target_normalizes_mount_without_leaking_password() {
         let target = IcecastTarget::parse("localhost:8000", "secret".into(), "//daily mix//", "Daily".into()).unwrap();
