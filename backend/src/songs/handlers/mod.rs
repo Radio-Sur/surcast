@@ -3,6 +3,7 @@ pub mod create;
 pub mod crud;
 pub mod serve;
 pub mod upload_helper;
+pub mod upload_jobs;
 
 pub use assign::add_song_stations;
 pub use assign::remove_song_station;

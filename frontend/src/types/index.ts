@@ -58,6 +58,19 @@ export interface Song {
   station_ids: string[];
 }
 
+export type UploadJobStatusValue = "processing" | "done" | "error";
+
+export interface UploadJobStatus {
+  id: string;
+  status: UploadJobStatusValue;
+  total: number;
+  processed: number;
+  failed: number;
+  current_file: string | null;
+  error: string | null;
+  song_ids: string[];
+}
+
 export interface StationSong {
   id: string;
   song_id: string;

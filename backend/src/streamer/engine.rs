@@ -4,7 +4,7 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use tokio::io::AsyncWriteExt;
 
-use super::crossfade::{CrossfadeConfig, PlaybackConfig};
+use super::crossfade::CrossfadeConfig;
 use tokio::net::TcpStream;
 
 use super::backend::StreamBackend;
@@ -24,6 +24,10 @@ pub struct PlaybackEngine {
 }
 
 impl PlaybackEngine {
+    /// Constant byte-rate (bytes/sec) the streamer re-encodes all sources to via
+    /// ffmpeg (~128 kbps), so chunk pacing is stable across every audio format.
+    const STREAM_BITRATE: f64 = 16_384.0;
+
     pub fn new(
         db: sqlx::PgPool,
         station_id: uuid::Uuid,
@@ -116,50 +120,43 @@ impl PlaybackEngine {
                 Some(i) => i,
                 None => continue,
             };
-            let path = info.file_path.clone();
-
-            let bytes = match self.read_song_file(&path).await {
-                Ok(b) => b,
-                Err(_) => continue,
-            };
-            let bytes = Self::skip_id3_header(&bytes).to_vec();
-
             let next_info = self.queue.peek_next_song();
-            let params = self
-                .compute_playback_params(&info, next_info.as_ref(), self.prebuffer_bytes, &bytes)
-                .await;
+            let params = self.compute_playback_params(&info, next_info.as_ref(), self.prebuffer_bytes).await;
+
+            let cf_config = CrossfadeConfig {
+                bitrate: params.bitrate,
+                chunk_size: params.chunk_size,
+                chunk_duration: params.chunk_duration,
+                total_chunks: params.total_chunks,
+                pre_idx: params.pre_idx,
+                prebuffer_chunks: params.prebuffer_chunks,
+                cur_start: params.cur_start,
+                cur_cut: params.cur_cut,
+                cur_end: params.cur_end,
+                next_start: params.next_start,
+                fade_secs: params.fade_secs,
+                actual_fade: params.actual_fade,
+            };
 
             if params.has_fade && params.fade_chunks > 0 {
                 let Some(next) = params.next.as_ref() else {
                     break;
                 };
-                let cf_config = CrossfadeConfig {
-                    bitrate: params.bitrate,
-                    chunk_size: params.chunk_size,
-                    chunk_duration: params.chunk_duration,
-                    total_chunks: params.total_chunks,
-                    pre_idx: params.pre_idx,
-                    prebuffer_chunks: params.prebuffer_chunks,
-                    cur_start: params.cur_start,
-                    cur_cut: params.cur_cut,
-                    cur_end: params.cur_end,
-                    next_start: params.next_start,
-                    fade_secs: params.fade_secs,
-                    actual_fade: params.actual_fade,
-                };
-                let ok = self.play_crossfade(&mut stream, &info, next, idx, &cf_config).await;
+                let (ok, advanced) = self.play_crossfade(&mut stream, &info, next, idx, &cf_config).await;
                 if ok {
-                    self.queue.advance_idx(1);
+                    if let Some(s) = stream.as_mut() {
+                        let _ = s.flush().await;
+                    }
+                    // play_crossfade already advanced the index at the transition
+                    // midpoint; only advance here when it did not (e.g. the stream
+                    // ended before the midpoint was reached).
+                    if !advanced {
+                        self.queue.advance_idx(1);
+                    }
                     self.queue.advance_song().await;
                 }
             } else {
-                let pb_config = PlaybackConfig {
-                    chunks: bytes.chunks(params.chunk_size).map(|c| c.to_vec()).collect(),
-                    chunk_duration: params.chunk_duration,
-                    total_chunks: params.total_chunks,
-                    pre_idx: params.pre_idx,
-                };
-                let ok = self.play_normal(&mut stream, &pb_config).await;
+                let ok = self.play_rendered(&mut stream, &info, idx, &cf_config).await;
                 if ok {
                     if let Some(s) = stream.as_mut() {
                         let _ = s.flush().await;
@@ -255,20 +252,17 @@ impl PlaybackEngine {
         Ok(())
     }
 
-    async fn compute_playback_params(
-        &self,
-        info: &SongInfo,
-        next_info: Option<&SongInfo>,
-        prebuffer_bytes: i32,
-        bytes: &[u8],
-    ) -> PlaybackParams {
+    async fn compute_playback_params(&self, info: &SongInfo, next_info: Option<&SongInfo>, prebuffer_bytes: i32) -> PlaybackParams {
         let pre_idx = self.queue.current_idx();
-        let total_bytes = bytes.len();
         let duration_secs = info.duration.max(1) as f64;
+        // Playback is rendered through ffmpeg at a fixed stream bitrate (128 kbps),
+        // so chunk timing derives from that constant rate rather than the source
+        // file's bytes (which would be wildly wrong for WAV/FLAC/Ogg and the rest).
+        let total_bytes = (duration_secs * Self::STREAM_BITRATE) as usize;
         let (bitrate, chunk_size, chunk_duration, prebuffer_chunks) =
             Self::compute_chunk_params(total_bytes, duration_secs, prebuffer_bytes);
 
-        let total_chunks = total_bytes.div_ceil(chunk_size);
+        let total_chunks = (duration_secs / chunk_duration.as_secs_f64()).ceil() as usize;
 
         let station_settings: (i32, String, i32) = sqlx::query_as(
             "SELECT COALESCE(default_fade_ms, 0), transition_mode, COALESCE(autocue_fade_max_ms, 5000) FROM stations WHERE id = $1",
@@ -317,37 +311,6 @@ impl PlaybackEngine {
             next_start: geom.next_start,
             next: next_info.cloned(),
         }
-    }
-
-    async fn read_song_file(&self, path: &str) -> Result<Vec<u8>, ()> {
-        match tokio::fs::read(path).await {
-            Ok(b) => Ok(b),
-            Err(e) => {
-                tracing::warn!(path = %path, error = %e, "Streamer failed to read song file");
-                self.queue.advance_idx(1);
-                self.queue.advance_song().await;
-                Err(())
-            }
-        }
-    }
-
-    fn skip_id3_header(data: &[u8]) -> &[u8] {
-        let data_start = data
-            .windows(3)
-            .position(|w| w == b"ID3")
-            .and_then(|pos| {
-                if pos + 10 <= data.len() {
-                    let size = ((data[pos + 6] as usize) << 21)
-                        | ((data[pos + 7] as usize) << 14)
-                        | ((data[pos + 8] as usize) << 7)
-                        | (data[pos + 9] as usize);
-                    Some(pos + 10 + size)
-                } else {
-                    None
-                }
-            })
-            .unwrap_or(0);
-        &data[data_start..]
     }
 
     fn compute_chunk_params(total_bytes: usize, duration_secs: f64, prebuffer_bytes: i32) -> (f64, usize, Duration, usize) {
@@ -468,57 +431,6 @@ fn compute_transition(mode: &str, cur: &SongInfo, next: Option<&SongInfo>, fade_
 mod tests {
     use super::*;
     use std::time::Duration;
-
-    fn make_id3_data(version: u8, size: usize) -> Vec<u8> {
-        let mut data = Vec::new();
-        data.extend_from_slice(b"ID3");
-        data.push(version);
-        data.push(0x00);
-        data.push(0x00);
-        data.push(((size >> 21) & 0x7F) as u8);
-        data.push(((size >> 14) & 0x7F) as u8);
-        data.push(((size >> 7) & 0x7F) as u8);
-        data.push((size & 0x7F) as u8);
-        data.extend(std::iter::repeat(0x00).take(size));
-        data
-    }
-
-    #[test]
-    fn test_skip_id3_v23_header() {
-        let mut data = make_id3_data(3, 100);
-        data.extend_from_slice(b"audio data");
-        let result = PlaybackEngine::skip_id3_header(&data);
-        assert_eq!(result, b"audio data");
-    }
-
-    #[test]
-    fn test_skip_id3_v24_header() {
-        let mut data = make_id3_data(4, 100);
-        data.extend_from_slice(b"audio data");
-        let result = PlaybackEngine::skip_id3_header(&data);
-        assert_eq!(result, b"audio data");
-    }
-
-    #[test]
-    fn test_skip_id3_no_header() {
-        let data = b"just audio data";
-        let result = PlaybackEngine::skip_id3_header(data);
-        assert_eq!(result, b"just audio data");
-    }
-
-    #[test]
-    fn test_skip_id3_shorter_than_10() {
-        let data = b"ID3xxx";
-        let result = PlaybackEngine::skip_id3_header(data);
-        assert_eq!(result, b"ID3xxx");
-    }
-
-    #[test]
-    fn test_skip_id3_empty() {
-        let data = b"";
-        let result = PlaybackEngine::skip_id3_header(data);
-        assert!(result.is_empty());
-    }
 
     #[test]
     fn test_compute_chunk_params_normal() {

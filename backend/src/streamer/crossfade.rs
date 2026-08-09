@@ -24,14 +24,85 @@ pub(super) struct CrossfadeConfig {
     pub actual_fade: f64,
 }
 
-pub(super) struct PlaybackConfig {
-    pub chunks: Vec<Vec<u8>>,
-    pub chunk_duration: Duration,
-    pub total_chunks: usize,
-    pub pre_idx: usize,
-}
-
 impl PlaybackEngine {
+    pub(super) async fn play_rendered(
+        &self,
+        stream: &mut Option<TcpStream>,
+        info: &SongInfo,
+        _idx: usize,
+        config: &CrossfadeConfig,
+    ) -> bool {
+        let bitrate_bps = (config.bitrate * 8.0) as u32;
+
+        let mut child = match tokio::process::Command::new("ffmpeg")
+            .args(["-i", &info.file_path, "-b:a", &format!("{bitrate_bps}")])
+            .args(["-map", "0:a", "-f", "mp3", "-"])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+        {
+            Ok(c) => c,
+            Err(_) => {
+                tracing::warn!(
+                    mount = %self.mount,
+                    path = %info.file_path,
+                    "ffmpeg not available or failed to spawn, skipping song"
+                );
+                self.queue.advance_idx(1);
+                self.queue.advance_song().await;
+                return false;
+            }
+        };
+
+        let mut ok = true;
+        let mut aborted = false;
+        if let Some(stdout) = child.stdout.take() {
+            let mut reader = tokio::io::BufReader::new(stdout);
+            let mut buf = vec![0u8; config.chunk_size];
+            loop {
+                if !self.playing.load(Ordering::Acquire) || self.stopped.load(Ordering::Acquire) {
+                    ok = false;
+                    aborted = true;
+                    break;
+                }
+                if self.queue.current_idx() != config.pre_idx {
+                    ok = false;
+                    aborted = true;
+                    break;
+                }
+                let n = match reader.read(&mut buf).await {
+                    Ok(0) => break,
+                    Ok(n) => n,
+                    Err(_) => break,
+                };
+                if let Some(s) = stream.as_mut() {
+                    if let Err(e) = s.write_all(&buf[..n]).await {
+                        tracing::warn!(
+                            mount = %self.mount,
+                            error = %e,
+                            "Streamer write failed"
+                        );
+                        self.disconnect(stream).await;
+                        ok = false;
+                        aborted = true;
+                        break;
+                    }
+                }
+                tokio::time::sleep(config.chunk_duration).await;
+            }
+        }
+        if aborted {
+            let _ = child.kill().await;
+        }
+        let _ = child.wait().await;
+        ok
+    }
+
+    /// Plays a crossfade transition from `info` into `next`. The queue index is
+    /// advanced as soon as the midpoint of the transition is streamed (so the
+    /// rest of the loop keeps playing the "now playing" song in sync). Returns
+    /// `(ok, advanced)` where `advanced` tells the caller whether this function
+    /// already advanced the index and it must not advance again.
     pub(super) async fn play_crossfade(
         &self,
         stream: &mut Option<TcpStream>,
@@ -39,7 +110,7 @@ impl PlaybackEngine {
         next: &SongInfo,
         idx: usize,
         config: &CrossfadeConfig,
-    ) -> bool {
+    ) -> (bool, bool) {
         let cur_start = config.cur_start;
         let cur_cut = config.cur_cut;
         let cur_end = config.cur_end;
@@ -85,27 +156,31 @@ impl PlaybackEngine {
                 );
                 self.queue.advance_idx(1);
                 self.queue.advance_song().await;
-                return false;
+                return (false, false);
             }
         };
 
         let mut ok = true;
+        let mut aborted = false;
+        let mut song_change_sent = false;
         if let Some(stdout) = child.stdout.take() {
             let mut reader = tokio::io::BufReader::new(stdout);
             let mut buf = vec![0u8; config.chunk_size];
             let mut chunk_count = 0usize;
-            let mut song_change_sent = false;
             let mut paced_start: Option<Instant> = None;
             let midpoint_secs = (config.cur_cut - config.cur_start) + config.actual_fade / 2.0;
             let prebuffer_duration = config.prebuffer_chunks as f64 * config.chunk_duration.as_secs_f64();
 
             loop {
                 if !self.playing.load(Ordering::Acquire) || self.stopped.load(Ordering::Acquire) {
+                    ok = false;
+                    aborted = true;
                     break;
                 }
                 let expected = if song_change_sent { config.pre_idx + 1 } else { config.pre_idx };
                 if self.queue.current_idx() != expected {
                     ok = false;
+                    aborted = true;
                     break;
                 }
                 let n = match reader.read(&mut buf).await {
@@ -121,6 +196,8 @@ impl PlaybackEngine {
                             "Streamer write failed"
                         );
                         self.disconnect(stream).await;
+                        ok = false;
+                        aborted = true;
                         break;
                     }
                 }
@@ -166,34 +243,10 @@ impl PlaybackEngine {
                 }
             }
         }
-        let _ = child.wait().await;
-        ok
-    }
-
-    pub(super) async fn play_normal(&self, stream: &mut Option<TcpStream>, config: &PlaybackConfig) -> bool {
-        for (i, chunk) in config.chunks.iter().enumerate() {
-            if !self.playing.load(Ordering::Acquire) || self.stopped.load(Ordering::Acquire) {
-                self.disconnect(stream).await;
-                return false;
-            }
-            if self.queue.current_idx() != config.pre_idx {
-                return false;
-            }
-            if let Some(s) = stream.as_mut() {
-                if let Err(e) = s.write_all(chunk).await {
-                    tracing::warn!(
-                        mount = %self.mount,
-                        error = %e,
-                        "Streamer write failed, reconnecting"
-                    );
-                    self.disconnect(stream).await;
-                    return false;
-                }
-            }
-            if i < config.total_chunks - 1 {
-                tokio::time::sleep(config.chunk_duration).await;
-            }
+        if aborted {
+            let _ = child.kill().await;
         }
-        true
+        let _ = child.wait().await;
+        (ok, song_change_sent)
     }
 }

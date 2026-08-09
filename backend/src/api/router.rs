@@ -113,6 +113,11 @@ pub fn create_router(db: PgPool, config: Config, icecast_manager: IcecastManager
             "/api/songs/zip",
             post(songs::handlers::upload_zip).layer(DefaultBodyLimit::max(500 * 1024 * 1024)),
         )
+        .route(
+            "/api/uploads",
+            post(songs::handlers::upload_jobs::start_upload).layer(DefaultBodyLimit::max(500 * 1024 * 1024)),
+        )
+        .route("/api/uploads/:id", get(songs::handlers::upload_jobs::get_upload_job))
         .route("/api/songs/search", get(songs::handlers::search_songs))
         .route("/api/songs/artists", get(songs::handlers::list_artists))
         .route("/api/songs/count", post(songs::handlers::count_songs))

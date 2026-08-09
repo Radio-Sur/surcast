@@ -2,6 +2,7 @@ use crate::errors::AppError;
 use crate::songs::analysis::analyze_audio;
 use crate::songs::handlers::{ext_from_filename, mime_from_ext, resolve_audio_path, save_uploaded_file};
 use crate::songs::repository;
+use serde_json::Value;
 use sqlx::PgPool;
 use uuid::Uuid;
 
@@ -21,6 +22,28 @@ struct SongMetadata {
     title: String,
     artist: String,
     album: String,
+}
+
+fn sanitize_text(s: String) -> String {
+    s.replace('\0', "")
+}
+
+/// Reads the true duration of an audio file (any format ffprobe understands)
+/// from its media stream headers, in whole seconds. Returns `None` when ffprobe
+/// is unavailable, the probe fails, or the file has no reported duration.
+fn probe_duration(audio_full_path: &str) -> Option<i32> {
+    let output = std::process::Command::new("ffprobe")
+        .args(["-v", "quiet", "-print_format", "json", "-show_format"])
+        .arg(audio_full_path)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let json: Value = serde_json::from_slice(&output.stdout).ok()?;
+    let secs = json.get("format")?.get("duration")?.as_str()?.parse::<f64>().ok()?;
+    let secs = secs.round() as i32;
+    (secs > 0).then_some(secs)
 }
 
 fn extract_id3_tags(audio_full_path: &str) -> Id3Tags {
@@ -115,7 +138,11 @@ fn resolve_song_metadata(
         album = id3.album.clone();
     }
 
-    SongMetadata { title, artist, album }
+    SongMetadata {
+        title: sanitize_text(title),
+        artist: sanitize_text(artist),
+        album: sanitize_text(album),
+    }
 }
 
 async fn enrich_from_external(api_key: &str, metadata: &SongMetadata) -> (SongMetadata, Option<(Vec<u8>, String)>) {
@@ -200,6 +227,8 @@ pub async fn process_song_upload(
 
     let duration = if id3.duration > 0 {
         id3.duration
+    } else if let Some(probe) = probe_duration(&audio_full_path) {
+        probe
     } else {
         ((file_size as f64) / 16000.0).round() as i32
     }
@@ -243,4 +272,17 @@ pub async fn process_song_upload(
     .await?;
 
     Ok(ProcessedSong { id: song_id })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sanitize_text;
+
+    #[test]
+    fn sanitize_text_strips_nul_bytes() {
+        assert_eq!(sanitize_text("HUMBLE. (SKRILLEX REMIX)".into()), "HUMBLE. (SKRILLEX REMIX)");
+        assert_eq!(sanitize_text("HUMBLE\u{0}".into()), "HUMBLE");
+        assert_eq!(sanitize_text("H\u{0}UM\u{0}BLE".into()), "HUMBLE");
+        assert_eq!(sanitize_text("\u{0}\u{0}".into()), "");
+    }
 }

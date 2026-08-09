@@ -17,9 +17,12 @@ pub struct AutoFillConfig {
 }
 
 pub(crate) async fn fill_from_playlist(db: &PgPool, station_id: Uuid, playlist_id: Uuid, upload_dir: &str) -> Result<(), AppError> {
-    let song_ids: Vec<Uuid> = sqlx::query_scalar("SELECT ps.song_id FROM playlist_songs ps WHERE ps.playlist_id = $1 ORDER BY ps.position")
-        .bind(playlist_id)
-        .fetch_all(db)
+    let song_ids: Vec<Uuid> = sqlx::query_scalar(
+        "SELECT ps.song_id FROM playlist_songs ps WHERE ps.playlist_id = $1 AND ps.song_id NOT IN (SELECT song_id FROM station_queue WHERE station_id = $2) ORDER BY ps.position",
+    )
+    .bind(playlist_id)
+    .bind(station_id)
+    .fetch_all(db)
         .await
         .db_error("failed to fetch playlist songs")?;
 
@@ -188,6 +191,22 @@ async fn pick_song_for_source(
         tracing::warn!(station_id = %station_id, %source_type, "AutoDJ: no songs in source");
         return Ok(None);
     }
+
+    // Never re-add a song that is already anywhere in this station's queue
+    // (played or upcoming): top-ups only pick fresh candidates.
+    let queued: Vec<Uuid> = sqlx::query_scalar("SELECT song_id FROM station_queue WHERE station_id = $1")
+        .bind(station_id)
+        .fetch_all(db)
+        .await
+        .db_error("failed to load current queue song ids")?;
+    let mut candidates = song_ids;
+    if !queued.is_empty() {
+        candidates.retain(|id| !queued.contains(id));
+        if candidates.is_empty() {
+            return Ok(None);
+        }
+    }
+    let song_ids = candidates;
 
     let selected = apply_mode_to_candidates(db, &song_ids, mode, station_id).await?;
 

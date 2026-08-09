@@ -24,20 +24,14 @@ import TableHead from "@mui/material/TableHead";
 import TableRow from "@mui/material/TableRow";
 import TextField from "@mui/material/TextField";
 import Typography from "@mui/material/Typography";
+import { useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { EditSongDialog } from "@/components/edit-song-dialog";
 import { fmt } from "@/components/queue";
 import { SongCover } from "@/components/song-cover";
 import { UploadSongDialog } from "@/components/upload-song-dialog";
-import {
-  useDeleteSong,
-  useDeleteSongsBatch,
-  useSongs,
-  useUpdateSong,
-  useUploadSong,
-  useUploadZip,
-} from "@/hooks/use-songs";
+import { useDeleteSong, useDeleteSongsBatch, useSongs, useUpdateSong } from "@/hooks/use-songs";
 import { useStations } from "@/hooks/use-stations";
 import { useSnackbar } from "@/providers/snackbar-provider";
 
@@ -58,8 +52,7 @@ export function SongsPage() {
   const { t } = useTranslation();
   const { showSnackbar } = useSnackbar();
   const { data: stations } = useStations();
-  const uploadSong = useUploadSong();
-  const uploadZip = useUploadZip();
+  const queryClient = useQueryClient();
   const deleteSong = useDeleteSong();
   const deleteSongsBatch = useDeleteSongsBatch();
 
@@ -76,8 +69,8 @@ export function SongsPage() {
   const updateSong = useUpdateSong();
 
   const [uploadResult, setUploadResult] = useState<{
-    type: "single" | "zip";
-    count: number;
+    created: number;
+    failed: number;
   } | null>(null);
 
   const { data: filtered, isLoading, isError, error } = useSongSearch(search);
@@ -171,9 +164,9 @@ export function SongsPage() {
 
       {uploadResult && (
         <Alert severity="success" onClose={() => setUploadResult(null)}>
-          {uploadResult.type === "zip"
-            ? t("songs:uploaded_zip", { count: uploadResult.count })
-            : t("songs:uploaded_single")}
+          {uploadResult.failed > 0
+            ? t("songs:uploaded_result_failed", { created: uploadResult.created, failed: uploadResult.failed })
+            : t("songs:uploaded_result", { created: uploadResult.created })}
         </Alert>
       )}
 
@@ -293,39 +286,13 @@ export function SongsPage() {
       <UploadSongDialog
         open={uploadOpen}
         stations={stations}
-        uploadSongPending={uploadSong.isPending}
-        uploadZipPending={uploadZip.isPending}
-        onUploadSingle={async (data) => {
-          try {
-            await uploadSong.mutateAsync({
-              file: data.file,
-              title: data.title,
-              artist: data.artist,
-              album: data.album,
-              assign_to_all: data.assignToAll,
-              station_ids: data.stationIds,
-            });
-            setUploadOpen(false);
-            setUploadResult({ type: "single", count: 1 });
-            setTimeout(() => setUploadResult(null), 3000);
-          } catch (err) {
-            console.error("Failed to upload song", err);
-            showSnackbar("Failed to upload song", "error");
-          }
-        }}
-        onUploadZip={async (data) => {
-          try {
-            const result = await uploadZip.mutateAsync({
-              file: data.file,
-              assign_to_all: data.assignToAll,
-              station_ids: data.stationIds,
-            });
-            setUploadOpen(false);
-            setUploadResult({ type: "zip", count: result.length });
-            setTimeout(() => setUploadResult(null), 3000);
-          } catch (err) {
-            console.error("Failed to upload ZIP", err);
-            showSnackbar("Failed to upload ZIP file", "error");
+        onFinished={({ created, failed }) => {
+          queryClient.invalidateQueries({ queryKey: ["songs"] });
+          if (created > 0) {
+            setUploadResult({ created, failed });
+            setTimeout(() => setUploadResult(null), 4000);
+          } else {
+            showSnackbar(t("songs:upload_failed"), "error");
           }
         }}
         onClose={() => setUploadOpen(false)}

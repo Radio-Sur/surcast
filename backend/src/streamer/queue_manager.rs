@@ -8,6 +8,29 @@ use super::SongInfo;
 use super::StatusEvent;
 use crate::stations::repository;
 
+/// Resolves the "now playing" index for a freshly loaded song list. Keeps the
+/// pointer anchored on the song that was playing (by `song_id` and its
+/// occurrence rank, so duplicated entries resolve uniquely) across queue edits
+/// (reorder / insert / remove). When that song is gone, falls back to the first
+/// song whose `position` is at or after `saved_position`, then to the end of the
+/// list (so the engine idles and refills).
+pub(crate) fn resolve_index(anchor: Option<(&str, usize)>, songs: &[SongInfo], saved_position: i32) -> usize {
+    if let Some((id, rank)) = anchor {
+        if rank > 0 {
+            let mut seen = 0usize;
+            for (i, s) in songs.iter().enumerate() {
+                if s.song_id == id {
+                    seen += 1;
+                    if seen == rank {
+                        return i;
+                    }
+                }
+            }
+        }
+    }
+    songs.iter().position(|s| s.position >= saved_position).unwrap_or(songs.len())
+}
+
 pub struct QueueManager {
     pub db: PgPool,
     pub station_id: Uuid,
@@ -59,6 +82,16 @@ impl QueueManager {
     }
 
     pub async fn reload_from_db(&self) {
+        let anchor = {
+            let songs = self.songs.lock().unwrap_or_else(|e| e.into_inner());
+            let idx = self.current_idx.load(Ordering::Acquire);
+            songs.get(idx).map(|s| {
+                let rank = songs[..=idx].iter().filter(|x| x.song_id == s.song_id).count();
+                (s.song_id.clone(), rank)
+            })
+        };
+        let anchor_ref = anchor.as_ref().map(|(id, rank)| (id.as_str(), *rank));
+
         let rows = repository::find_station_song_info(&self.db, self.station_id)
             .await
             .unwrap_or_default();
@@ -89,7 +122,7 @@ impl QueueManager {
             .unwrap_or(0)
             .max(0);
 
-        let new_idx = songs.iter().position(|s| s.position >= saved_index).unwrap_or(songs.len());
+        let new_idx = resolve_index(anchor_ref, &songs, saved_index);
 
         {
             let mut list = self.songs.lock().unwrap_or_else(|e| e.into_inner());
@@ -98,9 +131,23 @@ impl QueueManager {
         self.current_idx.store(new_idx, Ordering::Release);
     }
 
+    /// Replaces the in-memory song list (used after queue edits) while keeping
+    /// the "now playing" pointer anchored on the same song (id + duplicate rank).
     pub fn reload_songs(&self, new_songs: Vec<SongInfo>) {
+        let anchor = {
+            let songs = self.songs.lock().unwrap_or_else(|e| e.into_inner());
+            let idx = self.current_idx.load(Ordering::Acquire);
+            songs.get(idx).map(|s| {
+                let rank = songs[..=idx].iter().filter(|x| x.song_id == s.song_id).count();
+                (s.song_id.clone(), rank)
+            })
+        };
+        let anchor_ref = anchor.as_ref().map(|(id, rank)| (id.as_str(), *rank));
+        let new_idx = resolve_index(anchor_ref, &new_songs, 0);
+
         let mut songs = self.songs.lock().unwrap_or_else(|e| e.into_inner());
         *songs = new_songs;
+        self.current_idx.store(new_idx, Ordering::Release);
     }
 
     async fn persist_index(&self) {
@@ -339,10 +386,76 @@ impl QueueManager {
 
 #[cfg(test)]
 mod tests {
-    // QueueManager requires PgPool and streamer context — tested via API tests
-    // See tests/api_queue.rs for queue integration tests
+    use super::resolve_index;
+    use super::SongInfo;
+
+    fn song(id: &str, position: i32) -> SongInfo {
+        SongInfo {
+            song_id: id.into(),
+            title: "t".into(),
+            artist: "a".into(),
+            duration: 10,
+            file_path: "/tmp/x.mp3".into(),
+            position,
+            cue_in: 0.0,
+            cue_out: 0.0,
+            cross_start_next: 0.0,
+            analyzed: false,
+        }
+    }
+
     #[test]
-    fn test_queue_manager_is_tested_via_api() {
-        assert!(true);
+    fn test_resolve_index_keeps_same_song_after_reorder() {
+        // playing A; user moved C to the top -> [C, A, B]
+        let songs = vec![song("C", 0), song("A", 1), song("B", 2)];
+        assert_eq!(resolve_index(Some(("A", 1)), &songs, 0), 1);
+        assert_eq!(resolve_index(Some(("B", 1)), &songs, 0), 2);
+        assert_eq!(resolve_index(Some(("C", 1)), &songs, 0), 0);
+    }
+
+    #[test]
+    fn test_resolve_index_keeps_pointer_stable_without_edits() {
+        let songs = vec![song("A", 0), song("B", 1), song("C", 2)];
+        assert_eq!(resolve_index(Some(("A", 1)), &songs, 0), 0);
+        assert_eq!(resolve_index(Some(("B", 1)), &songs, 0), 1);
+    }
+
+    #[test]
+    fn test_resolve_index_missing_anchor_uses_saved_position() {
+        // current song removed; fall back to first song at/after saved position
+        let songs = vec![song("X", 0), song("Y", 1)];
+        assert_eq!(resolve_index(Some(("GONE", 1)), &songs, 0), 0);
+        assert_eq!(resolve_index(Some(("GONE", 1)), &songs, 1), 1);
+        assert_eq!(resolve_index(Some(("GONE", 1)), &songs, 3), songs.len());
+    }
+
+    #[test]
+    fn test_resolve_index_no_anchor_uses_saved_position() {
+        let songs = vec![song("A", 0), song("B", 1), song("C", 2)];
+        assert_eq!(resolve_index(None, &songs, 1), 1);
+        assert_eq!(resolve_index(None, &songs, 5), songs.len());
+    }
+
+    #[test]
+    fn test_resolve_index_empty_list() {
+        assert_eq!(resolve_index(Some(("A", 1)), &[], 0), 0);
+        assert_eq!(resolve_index(None, &[], 0), 0);
+    }
+
+    #[test]
+    fn test_resolve_index_duplicate_songs_rank_uniquely() {
+        // [A, A, B] — playing the SECOND copy of A must stay on it, not jump to the first
+        let songs = vec![song("A", 0), song("A", 1), song("B", 2)];
+        assert_eq!(resolve_index(Some(("A", 1)), &songs, 0), 0);
+        assert_eq!(resolve_index(Some(("A", 2)), &songs, 1), 1);
+        assert_eq!(resolve_index(Some(("B", 1)), &songs, 0), 2);
+    }
+
+    #[test]
+    fn test_resolve_index_duplicates_survive_reorder() {
+        // A (1st copy) playing; reorder brings another song to the front
+        let songs = vec![song("A", 0), song("B", 1), song("A", 2), song("C", 3)];
+        assert_eq!(resolve_index(Some(("A", 1)), &songs, 0), 0);
+        assert_eq!(resolve_index(Some(("A", 2)), &songs, 0), 2);
     }
 }
