@@ -1,5 +1,5 @@
-use gstreamer as gst;
 use gst::prelude::*;
+use gstreamer as gst;
 
 use super::super::pipeline::{IcecastTarget, PipelineError};
 

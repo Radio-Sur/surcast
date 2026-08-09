@@ -1,20 +1,22 @@
+mod branch;
+mod bus;
 mod graph;
 mod sink;
+mod transition;
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use async_trait::async_trait;
 use gst::prelude::*;
-use gst_controller::prelude::*;
 use gstreamer as gst;
-use gstreamer_controller as gst_controller;
 use tokio::sync::mpsc;
 
 use super::pipeline::{
     resolve_transition, IcecastTarget, PairPlan, PipelineConfig, PipelineError, PipelineEvent, PipelineInstance, PipelineSnapshot,
-    PipelineState, PipelineTrack, PlaybackPipeline, PlaybackPipelineFactory, TrackKey, TransitionPlan,
+    PipelineState, PlaybackPipeline, PlaybackPipelineFactory, TrackKey,
 };
+use branch::Branch;
 
 #[derive(Clone)]
 pub(crate) struct GStreamerPipelineFactory {
@@ -34,12 +36,6 @@ impl GStreamerPipelineFactory {
     fn with_test_sink() -> Self {
         Self { sink_factory: "fakesink" }
     }
-}
-struct Branch {
-    elements: Vec<gst::Element>,
-    source: gst::Element,
-    volume: gst::Element,
-    mixer_pad: gst::Pad,
 }
 
 #[derive(Clone)]
@@ -89,151 +85,6 @@ impl GStreamerPipeline {
         }
         Ok(())
     }
-
-    fn clear_branches(&self) {
-        let mut branches = self.branches.lock().unwrap_or_else(|error| error.into_inner());
-        for branch in branches.drain(..) {
-            self.mixer.release_request_pad(&branch.mixer_pad);
-            for element in branch.elements {
-                let _ = element.set_state(gst::State::Null);
-                let _ = self.pipeline.remove(&element);
-            }
-        }
-    }
-
-    fn attach_track(&self, track: &PipelineTrack, generation: u64, initial_volume: f64) -> Result<Branch, PipelineError> {
-        let uri = gst::glib::filename_to_uri(&track.path, None).map_err(|error| PipelineError::Pipeline(error.to_string()))?;
-        let source = graph::element("uridecodebin")?;
-        source.set_property("uri", uri.as_str());
-        let queue = graph::element("queue")?;
-        let convert = graph::element("audioconvert")?;
-        let resample = graph::element("audioresample")?;
-        let capsfilter = graph::element("capsfilter")?;
-        capsfilter.set_property(
-            "caps",
-            gst::Caps::builder("audio/x-raw")
-                .field("format", "F32LE")
-                .field("rate", 44_100i32)
-                .field("channels", 2i32)
-                .field("layout", "interleaved")
-                .build(),
-        );
-        let volume = graph::element("volume")?;
-        volume.set_property("volume", initial_volume);
-        self.pipeline
-            .add_many([&source, &queue, &convert, &resample, &capsfilter, &volume])
-            .map_err(|error| PipelineError::Pipeline(error.to_string()))?;
-        gst::Element::link_many([&queue, &convert, &resample, &capsfilter, &volume])
-            .map_err(|error| PipelineError::Pipeline(error.to_string()))?;
-        let queue_sink = queue
-            .static_pad("sink")
-            .ok_or_else(|| PipelineError::Pipeline("queue has no sink pad".into()))?;
-        let audio_sink = queue_sink.clone();
-        source.connect_pad_added(move |_, pad| {
-            let is_audio = pad
-                .current_caps()
-                .or_else(|| Some(pad.query_caps(None)))
-                .and_then(|caps| caps.structure(0).map(|structure| structure.name().starts_with("audio/x-raw")))
-                .unwrap_or(false);
-            if is_audio && !audio_sink.is_linked() {
-                let _ = pad.link(&audio_sink);
-            }
-        });
-        let no_audio_sink = queue_sink;
-        let events = self.events.clone();
-        let key = track.key.clone();
-        source.connect_no_more_pads(move |_| {
-            if !no_audio_sink.is_linked() {
-                let _ = events.send(PipelineEvent::DecodeFailed {
-                    generation,
-                    track: key.clone(),
-                    message: "decoder exposed no audio/x-raw pad".into(),
-                });
-            }
-        });
-        let mixer_pad = self
-            .mixer
-            .request_pad_simple("sink_%u")
-            .ok_or_else(|| PipelineError::Pipeline("mixer rejected request pad".into()))?;
-        let volume_src = volume
-            .static_pad("src")
-            .ok_or_else(|| PipelineError::Pipeline("volume has no source pad".into()))?;
-        volume_src
-            .link(&mixer_pad)
-            .map_err(|error| PipelineError::Pipeline(error.to_string()))?;
-        let elements = vec![source.clone(), queue, convert, resample, capsfilter, volume.clone()];
-        for element in &elements {
-            element
-                .sync_state_with_parent()
-                .map_err(|error| PipelineError::Pipeline(error.to_string()))?;
-        }
-        Ok(Branch {
-            elements,
-            source,
-            volume,
-            mixer_pad,
-        })
-    }
-
-    fn duration(branch: &Branch) -> Option<Duration> {
-        branch
-            .volume
-            .query_duration::<gst::ClockTime>()
-            .or_else(|| branch.source.query_duration::<gst::ClockTime>())
-            .map(|duration| Duration::from_nanos(duration.nseconds()))
-    }
-    async fn wait_duration(&self, index: usize) -> Option<Duration> {
-        for _ in 0..100 {
-            let duration = {
-                let branches = self.branches.lock().unwrap_or_else(|error| error.into_inner());
-                branches.get(index).and_then(Self::duration)
-            };
-            if duration.is_some() {
-                return duration;
-            }
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-        None
-    }
-
-    fn seekable(branch: &Branch) -> bool {
-        [&branch.volume, &branch.source].into_iter().any(|element| {
-            let mut query = gst::query::Seeking::new(gst::Format::Time);
-            element.query(&mut query) && query.result().0
-        })
-    }
-
-    fn seek(branch: &Branch, start: Duration, end: Option<Duration>) -> Result<(), PipelineError> {
-        if start.is_zero() && end.is_none() {
-            return Ok(());
-        }
-        branch
-            .source
-            .seek(
-                1.0,
-                gst::SeekFlags::FLUSH | gst::SeekFlags::ACCURATE,
-                gst::SeekType::Set,
-                gst::ClockTime::from_nseconds(start.as_nanos() as u64),
-                end.map_or(gst::SeekType::None, |_| gst::SeekType::Set),
-                end.map(|end| gst::ClockTime::from_nseconds(end.as_nanos() as u64)),
-            )
-            .map_err(|error| PipelineError::Pipeline(error.to_string()))
-    }
-
-    fn fade(volume: &gst::Element, start: (Duration, f64), end: (Duration, f64)) -> Result<(), PipelineError> {
-        let source = gst_controller::InterpolationControlSource::new();
-        source.set_mode(gst_controller::InterpolationMode::Linear);
-        source.set(gst::ClockTime::from_nseconds(start.0.as_nanos() as u64), start.1);
-        source.set(gst::ClockTime::from_nseconds(end.0.as_nanos() as u64), end.1);
-        let binding = gst_controller::DirectControlBinding::new(volume, "volume", &source);
-        volume
-            .add_control_binding(&binding)
-            .map_err(|error| PipelineError::Pipeline(error.to_string()))
-    }
-
-    fn set_offset(branch: &Branch, offset: Duration) {
-        branch.mixer_pad.set_offset(offset.as_nanos().min(i64::MAX as u128) as i64);
-    }
 }
 
 #[async_trait]
@@ -254,16 +105,26 @@ impl PlaybackPipeline for GStreamerPipeline {
             self.pipeline.send_event(gst::event::FlushStart::new());
             self.pipeline.send_event(gst::event::FlushStop::new(true));
         }
-        self.clear_branches();
+        {
+            let mut branches = self.branches.lock().unwrap_or_else(|error| error.into_inner());
+            branch::clear(&self.pipeline, &self.mixer, &mut branches);
+        }
 
-        let current = self.attach_track(&plan.current, plan.generation, 1.0)?;
+        let current = branch::attach(
+            &self.pipeline,
+            &self.mixer,
+            self.events.clone(),
+            &plan.current,
+            plan.generation,
+            1.0,
+        )?;
         self.branches.lock().unwrap_or_else(|error| error.into_inner()).push(current);
         self.set_state(PipelineState::Paused)?;
-        let current_duration = self.wait_duration(0).await;
+        let current_duration = branch::wait_duration(&self.branches, 0).await;
 
         let mut scheduled_next = None;
         if let (Some(next), Some(_)) = (plan.next.as_ref(), current_duration) {
-            let next_branch = self.attach_track(next, plan.generation, 0.0)?;
+            let next_branch = branch::attach(&self.pipeline, &self.mixer, self.events.clone(), next, plan.generation, 0.0)?;
             next_branch
                 .source
                 .state(gst::ClockTime::from_seconds(5))
@@ -273,58 +134,19 @@ impl PlaybackPipeline for GStreamerPipeline {
             scheduled_next = Some(next.key.clone());
         }
         let next_duration = if scheduled_next.is_some() {
-            self.wait_duration(1).await
+            branch::wait_duration(&self.branches, 1).await
         } else {
             None
         };
         let (current_seekable, next_seekable) = {
             let branches = self.branches.lock().unwrap_or_else(|error| error.into_inner());
-            (Self::seekable(&branches[0]), branches.get(1).is_some_and(Self::seekable))
+            (branch::seekable(&branches[0]), branches.get(1).is_some_and(branch::seekable))
         };
         let transition = resolve_transition(plan.transition, current_duration, next_duration, current_seekable, next_seekable);
 
         let handover_at = {
             let branches = self.branches.lock().unwrap_or_else(|error| error.into_inner());
-            match (transition, branches.get(1), current_duration) {
-                (TransitionPlan::Cut, Some(next), Some(current_duration)) => {
-                    next.volume.set_property("volume", 1.0f64);
-                    Self::set_offset(next, current_duration);
-                    Some(gst::ClockTime::from_nseconds(current_duration.as_nanos() as u64))
-                }
-                (TransitionPlan::NaiveCrossfade { requested_fade }, Some(next), Some(current_duration)) => {
-                    let fade_start = current_duration.saturating_sub(requested_fade);
-                    Self::fade(&branches[0].volume, (fade_start, 1.0), (current_duration, 0.0))?;
-                    Self::fade(&next.volume, (Duration::ZERO, 0.0), (requested_fade, 1.0))?;
-                    Self::set_offset(next, fade_start);
-                    Some(gst::ClockTime::from_nseconds(
-                        fade_start.saturating_add(requested_fade / 2).as_nanos() as u64,
-                    ))
-                }
-                (
-                    TransitionPlan::AutoCueCrossfade {
-                        current_start,
-                        fade_start,
-                        current_end,
-                        next_start,
-                        duration,
-                        ..
-                    },
-                    Some(next),
-                    _,
-                ) => {
-                    Self::seek(&branches[0], current_start, Some(current_end))?;
-                    Self::seek(next, next_start, None)?;
-                    let local_fade_start = fade_start.saturating_sub(current_start);
-                    let local_current_end = current_end.saturating_sub(current_start);
-                    Self::fade(&branches[0].volume, (local_fade_start, 1.0), (local_current_end, 0.0))?;
-                    Self::fade(&next.volume, (Duration::ZERO, 0.0), (duration, 1.0))?;
-                    Self::set_offset(next, local_fade_start);
-                    Some(gst::ClockTime::from_nseconds(
-                        local_fade_start.saturating_add(duration / 2).as_nanos() as u64,
-                    ))
-                }
-                _ => None,
-            }
+            transition::apply(transition, &branches, current_duration)?
         };
 
         *self.active.lock().unwrap_or_else(|error| error.into_inner()) = Some(ActivePlan {
@@ -399,7 +221,7 @@ impl PlaybackPipeline for GStreamerPipeline {
         {
             let branches = self.branches.lock().unwrap_or_else(|error| error.into_inner());
             if let Some(current) = branches.first() {
-                Self::seek(current, Duration::from_nanos(position.nseconds()), None)?;
+                branch::seek(current, Duration::from_nanos(position.nseconds()), None)?;
             }
         }
 
@@ -436,71 +258,7 @@ impl PlaybackPipelineFactory for GStreamerPipelineFactory {
         } = graph::build_backbone(&config, self.sink_factory)?;
         let (events, receiver) = mpsc::unbounded_channel();
         let active: Arc<Mutex<Option<ActivePlan>>> = Arc::new(Mutex::new(None));
-        let handover_active = active.clone();
-        let handover_events = events.clone();
-        let clock_gate_src = clock_gate
-            .static_pad("src")
-            .ok_or_else(|| PipelineError::Pipeline("clock gate has no source pad".into()))?;
-        clock_gate_src.add_probe(gst::PadProbeType::BUFFER, move |_, info| {
-            let Some(gst::PadProbeData::Buffer(buffer)) = &info.data else {
-                return gst::PadProbeReturn::Ok;
-            };
-            let handover = {
-                let mut active = handover_active.lock().unwrap_or_else(|error| error.into_inner());
-                active.as_mut().and_then(|plan| {
-                    let due = buffer.pts().is_some_and(|pts| {
-                        let started_at = *plan.started_at.get_or_insert(pts);
-                        let elapsed = pts.saturating_sub(started_at);
-                        plan.last_elapsed = elapsed;
-                        plan.handover_at.is_some_and(|handover_at| elapsed >= handover_at)
-                    });
-                    if due && !plan.handed_over {
-                        plan.handed_over = true;
-                        plan.next.take().map(|next| {
-                            plan.current = next.clone();
-                            (plan.generation, next)
-                        })
-                    } else {
-                        None
-                    }
-                })
-            };
-            if let Some((generation, current)) = handover {
-                let _ = handover_events.send(PipelineEvent::Handover { generation, current });
-            }
-            gst::PadProbeReturn::Ok
-        });
-        let eos_active = active.clone();
-        let eos_events = events.clone();
-        clock_gate_src.add_probe(gst::PadProbeType::EVENT_DOWNSTREAM, move |_, info| {
-            if let Some(gst::PadProbeData::Event(event)) = &info.data {
-                if event.type_() == gst::EventType::Eos {
-                    if let Some(plan) = eos_active.lock().unwrap_or_else(|error| error.into_inner()).clone() {
-                        let _ = eos_events.send(PipelineEvent::CurrentEos {
-                            generation: plan.generation,
-                            current: plan.current,
-                        });
-                    }
-                }
-            }
-            gst::PadProbeReturn::Ok
-        });
-        let bus = pipeline
-            .bus()
-            .ok_or_else(|| PipelineError::Pipeline("pipeline has no bus".into()))?;
-        let bus_events = events.clone();
-        let bus_active = active.clone();
-        bus.set_sync_handler(move |_, message| {
-            if let gst::MessageView::Error(error) = message.view() {
-                if let Some(active) = bus_active.lock().unwrap_or_else(|error| error.into_inner()).as_ref() {
-                    let _ = bus_events.send(PipelineEvent::SinkDisconnected {
-                        generation: active.generation,
-                        message: error.error().to_string(),
-                    });
-                }
-            }
-            gst::BusSyncReply::Pass
-        });
+        bus::install(&pipeline, &clock_gate, active.clone(), events.clone())?;
         Ok(PipelineInstance {
             pipeline: Arc::new(GStreamerPipeline {
                 pipeline,
@@ -524,7 +282,7 @@ impl PlaybackPipelineFactory for GStreamerPipelineFactory {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::streamer::pipeline::IcecastTarget;
+    use crate::streamer::pipeline::{IcecastTarget, PipelineTrack, TransitionPlan};
 
     fn config() -> PipelineConfig {
         PipelineConfig {
