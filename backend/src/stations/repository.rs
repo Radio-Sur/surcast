@@ -19,6 +19,27 @@ pub async fn find_station_by_id(db: &PgPool, id: Uuid) -> Result<Option<Station>
         .db_error("failed to find station")
 }
 
+pub struct PlaybackSettings {
+    pub transition_mode: String,
+    pub default_fade_ms: i32,
+    pub autocue_fade_max_ms: i32,
+}
+
+pub async fn find_playback_settings(db: &PgPool, station_id: Uuid) -> Result<Option<PlaybackSettings>, AppError> {
+    sqlx::query_as::<_, (String, i32, i32)>("SELECT transition_mode, default_fade_ms, autocue_fade_max_ms FROM stations WHERE id = $1")
+        .bind(station_id)
+        .fetch_optional(db)
+        .await
+        .db_error("failed to find station playback settings")
+        .map(|settings| {
+            settings.map(|(transition_mode, default_fade_ms, autocue_fade_max_ms)| PlaybackSettings {
+                transition_mode,
+                default_fade_ms,
+                autocue_fade_max_ms,
+            })
+        })
+}
+
 pub struct CreateStationParams {
     pub id: Uuid,
     pub name: String,

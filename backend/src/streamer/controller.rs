@@ -7,15 +7,16 @@ use sqlx::PgPool;
 use tokio::sync::mpsc;
 
 use super::pipeline::{
-    IcecastTarget, PairPlan, PipelineConfig, PipelineError, PipelineEvent, PipelineSnapshot, PipelineState, PipelineTrack,
-    PlaybackPipeline, PlaybackPipelineFactory, TrackKey, TransitionConfig, TransitionMode,
+    IcecastTarget, PairPlan, PipelineError, PipelineEvent, PipelineSnapshot, PipelineState, PipelineTrack, PlaybackPipeline,
+    PlaybackPipelineFactory, StationPlaybackConfig, TrackKey,
 };
 use super::{QueueManager, SongInfo, StatusEvent};
+use crate::stations::repository;
 
 pub(crate) struct StationController {
     queue: Arc<QueueManager>,
-    db: PgPool,
     station_id: uuid::Uuid,
+    playback: StationPlaybackConfig,
     pipeline: Arc<dyn PlaybackPipeline>,
     target: IcecastTarget,
     generation: AtomicU64,
@@ -28,24 +29,29 @@ impl StationController {
         prebuffer_bytes: i32,
         factory: Arc<dyn PlaybackPipelineFactory>,
     ) -> Result<(Self, mpsc::UnboundedReceiver<PipelineEvent>), PipelineError> {
+        let station_id = queue.station_id();
+        let settings = repository::find_playback_settings(&db, station_id)
+            .await
+            .map_err(|error| PipelineError::Pipeline(error.to_string()))?;
+        let playback = match settings {
+            Some(settings) => StationPlaybackConfig::from_persisted(
+                &settings.transition_mode,
+                settings.default_fade_ms,
+                settings.autocue_fade_max_ms,
+                prebuffer_bytes,
+            )?,
+            None => StationPlaybackConfig::from_persisted("off", 0, 0, prebuffer_bytes)?,
+        };
         let (endpoint, password) = crate::icecast::models::get_connection_config(&db)
             .await
             .map_err(|error| PipelineError::Pipeline(error.to_string()))?;
         let target = IcecastTarget::parse(&endpoint, password, mount, mount.trim_matches('/').to_owned())?;
-        let instance = factory
-            .create(PipelineConfig {
-                target: target.clone(),
-                prebuffer_bytes: prebuffer_bytes.max(0) as usize,
-                sample_rate: 44_100,
-                channels: 2,
-                bitrate_kbps: 128,
-            })
-            .await?;
+        let instance = factory.create(playback.pipeline_config(target.clone())).await?;
         Ok((
             Self {
-                station_id: queue.station_id(),
+                station_id,
                 queue,
-                db,
+                playback,
                 pipeline: instance.pipeline,
                 target,
                 generation: AtomicU64::new(0),
@@ -120,25 +126,9 @@ impl StationController {
             return self.pipeline.stop().await;
         };
         let next = self.queue.peek_next_song();
-        let (mode, fade_ms, autocue_cap_ms) = sqlx::query_as::<_, (String, i32, i32)>(
-            "SELECT transition_mode, default_fade_ms, autocue_fade_max_ms FROM stations WHERE id = $1",
-        )
-        .bind(self.station_id)
-        .fetch_optional(&self.db)
-        .await
-        .map_err(|error| PipelineError::Pipeline(error.to_string()))?
-        .unwrap_or_else(|| ("off".into(), 0, 0));
         let current_track = Self::track(current);
         let next_track = next.map(Self::track);
-        let transition = super::pipeline::transition_plan(
-            TransitionConfig {
-                mode: TransitionMode::parse(&mode).unwrap_or(TransitionMode::Off),
-                requested_fade: Duration::from_millis(fade_ms.max(0) as u64),
-                autocue_cap: Duration::from_millis(autocue_cap_ms.max(0) as u64),
-            },
-            &current_track,
-            next_track.as_ref(),
-        );
+        let transition = super::pipeline::transition_plan(self.playback.transition, &current_track, next_track.as_ref());
         self.pipeline
             .replace(PairPlan {
                 generation: self.generation.fetch_add(1, Ordering::AcqRel) + 1,
@@ -328,8 +318,8 @@ mod tests {
         });
         let controller = Arc::new(StationController {
             queue,
-            db,
             station_id,
+            playback: StationPlaybackConfig::from_persisted("off", 0, 0, 0).unwrap(),
             pipeline: pipeline.clone(),
             target: IcecastTarget::parse("localhost:8000", "secret".into(), "test", "test".into()).unwrap(),
             generation: AtomicU64::new(1),
@@ -384,8 +374,8 @@ mod tests {
         });
         let controller = Arc::new(StationController {
             queue,
-            db,
             station_id,
+            playback: StationPlaybackConfig::from_persisted("off", 0, 0, 0).unwrap(),
             pipeline: pipeline.clone(),
             target: IcecastTarget::parse("localhost:8000", "secret".into(), "test", "test".into()).unwrap(),
             generation: AtomicU64::new(1),

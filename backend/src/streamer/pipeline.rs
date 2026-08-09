@@ -39,6 +39,14 @@ impl TransitionMode {
             _ => None,
         }
     }
+
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Crossfade => "crossfade",
+            Self::AutoCue => "autocue",
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -46,6 +54,42 @@ pub(crate) struct TransitionConfig {
     pub mode: TransitionMode,
     pub requested_fade: Duration,
     pub autocue_cap: Duration,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct StationPlaybackConfig {
+    pub transition: TransitionConfig,
+    prebuffer_bytes: usize,
+}
+
+impl StationPlaybackConfig {
+    pub(crate) fn from_persisted(
+        transition_mode: &str,
+        default_fade_ms: i32,
+        autocue_fade_max_ms: i32,
+        prebuffer_bytes: i32,
+    ) -> Result<Self, PipelineError> {
+        let mode =
+            TransitionMode::parse(transition_mode).ok_or_else(|| PipelineError::InvalidTransitionMode(transition_mode.to_owned()))?;
+        Ok(Self {
+            transition: TransitionConfig {
+                mode,
+                requested_fade: Duration::from_millis(default_fade_ms.max(0) as u64),
+                autocue_cap: Duration::from_millis(autocue_fade_max_ms.max(0) as u64),
+            },
+            prebuffer_bytes: prebuffer_bytes.max(0) as usize,
+        })
+    }
+
+    pub(crate) fn pipeline_config(&self, target: IcecastTarget) -> PipelineConfig {
+        PipelineConfig {
+            target,
+            prebuffer_bytes: self.prebuffer_bytes,
+            sample_rate: 44_100,
+            channels: 2,
+            bitrate_kbps: 128,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -170,6 +214,7 @@ pub(crate) enum PipelineError {
     MissingElement(&'static str),
     StalePlan,
     InvalidTarget(String),
+    InvalidTransitionMode(String),
     Initialization(String),
     Pipeline(String),
 }
@@ -180,6 +225,7 @@ impl fmt::Display for PipelineError {
             Self::MissingElement(element) => write!(f, "required GStreamer element is unavailable: {element}"),
             Self::StalePlan => write!(f, "stale playback plan"),
             Self::InvalidTarget(message) => write!(f, "invalid Icecast target: {message}"),
+            Self::InvalidTransitionMode(mode) => write!(f, "invalid persisted transition mode: {mode}"),
             Self::Initialization(message) => write!(f, "GStreamer initialization failed: {message}"),
             Self::Pipeline(message) => write!(f, "GStreamer pipeline failure: {message}"),
         }
@@ -337,6 +383,14 @@ mod tests {
         assert_eq!(TransitionMode::parse("crossfade"), Some(TransitionMode::Crossfade));
         assert_eq!(TransitionMode::parse("autocue"), Some(TransitionMode::AutoCue));
         assert_eq!(TransitionMode::parse("unknown"), None);
+    }
+
+    #[test]
+    fn playback_config_rejects_unknown_persisted_transition_modes() {
+        assert!(matches!(
+            StationPlaybackConfig::from_persisted("unknown", 3_000, 5_000, 16_384),
+            Err(PipelineError::InvalidTransitionMode(mode)) if mode == "unknown"
+        ));
     }
 
     #[test]

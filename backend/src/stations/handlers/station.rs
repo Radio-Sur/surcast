@@ -9,22 +9,17 @@ use crate::auth::middleware::AuthUser;
 use crate::errors::AppError;
 use crate::stations::models::*;
 use crate::stations::repository;
+use crate::streamer::pipeline::TransitionMode;
 
 use super::stream::resolve_station_id;
 
-/// Valid transition modes. Anything else is rejected.
-const TRANSITION_MODES: [&str; 3] = ["crossfade", "autocue", "off"];
-
-fn normalize_transition_mode(value: Option<String>) -> Result<String, AppError> {
-    let mode = value.unwrap_or_else(|| "crossfade".to_string());
-    if TRANSITION_MODES.contains(&mode.as_str()) {
-        Ok(mode)
-    } else {
-        Err(AppError::BadRequest(format!(
-            "Invalid transition_mode '{mode}', expected one of: {}",
-            TRANSITION_MODES.join(", ")
-        )))
-    }
+fn normalize_transition_mode(value: Option<String>) -> Result<TransitionMode, AppError> {
+    let mode = value.unwrap_or_else(|| TransitionMode::Crossfade.as_str().to_owned());
+    TransitionMode::parse(&mode).ok_or_else(|| {
+        AppError::BadRequest(format!(
+            "Invalid transition_mode '{mode}', expected one of: crossfade, autocue, off"
+        ))
+    })
 }
 
 pub async fn list_stations(State(db): State<PgPool>) -> Result<Json<Vec<StationResponse>>, AppError> {
@@ -67,7 +62,7 @@ pub async fn create_station(
             prebuffer_bytes,
             played_limit,
             default_fade_ms,
-            transition_mode,
+            transition_mode: transition_mode.as_str().to_owned(),
             autocue_fade_max_ms,
             created_by: auth_user.id,
         },
@@ -114,7 +109,7 @@ pub async fn update_station(
             prebuffer_bytes,
             played_limit,
             default_fade_ms,
-            transition_mode,
+            transition_mode: transition_mode.as_str().to_owned(),
             autocue_fade_max_ms,
         },
     )
@@ -163,4 +158,18 @@ pub async fn get_station_playlist_m3u(
     playlist.push_str(&format!("http://{}/{}\n", addr, util::url_encode(&mount_name)));
 
     Ok((StatusCode::OK, [("Content-Type", "audio/x-mpegurl")], playlist))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn transition_mode_is_validated_before_persistence() {
+        assert_eq!(normalize_transition_mode(Some("autocue".to_owned())).unwrap().as_str(), "autocue");
+        assert!(matches!(
+            normalize_transition_mode(Some("unsupported".to_owned())),
+            Err(AppError::BadRequest(message)) if message.contains("transition_mode")
+        ));
+    }
 }
