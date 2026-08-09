@@ -281,8 +281,9 @@ pub async fn insert_song_record(db: &PgPool, params: &InsertSongParams) -> Resul
 
 pub async fn update_song_analysis(db: &PgPool, song_id: Uuid, analysis: &crate::songs::analysis::SongAnalysis) -> Result<(), AppError> {
     sqlx::query(
-        "UPDATE songs SET cue_in = $1, cue_out = $2, cross_start_next = $3, loudness = $4, loudness_range = $5, true_peak = $6, true_peak_db = $7, amplify = $8, sustained_ending = $9, longtail = $10, analyzed_at = NOW() WHERE id = $11",
+        "UPDATE songs SET duration = COALESCE($1, duration), cue_in = $2, cue_out = $3, cross_start_next = $4, loudness = $5, loudness_range = $6, true_peak = $7, true_peak_db = $8, amplify = $9, sustained_ending = $10, longtail = $11, analyzed_at = NOW() WHERE id = $12",
     )
+    .bind(analysis.duration)
     .bind(analysis.cue_in)
     .bind(analysis.cue_out)
     .bind(analysis.cross_start_next)

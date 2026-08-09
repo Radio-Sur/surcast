@@ -225,16 +225,8 @@ pub async fn process_song_upload(
         String::new()
     };
 
-    let duration = if id3.duration > 0 {
-        id3.duration
-    } else if let Some(probe) = probe_duration(&audio_full_path) {
-        probe
-    } else {
-        ((file_size as f64) / 16000.0).round() as i32
-    }
-    .max(1);
-
     let mut analysis = analyze_audio(&audio_full_path).await;
+    let duration = analysis.duration.unwrap_or(id3.duration).max(1);
     // Fallback: play the whole file.
     if analysis.analyzed_at.is_none() {
         analysis.cue_out = duration as f64;
