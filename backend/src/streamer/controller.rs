@@ -14,6 +14,8 @@ use super::{QueueManager, SongInfo, StatusEvent};
 
 pub(crate) struct StationController {
     queue: Arc<QueueManager>,
+    db: PgPool,
+    station_id: uuid::Uuid,
     pipeline: Arc<dyn PlaybackPipeline>,
     target: IcecastTarget,
     generation: AtomicU64,
@@ -41,7 +43,9 @@ impl StationController {
             .await?;
         Ok((
             Self {
+                station_id: queue.station_id(),
                 queue,
+                db,
                 pipeline: instance.pipeline,
                 target,
                 generation: AtomicU64::new(0),
@@ -59,11 +63,11 @@ impl StationController {
                         track,
                         message,
                     } => {
-                        tracing::warn!(station_id = %self.queue.station_id, generation, %message, "GStreamer decoder exposed no usable audio branch");
+                        tracing::warn!(station_id = %self.station_id, generation, %message, "GStreamer decoder exposed no usable audio branch");
                         let current = self.queue.current_song_info().map(|song| song.queue_item_id);
                         if generation == self.generation.load(Ordering::Acquire) && current == Some(track.queue_item_id) {
                             if let Err(error) = self.skip().await {
-                                tracing::error!(station_id = %self.queue.station_id, error = %error, "failed to advance undecodable current track");
+                                tracing::error!(station_id = %self.station_id, error = %error, "failed to advance undecodable current track");
                             }
                         }
                     }
@@ -74,7 +78,7 @@ impl StationController {
                         let current = self.queue.current_song_info().map(|song| song.queue_item_id);
                         if generation == self.generation.load(Ordering::Acquire) && current == Some(track.queue_item_id) {
                             if let Err(error) = self.skip().await {
-                                tracing::error!(station_id = %self.queue.station_id, error = %error, "failed to advance completed current track");
+                                tracing::error!(station_id = %self.station_id, error = %error, "failed to advance completed current track");
                             }
                         }
                     }
@@ -89,7 +93,7 @@ impl StationController {
                         }
                     }
                     PipelineEvent::SinkDisconnected { generation, message } => {
-                        tracing::error!(station_id = %self.queue.station_id, generation, %message, "GStreamer output disconnected");
+                        tracing::error!(station_id = %self.station_id, generation, %message, "GStreamer output disconnected");
                     }
                 }
             }
@@ -119,8 +123,8 @@ impl StationController {
         let (mode, fade_ms, autocue_cap_ms) = sqlx::query_as::<_, (String, i32, i32)>(
             "SELECT transition_mode, default_fade_ms, autocue_fade_max_ms FROM stations WHERE id = $1",
         )
-        .bind(self.queue.station_id)
-        .fetch_optional(&self.queue.db)
+        .bind(self.station_id)
+        .fetch_optional(&self.db)
         .await
         .map_err(|error| PipelineError::Pipeline(error.to_string()))?
         .unwrap_or_else(|| ("off".into(), 0, 0));
@@ -305,11 +309,13 @@ mod tests {
         };
         let (status_tx, _) = broadcast::channel(1);
         let (queue_tx, _) = broadcast::channel(1);
+        let db = sqlx::postgres::PgPoolOptions::new()
+            .connect_lazy("postgres://surcast:surcast@localhost:5433/surcast")
+            .unwrap();
+        let station_id = Uuid::new_v4();
         let queue = Arc::new(QueueManager::new(
-            sqlx::postgres::PgPoolOptions::new()
-                .connect_lazy("postgres://surcast:surcast@localhost:5433/surcast")
-                .unwrap(),
-            Uuid::new_v4(),
+            db.clone(),
+            station_id,
             String::new(),
             vec![song.clone()],
             0,
@@ -322,6 +328,8 @@ mod tests {
         });
         let controller = Arc::new(StationController {
             queue,
+            db,
+            station_id,
             pipeline: pipeline.clone(),
             target: IcecastTarget::parse("localhost:8000", "secret".into(), "test", "test".into()).unwrap(),
             generation: AtomicU64::new(1),
@@ -357,11 +365,13 @@ mod tests {
         };
         let (status_tx, _) = broadcast::channel(1);
         let (queue_tx, _) = broadcast::channel(1);
+        let db = sqlx::postgres::PgPoolOptions::new()
+            .connect_lazy("postgres://surcast:surcast@localhost:5433/surcast")
+            .unwrap();
+        let station_id = Uuid::new_v4();
         let queue = Arc::new(QueueManager::new(
-            sqlx::postgres::PgPoolOptions::new()
-                .connect_lazy("postgres://surcast:surcast@localhost:5433/surcast")
-                .unwrap(),
-            Uuid::new_v4(),
+            db.clone(),
+            station_id,
             String::new(),
             vec![song.clone()],
             0,
@@ -374,6 +384,8 @@ mod tests {
         });
         let controller = Arc::new(StationController {
             queue,
+            db,
+            station_id,
             pipeline: pipeline.clone(),
             target: IcecastTarget::parse("localhost:8000", "secret".into(), "test", "test".into()).unwrap(),
             generation: AtomicU64::new(1),

@@ -2,6 +2,8 @@ pub mod controller;
 pub mod gstreamer;
 pub mod pipeline;
 pub mod queue_manager;
+pub mod queue_repository;
+pub mod queue_state;
 
 use serde::Serialize;
 use sqlx::PgPool;
