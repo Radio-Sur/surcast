@@ -38,7 +38,7 @@ async fn test_create_station_returns_201() {
     let body = resp.json::<serde_json::Value>();
     assert_eq!(body["name"].as_str().unwrap(), "Test Station");
     assert_eq!(body["description"].as_str().unwrap(), "A test");
-    assert!(body["id"].as_str().unwrap().len() > 0);
+    assert!(!body["id"].as_str().unwrap().is_empty());
 }
 
 #[tokio::test]

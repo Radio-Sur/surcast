@@ -56,7 +56,7 @@ async fn test_e2e_full_flow() {
     let resp = server.get("/api/stations").add_header("Authorization", &auth(&token)).await;
     let status = resp.status_code();
     assert!(status == 200 || status == 201 || status == 204, "expected 200 or 201, got {status}");
-    assert!(resp.json::<Vec<Value>>().len() >= 1);
+    assert!(!resp.json::<Vec<Value>>().is_empty());
 
     // 5. Get station
     let resp = server
@@ -123,7 +123,7 @@ async fn test_e2e_full_flow() {
     let status = resp.status_code();
     assert!(status == 200 || status == 201 || status == 204, "expected 200 or 201, got {status}");
     let body = resp.json::<Value>();
-    assert!(body["songs"].as_array().unwrap().len() >= 1);
+    assert!(!body["songs"].as_array().unwrap().is_empty());
 
     // 11. Add song to station queue
     let resp = server

@@ -37,7 +37,7 @@ async fn test_create_api_key_returns_201() {
     let body = resp.json::<serde_json::Value>();
     assert_eq!(body["name"].as_str().unwrap(), "Test Key");
     assert!(body["key"].as_str().unwrap().starts_with("sur_"));
-    assert!(body["id"].as_str().unwrap().len() > 0);
+    assert!(!body["id"].as_str().unwrap().is_empty());
 }
 
 #[tokio::test]

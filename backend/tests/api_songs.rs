@@ -71,7 +71,7 @@ async fn test_upload_song_multipart_returns_201() {
     let body = resp.json::<serde_json::Value>();
     assert_eq!(body["title"].as_str().unwrap(), "Uploaded Song");
     assert_eq!(body["artist"].as_str().unwrap(), "Uploaded Artist");
-    assert!(body["id"].as_str().unwrap().len() > 0);
+    assert!(!body["id"].as_str().unwrap().is_empty());
 }
 
 #[tokio::test]

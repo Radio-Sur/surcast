@@ -43,6 +43,18 @@ pub(crate) fn ext_from_filename(name: &str) -> &str {
     name.rsplit('.').next().unwrap_or("bin")
 }
 
+pub(crate) async fn save_uploaded_file(upload_dir: &str, bytes: &[u8], ext: &str) -> Result<String, AppError> {
+    let audio_dir = format!("{upload_dir}/audio");
+    tokio::fs::create_dir_all(&audio_dir)
+        .await
+        .db_error("failed to prepare upload directory")?;
+
+    let filename = format!("{}.{ext}", Uuid::new_v4());
+    let path = format!("{audio_dir}/{filename}");
+    tokio::fs::write(&path, bytes).await.db_error("failed to save uploaded file")?;
+
+    Ok(filename)
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -166,17 +178,4 @@ mod tests {
         let content = tokio::fs::read(&full_path).await.unwrap();
         assert_eq!(content, b"fake content");
     }
-}
-
-pub(crate) async fn save_uploaded_file(upload_dir: &str, bytes: &[u8], ext: &str) -> Result<String, AppError> {
-    let audio_dir = format!("{upload_dir}/audio");
-    tokio::fs::create_dir_all(&audio_dir)
-        .await
-        .db_error("failed to prepare upload directory")?;
-
-    let filename = format!("{}.{ext}", Uuid::new_v4());
-    let path = format!("{audio_dir}/{filename}");
-    tokio::fs::write(&path, bytes).await.db_error("failed to save uploaded file")?;
-
-    Ok(filename)
 }

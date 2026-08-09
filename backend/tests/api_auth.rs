@@ -88,8 +88,8 @@ async fn test_login_correct_returns_tokens() {
         .await;
     assert_eq!(resp.status_code(), 200);
     let body = resp.json::<serde_json::Value>();
-    assert!(body["access_token"].as_str().unwrap().len() > 0);
-    assert!(body["refresh_token"].as_str().unwrap().len() > 0);
+    assert!(!body["access_token"].as_str().unwrap().is_empty());
+    assert!(!body["refresh_token"].as_str().unwrap().is_empty());
     assert_eq!(body["user"]["username"].as_str().unwrap(), "admin");
 }
 
@@ -191,8 +191,8 @@ async fn test_refresh_with_valid_token() {
         .await;
     assert_eq!(resp.status_code(), 200);
     let body = resp.json::<serde_json::Value>();
-    assert!(body["access_token"].as_str().unwrap().len() > 0);
-    assert!(body["refresh_token"].as_str().unwrap().len() > 0);
+    assert!(!body["access_token"].as_str().unwrap().is_empty());
+    assert!(!body["refresh_token"].as_str().unwrap().is_empty());
 }
 
 #[tokio::test]

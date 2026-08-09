@@ -405,9 +405,7 @@ mod tests {
     async fn test_port_is_listening_returns_true_for_open_port() {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
-        drop(listener);
-        let result = port_is_listening(port).await;
-        assert!(result == true || result == false);
+        assert!(port_is_listening(port).await);
     }
 
     #[tokio::test]
