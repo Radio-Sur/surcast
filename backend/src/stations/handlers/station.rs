@@ -5,6 +5,7 @@ use axum::Json;
 use sqlx::PgPool;
 use uuid::Uuid;
 
+use crate::api::StreamersMap;
 use crate::auth::middleware::AuthUser;
 use crate::errors::AppError;
 use crate::stations::models::*;
@@ -80,6 +81,7 @@ pub async fn create_station(
 pub async fn update_station(
     Extension(_auth_user): Extension<AuthUser>,
     State(db): State<PgPool>,
+    State(streamers): State<StreamersMap>,
     Path(id): Path<String>,
     Json(req): Json<UpdateStationRequest>,
 ) -> Result<Json<StationResponse>, AppError> {
@@ -119,6 +121,7 @@ pub async fn update_station(
         tracing::error!("Update succeeded but fetch returned None");
         AppError::Internal("".into())
     })?;
+    super::stream::sync_streamer_playback_config(&streamers, &updated).await?;
 
     Ok(Json(updated.into()))
 }

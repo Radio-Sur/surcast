@@ -4,6 +4,7 @@ pub mod pipeline;
 pub mod queue_manager;
 pub mod queue_repository;
 pub mod queue_state;
+pub mod runtime;
 
 use serde::Serialize;
 use sqlx::PgPool;
@@ -12,8 +13,9 @@ use tokio::sync::broadcast;
 use uuid::Uuid;
 
 use self::controller::StationController;
-use self::pipeline::{PipelineError, PlaybackPipelineFactory};
+use self::pipeline::{PipelineError, PlaybackPipelineFactory, StationPlaybackConfig};
 use self::queue_manager::QueueManager;
+use self::runtime::StationRuntime;
 
 #[derive(Clone, Serialize, Debug)]
 pub struct SongInfo {
@@ -55,7 +57,7 @@ pub enum StatusEvent {
 }
 
 pub struct StationStreamer {
-    controller: Arc<StationController>,
+    runtime: StationRuntime,
     queue: Arc<QueueManager>,
 }
 
@@ -90,36 +92,61 @@ impl StationStreamer {
             queue_tx,
         ));
         let (controller, events) = StationController::new(queue.clone(), db, mount, prebuffer_bytes, factory).await?;
-        let controller = Arc::new(controller);
-        controller.clone().start_events(events);
-        Ok(Arc::new(Self { controller, queue }))
+        let runtime = StationRuntime::spawn(controller, events);
+        Ok(Arc::new(Self { runtime, queue }))
     }
 
     pub(crate) async fn skip(&self) -> Result<(), PipelineError> {
-        self.controller.skip().await
+        self.runtime.skip().await
     }
     pub(crate) async fn play(&self) -> Result<(), PipelineError> {
-        self.controller.play().await
+        self.runtime.play().await
     }
     pub(crate) async fn pause(&self) -> Result<(), PipelineError> {
-        self.controller.pause().await
+        self.runtime.pause().await
     }
     pub(crate) async fn stop(&self) -> Result<(), PipelineError> {
-        self.controller.stop().await
+        self.runtime.stop().await
     }
 
     pub(crate) async fn reconnect(&self) -> Result<(), PipelineError> {
-        self.controller.reconnect().await
+        self.runtime.reconnect().await
     }
 
     pub async fn shutdown(&self) {
         let _ = self.stop().await;
     }
     pub(crate) async fn status(&self) -> StatusEvent {
-        self.controller.status().await
+        self.runtime.status().await.unwrap_or_else(|_| {
+            let song_index = self.queue.current_song_index();
+            let song = self.queue.song_info(song_index);
+            StatusEvent::State {
+                playing: false,
+                song_index,
+                total: self.queue.song_count(),
+                elapsed: 0,
+                title: song.as_ref().map_or_else(String::new, |song| song.title.clone()),
+                artist: song.as_ref().map_or_else(String::new, |song| song.artist.clone()),
+                duration: song.map_or(0, |song| song.duration),
+            }
+        })
     }
     pub(crate) async fn status_json(&self) -> serde_json::Value {
-        self.controller.status_json().await
+        match self.status().await {
+            StatusEvent::State {
+                playing,
+                song_index,
+                total,
+                elapsed,
+                title,
+                artist,
+                duration,
+            } => serde_json::json!({
+                "playing": playing, "song_index": song_index, "total": total, "elapsed": elapsed,
+                "title": title, "artist": artist, "duration": duration,
+            }),
+            StatusEvent::SongChange { .. } => unreachable!(),
+        }
     }
     pub(crate) fn current_song_index(&self) -> usize {
         self.queue.current_song_index()
@@ -131,12 +158,16 @@ impl StationStreamer {
         self.queue.subscribe_queue()
     }
     pub(crate) async fn push_queue_update(&self) {
-        self.queue.push_queue_update().await
+        self.runtime.push_queue_update().await;
     }
     pub(crate) async fn trim_played_items(&self) {
-        self.queue.trim_played_items().await
+        self.runtime.trim_played_items().await;
     }
     pub(crate) async fn reload_songs(&self, songs: Vec<SongInfo>) -> Result<(), PipelineError> {
-        self.controller.reload(songs).await
+        self.runtime.reload(songs).await
+    }
+
+    pub(crate) async fn update_config(&self, config: StationPlaybackConfig) -> Result<(), PipelineError> {
+        self.runtime.update_config(config).await
     }
 }

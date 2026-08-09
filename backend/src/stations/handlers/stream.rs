@@ -7,8 +7,10 @@ use uuid::Uuid;
 use crate::api::StreamersMap;
 use crate::config::Config;
 use crate::errors::AppError;
+use crate::stations::models::Station;
 use crate::stations::repository;
 use crate::streamer::gstreamer::GStreamerPipelineFactory;
+use crate::streamer::pipeline::StationPlaybackConfig;
 use crate::streamer::{SongInfo, StationStreamer};
 
 pub(crate) async fn resolve_station_id(db: &PgPool, id_or_slug: &str) -> Result<Uuid, AppError> {
@@ -106,6 +108,31 @@ pub(crate) async fn sync_streamer_songs(db: &PgPool, streamers: &StreamersMap, u
         streamer.push_queue_update().await;
     }
     Ok(())
+}
+
+pub(crate) async fn sync_streamer_playback_config(streamers: &StreamersMap, station: &Station) -> Result<(), AppError> {
+    let streamer = {
+        let map = streamers.lock().unwrap_or_else(|error| error.into_inner());
+        map.get(&station.id).cloned()
+    };
+    let Some(streamer) = streamer else {
+        return Ok(());
+    };
+
+    let config = StationPlaybackConfig::from_persisted(
+        &station.transition_mode,
+        station.default_fade_ms,
+        station.autocue_fade_max_ms,
+        station.prebuffer_bytes,
+    )
+    .map_err(|error| {
+        tracing::error!(station_id = %station.id, %error, "invalid persisted playback configuration");
+        AppError::Internal("Stream configuration failed".into())
+    })?;
+    streamer.update_config(config).await.map_err(|error| {
+        tracing::error!(station_id = %station.id, %error, "stream configuration update failed");
+        AppError::Internal("Stream configuration failed".into())
+    })
 }
 
 pub(crate) async fn get_or_create_streamer_for_station(

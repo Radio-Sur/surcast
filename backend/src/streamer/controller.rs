@@ -60,50 +60,46 @@ impl StationController {
         ))
     }
 
-    pub(crate) fn start_events(self: Arc<Self>, mut events: mpsc::UnboundedReceiver<PipelineEvent>) {
-        tokio::spawn(async move {
-            while let Some(event) = events.recv().await {
-                match event {
-                    PipelineEvent::DecodeFailed {
-                        generation,
-                        track,
-                        message,
-                    } => {
-                        tracing::warn!(station_id = %self.station_id, generation, %message, "GStreamer decoder exposed no usable audio branch");
-                        let current = self.queue.current_song_info().map(|song| song.queue_item_id);
-                        if generation == self.generation.load(Ordering::Acquire) && current == Some(track.queue_item_id) {
-                            if let Err(error) = self.skip().await {
-                                tracing::error!(station_id = %self.station_id, error = %error, "failed to advance undecodable current track");
-                            }
-                        }
-                    }
-                    PipelineEvent::CurrentEos {
-                        generation,
-                        current: track,
-                    } => {
-                        let current = self.queue.current_song_info().map(|song| song.queue_item_id);
-                        if generation == self.generation.load(Ordering::Acquire) && current == Some(track.queue_item_id) {
-                            if let Err(error) = self.skip().await {
-                                tracing::error!(station_id = %self.station_id, error = %error, "failed to advance completed current track");
-                            }
-                        }
-                    }
-                    PipelineEvent::Handover {
-                        generation,
-                        current: track,
-                    } => {
-                        let current = self.queue.current_song_info().map(|song| song.queue_item_id);
-                        if generation == self.generation.load(Ordering::Acquire) && current != Some(track.queue_item_id) {
-                            self.queue.commit_current(&track).await;
-                            self.publish_song_change();
-                        }
-                    }
-                    PipelineEvent::SinkDisconnected { generation, message } => {
-                        tracing::error!(station_id = %self.station_id, generation, %message, "GStreamer output disconnected");
+    pub(crate) async fn handle_event(&self, event: PipelineEvent) {
+        match event {
+            PipelineEvent::DecodeFailed {
+                generation,
+                track,
+                message,
+            } => {
+                tracing::warn!(station_id = %self.station_id, generation, %message, "GStreamer decoder exposed no usable audio branch");
+                let current = self.queue.current_song_info().map(|song| song.queue_item_id);
+                if generation == self.generation.load(Ordering::Acquire) && current == Some(track.queue_item_id) {
+                    if let Err(error) = self.skip().await {
+                        tracing::error!(station_id = %self.station_id, error = %error, "failed to advance undecodable current track");
                     }
                 }
             }
-        });
+            PipelineEvent::CurrentEos {
+                generation,
+                current: track,
+            } => {
+                let current = self.queue.current_song_info().map(|song| song.queue_item_id);
+                if generation == self.generation.load(Ordering::Acquire) && current == Some(track.queue_item_id) {
+                    if let Err(error) = self.skip().await {
+                        tracing::error!(station_id = %self.station_id, error = %error, "failed to advance completed current track");
+                    }
+                }
+            }
+            PipelineEvent::Handover {
+                generation,
+                current: track,
+            } => {
+                let current = self.queue.current_song_info().map(|song| song.queue_item_id);
+                if generation == self.generation.load(Ordering::Acquire) && current != Some(track.queue_item_id) {
+                    self.queue.commit_current(&track).await;
+                    self.publish_song_change();
+                }
+            }
+            PipelineEvent::SinkDisconnected { generation, message } => {
+                tracing::error!(station_id = %self.station_id, generation, %message, "GStreamer output disconnected");
+            }
+        }
     }
 
     fn track(song: SongInfo) -> PipelineTrack {
@@ -188,6 +184,18 @@ impl StationController {
         Ok(())
     }
 
+    pub(crate) fn update_config(&mut self, playback: StationPlaybackConfig) {
+        self.playback = playback;
+    }
+
+    pub(crate) async fn push_queue_update(&self) {
+        self.queue.push_queue_update().await;
+    }
+
+    pub(crate) async fn trim_played_items(&self) {
+        self.queue.trim_played_items().await;
+    }
+
     fn publish_song_change(&self) {
         let idx = self.queue.current_song_index();
         if let Some(song) = self.queue.song_info(idx) {
@@ -219,24 +227,6 @@ impl StationController {
             duration: song.map_or(0, |song| song.duration),
         }
     }
-
-    pub(crate) async fn status_json(&self) -> serde_json::Value {
-        match self.status().await {
-            StatusEvent::State {
-                playing,
-                song_index,
-                total,
-                elapsed,
-                title,
-                artist,
-                duration,
-            } => serde_json::json!({
-                "playing": playing, "song_index": song_index, "total": total, "elapsed": elapsed,
-                "title": title, "artist": artist, "duration": duration,
-            }),
-            StatusEvent::SongChange { .. } => unreachable!(),
-        }
-    }
 }
 
 #[cfg(test)]
@@ -247,10 +237,13 @@ mod tests {
     use tokio::sync::{broadcast, mpsc};
     use uuid::Uuid;
 
+    use crate::streamer::runtime::StationRuntime;
+
     use super::*;
 
     struct FakePipeline {
         replacements: AtomicUsize,
+        state_changes: AtomicUsize,
         stops: AtomicUsize,
     }
 
@@ -262,6 +255,7 @@ mod tests {
         }
 
         async fn set_playing(&self, _: bool) -> Result<(), PipelineError> {
+            self.state_changes.fetch_add(1, Ordering::Release);
             Ok(())
         }
 
@@ -314,27 +308,24 @@ mod tests {
         ));
         let pipeline = Arc::new(FakePipeline {
             replacements: AtomicUsize::new(0),
+            state_changes: AtomicUsize::new(0),
             stops: AtomicUsize::new(0),
         });
-        let controller = Arc::new(StationController {
+        let controller = StationController {
             queue,
             station_id,
             playback: StationPlaybackConfig::from_persisted("off", 0, 0, 0).unwrap(),
             pipeline: pipeline.clone(),
             target: IcecastTarget::parse("localhost:8000", "secret".into(), "test", "test".into()).unwrap(),
             generation: AtomicU64::new(1),
-        });
-        let (events, receiver) = mpsc::unbounded_channel();
-        controller.clone().start_events(receiver);
-        events
-            .send(PipelineEvent::DecodeFailed {
+        };
+        controller
+            .handle_event(PipelineEvent::DecodeFailed {
                 generation: 0,
                 track: StationController::track(song).key,
                 message: "stale".into(),
             })
-            .unwrap();
-
-        tokio::time::sleep(Duration::from_millis(25)).await;
+            .await;
         assert_eq!(pipeline.replacements.load(Ordering::Acquire), 0);
     }
 
@@ -370,26 +361,34 @@ mod tests {
         ));
         let pipeline = Arc::new(FakePipeline {
             replacements: AtomicUsize::new(0),
+            state_changes: AtomicUsize::new(0),
             stops: AtomicUsize::new(0),
         });
-        let controller = Arc::new(StationController {
+        let controller = StationController {
             queue,
             station_id,
             playback: StationPlaybackConfig::from_persisted("off", 0, 0, 0).unwrap(),
             pipeline: pipeline.clone(),
             target: IcecastTarget::parse("localhost:8000", "secret".into(), "test", "test".into()).unwrap(),
             generation: AtomicU64::new(1),
-        });
+        };
         let (events, receiver) = mpsc::unbounded_channel();
-        controller.clone().start_events(receiver);
+        let runtime = StationRuntime::spawn(controller, receiver);
+        runtime.pause().await.unwrap();
         events
             .send(PipelineEvent::CurrentEos {
                 generation: 1,
                 current: StationController::track(song).key,
             })
             .unwrap();
-
-        tokio::time::sleep(Duration::from_millis(25)).await;
+        tokio::time::timeout(Duration::from_millis(100), async {
+            while pipeline.stops.load(Ordering::Acquire) == 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(pipeline.state_changes.load(Ordering::Acquire), 1);
         assert_eq!(pipeline.stops.load(Ordering::Acquire), 1);
         assert_eq!(pipeline.replacements.load(Ordering::Acquire), 0);
     }
