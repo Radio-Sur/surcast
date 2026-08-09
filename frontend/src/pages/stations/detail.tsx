@@ -189,15 +189,10 @@ export function StationDetailPage() {
 
       <QueueAddDialog
         open={d.queueAddOpen}
-        librarySongs={d.librarySongsAll}
-        selectedSongIds={d.selectedSongIds}
+        librarySongs={d.librarySongsAll ?? []}
         isPending={d.addToQueue.isPending}
-        onToggleSelect={d.toggleSelectSong}
         onAdd={d.handleAddToQueue}
-        onClose={() => {
-          d.setQueueAddOpen(false);
-          d.setSelectedSongIds(new Set());
-        }}
+        onClose={() => d.setQueueAddOpen(false)}
       />
 
       <StreamConfirmDialog

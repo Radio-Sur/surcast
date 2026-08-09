@@ -1,15 +1,8 @@
-import { useQueryClient } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import { useAppConfig } from "@/hooks/use-config";
 import { useElapsedTimer } from "@/hooks/use-elapsed-timer";
 import { usePlaylists } from "@/hooks/use-playlists";
-import { useSongs } from "@/hooks/use-songs";
-import {
-  useAddStationSongs,
-  useRemoveStationSong,
-  useStationSongs,
-  useStationSongsAll,
-} from "@/hooks/use-station-library";
+import { useRemoveStationSong, useStationSongs, useStationSongsAll } from "@/hooks/use-station-library";
 import {
   useAddToQueue,
   useRemoveFromQueue,
@@ -24,7 +17,6 @@ import { useSnackbar } from "@/providers/snackbar-provider";
 
 export function useStationDetail(id: string | undefined) {
   const { showSnackbar } = useSnackbar();
-  const queryClient = useQueryClient();
   const safeId = id ?? "";
 
   const {
@@ -46,10 +38,8 @@ export function useStationDetail(id: string | undefined) {
   const librarySongTotal = librarySongsData?.total ?? 0;
   const { data: libraryAllData } = useStationSongsAll(safeId);
   const librarySongsAll = libraryAllData?.songs;
-  const { data: allSongs } = useSongs();
   const { data: playlists } = usePlaylists();
 
-  const addStationSongs = useAddStationSongs(safeId);
   const removeStationSong = useRemoveStationSong(safeId);
   const addToQueue = useAddToQueue(safeId);
   const removeFromQueue = useRemoveFromQueue(safeId);
@@ -64,7 +54,6 @@ export function useStationDetail(id: string | undefined) {
   const [tab, setTab] = useState(0);
   const [queueAddOpen, setQueueAddOpen] = useState(false);
   const [confirmAction, setConfirmAction] = useState<"pause" | "restart" | null>(null);
-  const [selectedSongIds, setSelectedSongIds] = useState<Set<string>>(new Set());
 
   const { status: streamStatus, queue: wsQueue, connected, listeners: liveListeners } = useLiveStation(station?.id);
 
@@ -105,49 +94,19 @@ export function useStationDetail(id: string | undefined) {
     return `${h}:${m}`;
   }, [queueSections]);
 
-  const songsNotInStation = useMemo(() => {
-    if (!allSongs || !librarySongsAll) return [];
-    const existing = new Set(librarySongsAll.map((s) => s.song_id));
-    return allSongs.filter((s) => !existing.has(s.id));
-  }, [allSongs, librarySongsAll]);
-
-  const toggleSelectSong = (songId: string) => {
-    setSelectedSongIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(songId)) next.delete(songId);
-      else next.add(songId);
-      return next;
-    });
-  };
-
   const handleMutationError = (err: unknown, label: string) => {
     console.error(`Failed to ${label}:`, err);
     showSnackbar(isHttpError(err).message || `Failed to ${label}`, "error");
   };
 
-  const handleAddToLibrary = async () => {
-    if (selectedSongIds.size === 0) return;
+  const handleAddToQueue = async (songIds: string[]) => {
+    if (songIds.length === 0) return;
     try {
-      await addStationSongs.mutateAsync({
-        songIds: Array.from(selectedSongIds),
-        artistNames: [],
-        albumSelectors: [],
-      });
-      setSelectedSongIds(new Set());
-      queryClient.invalidateQueries({ queryKey: ["station-songs", safeId] });
-    } catch (err) {
-      handleMutationError(err, "add songs to library");
-    }
-  };
-
-  const handleAddToQueue = async () => {
-    if (selectedSongIds.size === 0) return;
-    try {
-      await addToQueue.mutateAsync(Array.from(selectedSongIds));
+      await addToQueue.mutateAsync(songIds);
       setQueueAddOpen(false);
-      setSelectedSongIds(new Set());
     } catch (err) {
       handleMutationError(err, "add songs to queue");
+      throw err;
     }
   };
 
@@ -185,9 +144,7 @@ export function useStationDetail(id: string | undefined) {
     libraryLoading,
     libraryError,
     libraryLoadError,
-    allSongs,
     playlists,
-    addStationSongs,
     addToQueue,
     reorderQueue,
     removePlaylistFromQueue,
@@ -202,8 +159,6 @@ export function useStationDetail(id: string | undefined) {
     setQueueAddOpen,
     confirmAction,
     setConfirmAction,
-    selectedSongIds,
-    setSelectedSongIds,
     streamStatus,
     connected,
     liveListeners,
@@ -211,9 +166,6 @@ export function useStationDetail(id: string | undefined) {
     elapsed,
     queueSections,
     queueEndEstimate,
-    songsNotInStation,
-    toggleSelectSong,
-    handleAddToLibrary,
     handleAddToQueue,
     handleRemoveFromStation,
     handleRemoveFromQueue,
