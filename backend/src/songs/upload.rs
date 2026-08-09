@@ -2,7 +2,6 @@ use crate::errors::AppError;
 use crate::songs::analysis::analyze_audio;
 use crate::songs::handlers::{ext_from_filename, mime_from_ext, resolve_audio_path, save_uploaded_file};
 use crate::songs::repository;
-use serde_json::Value;
 use sqlx::PgPool;
 use uuid::Uuid;
 
@@ -24,26 +23,23 @@ struct SongMetadata {
     album: String,
 }
 
-fn sanitize_text(s: String) -> String {
-    s.replace('\0', "")
+fn sanitize_metadata_text(value: String) -> String {
+    if !value.contains('\0') {
+        return value;
+    }
+    value
+        .split('\0')
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join(" / ")
 }
 
-/// Reads the true duration of an audio file (any format ffprobe understands)
-/// from its media stream headers, in whole seconds. Returns `None` when ffprobe
-/// is unavailable, the probe fails, or the file has no reported duration.
-fn probe_duration(audio_full_path: &str) -> Option<i32> {
-    let output = std::process::Command::new("ffprobe")
-        .args(["-v", "quiet", "-print_format", "json", "-show_format"])
-        .arg(audio_full_path)
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let json: Value = serde_json::from_slice(&output.stdout).ok()?;
-    let secs = json.get("format")?.get("duration")?.as_str()?.parse::<f64>().ok()?;
-    let secs = secs.round() as i32;
-    (secs > 0).then_some(secs)
+fn sanitize_metadata(mut metadata: SongMetadata) -> SongMetadata {
+    metadata.title = sanitize_metadata_text(metadata.title);
+    metadata.artist = sanitize_metadata_text(metadata.artist);
+    metadata.album = sanitize_metadata_text(metadata.album);
+    metadata
 }
 
 fn extract_id3_tags(audio_full_path: &str) -> Id3Tags {
@@ -113,12 +109,12 @@ fn resolve_song_metadata(
     };
     let (parsed_artist, parsed_title) = crate::metadata::parse_filename(&name_without_ext);
 
-    let mut title = title_override.unwrap_or("").to_string();
-    let mut artist = artist_override.unwrap_or("").to_string();
-    let mut album = album_override.unwrap_or("").to_string();
+    let mut title = sanitize_metadata_text(title_override.unwrap_or("").to_string());
+    let mut artist = sanitize_metadata_text(artist_override.unwrap_or("").to_string());
+    let mut album = sanitize_metadata_text(album_override.unwrap_or("").to_string());
 
     if title.is_empty() {
-        title = id3.title.clone();
+        title = sanitize_metadata_text(id3.title.clone());
     }
     if title.is_empty() {
         title = parsed_title;
@@ -128,21 +124,17 @@ fn resolve_song_metadata(
     }
 
     if artist.is_empty() {
-        artist = id3.artist.clone();
+        artist = sanitize_metadata_text(id3.artist.clone());
     }
     if artist.is_empty() {
         artist = parsed_artist;
     }
 
     if album.is_empty() {
-        album = id3.album.clone();
+        album = sanitize_metadata_text(id3.album.clone());
     }
 
-    SongMetadata {
-        title: sanitize_text(title),
-        artist: sanitize_text(artist),
-        album: sanitize_text(album),
-    }
+    sanitize_metadata(SongMetadata { title, artist, album })
 }
 
 async fn enrich_from_external(api_key: &str, metadata: &SongMetadata) -> (SongMetadata, Option<(Vec<u8>, String)>) {
@@ -216,6 +208,7 @@ pub async fn process_song_upload(
     } else {
         (metadata, None)
     };
+    let metadata = sanitize_metadata(metadata);
 
     let cover_path = if let Some((data, mime)) = cover {
         save_cover(&data, &mime, upload_dir).await
@@ -268,13 +261,38 @@ pub async fn process_song_upload(
 
 #[cfg(test)]
 mod tests {
-    use super::sanitize_text;
+    use super::*;
 
     #[test]
-    fn sanitize_text_strips_nul_bytes() {
-        assert_eq!(sanitize_text("HUMBLE. (SKRILLEX REMIX)".into()), "HUMBLE. (SKRILLEX REMIX)");
-        assert_eq!(sanitize_text("HUMBLE\u{0}".into()), "HUMBLE");
-        assert_eq!(sanitize_text("H\u{0}UM\u{0}BLE".into()), "HUMBLE");
-        assert_eq!(sanitize_text("\u{0}\u{0}".into()), "");
+    fn sanitize_metadata_removes_nul_from_database_fields() {
+        let metadata = sanitize_metadata(SongMetadata {
+            title: "Song\0".to_string(),
+            artist: "Primary\0Guest".to_string(),
+            album: "\0Album\0\0".to_string(),
+        });
+
+        assert_eq!(metadata.title, "Song");
+        assert_eq!(metadata.artist, "Primary / Guest");
+        assert_eq!(metadata.album, "Album");
+        assert!(!metadata.title.contains('\0'));
+        assert!(!metadata.artist.contains('\0'));
+        assert!(!metadata.album.contains('\0'));
+
+        let fallback = resolve_song_metadata(
+            "Filename Artist - Filename Title.flac",
+            Some("\0"),
+            Some("\0"),
+            Some("\0"),
+            &Id3Tags {
+                title: "\0".to_string(),
+                artist: "\0".to_string(),
+                album: "\0".to_string(),
+                duration: 0,
+                cover_data: None,
+            },
+        );
+        assert_eq!(fallback.title, "Filename Title");
+        assert_eq!(fallback.artist, "Filename Artist");
+        assert!(fallback.album.is_empty());
     }
 }
