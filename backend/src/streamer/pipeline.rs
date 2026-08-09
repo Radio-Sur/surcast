@@ -24,6 +24,31 @@ pub(crate) struct PipelineTrack {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TransitionMode {
+    Off,
+    Crossfade,
+    AutoCue,
+}
+
+impl TransitionMode {
+    pub(crate) fn parse(value: &str) -> Option<Self> {
+        match value {
+            "off" => Some(Self::Off),
+            "crossfade" => Some(Self::Crossfade),
+            "autocue" => Some(Self::AutoCue),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct TransitionConfig {
+    pub mode: TransitionMode,
+    pub requested_fade: Duration,
+    pub autocue_cap: Duration,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum TransitionPlan {
     Cut,
     NaiveCrossfade {
@@ -182,26 +207,20 @@ pub(crate) struct PipelineInstance {
     pub events: mpsc::UnboundedReceiver<PipelineEvent>,
 }
 
-pub(crate) fn transition_plan(
-    mode: &str,
-    current: &PipelineTrack,
-    next: Option<&PipelineTrack>,
-    requested_fade: Duration,
-    autocue_cap: Duration,
-) -> TransitionPlan {
+pub(crate) fn transition_plan(config: TransitionConfig, current: &PipelineTrack, next: Option<&PipelineTrack>) -> TransitionPlan {
     let Some(next) = next else {
         return TransitionPlan::Cut;
     };
 
-    if mode == "off" {
+    if config.mode == TransitionMode::Off {
         return TransitionPlan::Cut;
     }
 
-    if mode == "autocue" && current.analyzed && next.analyzed {
+    if config.mode == TransitionMode::AutoCue && current.analyzed && next.analyzed {
         let tail = current.cue_out.checked_sub(current.cross_start_next);
         if current.cross_start_next >= current.cue_in {
             if let Some(tail) = tail {
-                let duration = tail.min(autocue_cap);
+                let duration = tail.min(config.autocue_cap);
                 if duration >= Duration::from_millis(200) {
                     return TransitionPlan::AutoCueCrossfade {
                         current_start: current.cue_in,
@@ -209,17 +228,19 @@ pub(crate) fn transition_plan(
                         current_end: current.cue_out,
                         next_start: next.cue_in,
                         duration,
-                        fallback_fade: requested_fade,
+                        fallback_fade: config.requested_fade,
                     };
                 }
             }
         }
     }
 
-    if requested_fade.is_zero() {
+    if config.requested_fade.is_zero() {
         TransitionPlan::Cut
     } else {
-        TransitionPlan::NaiveCrossfade { requested_fade }
+        TransitionPlan::NaiveCrossfade {
+            requested_fade: config.requested_fade,
+        }
     }
 }
 
@@ -302,20 +323,48 @@ mod tests {
         }
     }
 
+    fn config(mode: TransitionMode, requested_fade: Duration, autocue_cap: Duration) -> TransitionConfig {
+        TransitionConfig {
+            mode,
+            requested_fade,
+            autocue_cap,
+        }
+    }
+
+    #[test]
+    fn transition_mode_parses_persisted_values() {
+        assert_eq!(TransitionMode::parse("off"), Some(TransitionMode::Off));
+        assert_eq!(TransitionMode::parse("crossfade"), Some(TransitionMode::Crossfade));
+        assert_eq!(TransitionMode::parse("autocue"), Some(TransitionMode::AutoCue));
+        assert_eq!(TransitionMode::parse("unknown"), None);
+    }
+
     #[test]
     fn cut_applies_to_off_zero_fade_or_missing_next() {
         let current = track(false, 0, 0, 0);
         let next = track(false, 0, 0, 0);
         assert_eq!(
-            transition_plan("off", &current, Some(&next), Duration::from_secs(1), Duration::from_secs(5)),
+            transition_plan(
+                config(TransitionMode::Off, Duration::from_secs(1), Duration::from_secs(5)),
+                &current,
+                Some(&next)
+            ),
             TransitionPlan::Cut
         );
         assert_eq!(
-            transition_plan("crossfade", &current, Some(&next), Duration::ZERO, Duration::from_secs(5)),
+            transition_plan(
+                config(TransitionMode::Crossfade, Duration::ZERO, Duration::from_secs(5)),
+                &current,
+                Some(&next)
+            ),
             TransitionPlan::Cut
         );
         assert_eq!(
-            transition_plan("crossfade", &current, None, Duration::from_secs(1), Duration::from_secs(5)),
+            transition_plan(
+                config(TransitionMode::Crossfade, Duration::from_secs(1), Duration::from_secs(5)),
+                &current,
+                None
+            ),
             TransitionPlan::Cut
         );
     }
@@ -357,7 +406,11 @@ mod tests {
     fn autocue_uses_valid_analyzed_geometry() {
         let current = track(true, 1, 18, 14);
         let next = track(true, 2, 19, 17);
-        let plan = transition_plan("autocue", &current, Some(&next), Duration::ZERO, Duration::from_secs(5));
+        let plan = transition_plan(
+            config(TransitionMode::AutoCue, Duration::ZERO, Duration::from_secs(5)),
+            &current,
+            Some(&next),
+        );
         assert_eq!(
             resolve_transition(plan, Some(Duration::from_secs(20)), Some(Duration::from_secs(20)), true, true),
             TransitionPlan::AutoCueCrossfade {
@@ -393,7 +446,11 @@ mod tests {
         let current = track(true, 3, 1, 2);
         let next = track(true, 0, 0, 0);
         assert_eq!(
-            transition_plan("autocue", &current, Some(&next), Duration::from_secs(2), Duration::from_secs(5)),
+            transition_plan(
+                config(TransitionMode::AutoCue, Duration::from_secs(2), Duration::from_secs(5)),
+                &current,
+                Some(&next)
+            ),
             TransitionPlan::NaiveCrossfade {
                 requested_fade: Duration::from_secs(2)
             }
@@ -419,7 +476,11 @@ mod tests {
         let current = track(true, 0, 10, 10);
         let next = track(true, 0, 10, 0);
         assert_eq!(
-            transition_plan("autocue", &current, Some(&next), Duration::from_secs(2), Duration::from_secs(5)),
+            transition_plan(
+                config(TransitionMode::AutoCue, Duration::from_secs(2), Duration::from_secs(5)),
+                &current,
+                Some(&next)
+            ),
             TransitionPlan::NaiveCrossfade {
                 requested_fade: Duration::from_secs(2)
             }

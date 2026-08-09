@@ -8,7 +8,7 @@ use tokio::sync::mpsc;
 
 use super::pipeline::{
     IcecastTarget, PairPlan, PipelineConfig, PipelineError, PipelineEvent, PipelineSnapshot, PipelineState, PipelineTrack,
-    PlaybackPipeline, PlaybackPipelineFactory, TrackKey,
+    PlaybackPipeline, PlaybackPipelineFactory, TrackKey, TransitionConfig, TransitionMode,
 };
 use super::{QueueManager, SongInfo, StatusEvent};
 
@@ -127,11 +127,13 @@ impl StationController {
         let current_track = Self::track(current);
         let next_track = next.map(Self::track);
         let transition = super::pipeline::transition_plan(
-            &mode,
+            TransitionConfig {
+                mode: TransitionMode::parse(&mode).unwrap_or(TransitionMode::Off),
+                requested_fade: Duration::from_millis(fade_ms.max(0) as u64),
+                autocue_cap: Duration::from_millis(autocue_cap_ms.max(0) as u64),
+            },
             &current_track,
             next_track.as_ref(),
-            Duration::from_millis(fade_ms.max(0) as u64),
-            Duration::from_millis(autocue_cap_ms.max(0) as u64),
         );
         self.pipeline
             .replace(PairPlan {
