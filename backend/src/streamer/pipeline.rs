@@ -56,10 +56,17 @@ pub(crate) struct TransitionConfig {
     pub autocue_cap: Duration,
 }
 
-#[derive(Clone, Debug)]
 pub(crate) struct StationPlaybackConfig {
     pub transition: TransitionConfig,
-    prebuffer_bytes: usize,
+    pub output: OutputConfig,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct OutputConfig {
+    pub prebuffer_bytes: usize,
+    pub sample_rate: u32,
+    pub channels: u32,
+    pub bitrate_kbps: u32,
 }
 
 impl StationPlaybackConfig {
@@ -77,17 +84,19 @@ impl StationPlaybackConfig {
                 requested_fade: Duration::from_millis(default_fade_ms.max(0) as u64),
                 autocue_cap: Duration::from_millis(autocue_fade_max_ms.max(0) as u64),
             },
-            prebuffer_bytes: prebuffer_bytes.max(0) as usize,
+            output: OutputConfig {
+                prebuffer_bytes: prebuffer_bytes.max(0) as usize,
+                sample_rate: 44_100,
+                channels: 2,
+                bitrate_kbps: 128,
+            },
         })
     }
 
     pub(crate) fn pipeline_config(&self, target: IcecastTarget) -> PipelineConfig {
         PipelineConfig {
             target,
-            prebuffer_bytes: self.prebuffer_bytes,
-            sample_rate: 44_100,
-            channels: 2,
-            bitrate_kbps: 128,
+            output: self.output,
         }
     }
 }
@@ -179,13 +188,9 @@ impl fmt::Display for IcecastTarget {
     }
 }
 
-#[derive(Clone, Debug)]
 pub(crate) struct PipelineConfig {
     pub target: IcecastTarget,
-    pub prebuffer_bytes: usize,
-    pub sample_rate: u32,
-    pub channels: u32,
-    pub bitrate_kbps: u32,
+    pub output: OutputConfig,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -237,6 +242,7 @@ impl std::error::Error for PipelineError {}
 #[async_trait]
 pub(crate) trait PlaybackPipeline: Send + Sync {
     async fn replace(&self, plan: PairPlan) -> Result<(), PipelineError>;
+    async fn apply_output(&self, output: OutputConfig) -> Result<(), PipelineError>;
     async fn set_playing(&self, playing: bool) -> Result<(), PipelineError>;
     async fn reconnect(&self, target: IcecastTarget) -> Result<(), PipelineError>;
     async fn snapshot(&self) -> Result<PipelineSnapshot, PipelineError>;
@@ -253,39 +259,43 @@ pub(crate) struct PipelineInstance {
     pub events: mpsc::UnboundedReceiver<PipelineEvent>,
 }
 
-pub(crate) fn transition_plan(config: TransitionConfig, current: &PipelineTrack, next: Option<&PipelineTrack>) -> TransitionPlan {
-    let Some(next) = next else {
-        return TransitionPlan::Cut;
-    };
+pub(crate) struct TransitionPlanner;
 
-    if config.mode == TransitionMode::Off {
-        return TransitionPlan::Cut;
-    }
+impl TransitionPlanner {
+    pub(crate) fn plan(config: TransitionConfig, current: &PipelineTrack, next: Option<&PipelineTrack>) -> TransitionPlan {
+        let Some(next) = next else {
+            return TransitionPlan::Cut;
+        };
 
-    if config.mode == TransitionMode::AutoCue && current.analyzed && next.analyzed {
-        let tail = current.cue_out.checked_sub(current.cross_start_next);
-        if current.cross_start_next >= current.cue_in {
-            if let Some(tail) = tail {
-                let duration = tail.min(config.autocue_cap);
-                if duration >= Duration::from_millis(200) {
-                    return TransitionPlan::AutoCueCrossfade {
-                        current_start: current.cue_in,
-                        fade_start: current.cross_start_next,
-                        current_end: current.cue_out,
-                        next_start: next.cue_in,
-                        duration,
-                        fallback_fade: config.requested_fade,
-                    };
+        if config.mode == TransitionMode::Off {
+            return TransitionPlan::Cut;
+        }
+
+        if config.mode == TransitionMode::AutoCue && current.analyzed && next.analyzed {
+            let tail = current.cue_out.checked_sub(current.cross_start_next);
+            if current.cross_start_next >= current.cue_in {
+                if let Some(tail) = tail {
+                    let duration = tail.min(config.autocue_cap);
+                    if duration >= Duration::from_millis(200) {
+                        return TransitionPlan::AutoCueCrossfade {
+                            current_start: current.cue_in,
+                            fade_start: current.cross_start_next,
+                            current_end: current.cue_out,
+                            next_start: next.cue_in,
+                            duration,
+                            fallback_fade: config.requested_fade,
+                        };
+                    }
                 }
             }
         }
-    }
 
-    if config.requested_fade.is_zero() {
-        TransitionPlan::Cut
-    } else {
-        TransitionPlan::NaiveCrossfade {
-            requested_fade: config.requested_fade,
+        if config.requested_fade.is_zero() {
+            TransitionPlan::Cut
+        } else {
+            TransitionPlan::NaiveCrossfade {
+                requested_fade: config.requested_fade,
+            }
         }
     }
 }
@@ -398,7 +408,7 @@ mod tests {
         let current = track(false, 0, 0, 0);
         let next = track(false, 0, 0, 0);
         assert_eq!(
-            transition_plan(
+            TransitionPlanner::plan(
                 config(TransitionMode::Off, Duration::from_secs(1), Duration::from_secs(5)),
                 &current,
                 Some(&next)
@@ -406,7 +416,7 @@ mod tests {
             TransitionPlan::Cut
         );
         assert_eq!(
-            transition_plan(
+            TransitionPlanner::plan(
                 config(TransitionMode::Crossfade, Duration::ZERO, Duration::from_secs(5)),
                 &current,
                 Some(&next)
@@ -414,7 +424,7 @@ mod tests {
             TransitionPlan::Cut
         );
         assert_eq!(
-            transition_plan(
+            TransitionPlanner::plan(
                 config(TransitionMode::Crossfade, Duration::from_secs(1), Duration::from_secs(5)),
                 &current,
                 None
@@ -460,7 +470,7 @@ mod tests {
     fn autocue_uses_valid_analyzed_geometry() {
         let current = track(true, 1, 18, 14);
         let next = track(true, 2, 19, 17);
-        let plan = transition_plan(
+        let plan = TransitionPlanner::plan(
             config(TransitionMode::AutoCue, Duration::ZERO, Duration::from_secs(5)),
             &current,
             Some(&next),
@@ -500,7 +510,7 @@ mod tests {
         let current = track(true, 3, 1, 2);
         let next = track(true, 0, 0, 0);
         assert_eq!(
-            transition_plan(
+            TransitionPlanner::plan(
                 config(TransitionMode::AutoCue, Duration::from_secs(2), Duration::from_secs(5)),
                 &current,
                 Some(&next)
@@ -530,7 +540,7 @@ mod tests {
         let current = track(true, 0, 10, 10);
         let next = track(true, 0, 10, 0);
         assert_eq!(
-            transition_plan(
+            TransitionPlanner::plan(
                 config(TransitionMode::AutoCue, Duration::from_secs(2), Duration::from_secs(5)),
                 &current,
                 Some(&next)

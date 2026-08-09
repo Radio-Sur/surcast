@@ -1,35 +1,22 @@
 use std::sync::Mutex;
 
 use sqlx::PgPool;
-use tokio::sync::broadcast;
 use uuid::Uuid;
 
 use super::pipeline::TrackKey;
-use super::{queue_repository::QueueRepository, queue_state::QueueState, SongInfo, StatusEvent};
+use super::{queue_repository::QueueRepository, queue_state::QueueState, SongInfo};
 
 
 pub(crate) struct QueueManager {
     repository: QueueRepository,
     state: Mutex<QueueState>,
-    status_tx: broadcast::Sender<StatusEvent>,
-    queue_tx: broadcast::Sender<String>,
 }
 
 impl QueueManager {
-    pub fn new(
-        db: PgPool,
-        station_id: Uuid,
-        upload_dir: String,
-        songs: Vec<SongInfo>,
-        initial_idx: usize,
-        status_tx: broadcast::Sender<StatusEvent>,
-        queue_tx: broadcast::Sender<String>,
-    ) -> Self {
+    pub fn new(db: PgPool, station_id: Uuid, upload_dir: String, songs: Vec<SongInfo>, initial_idx: usize) -> Self {
         Self {
             repository: QueueRepository::new(db, station_id, upload_dir),
             state: Mutex::new(QueueState::new(songs, initial_idx)),
-            status_tx,
-            queue_tx,
         }
     }
 
@@ -53,25 +40,8 @@ impl QueueManager {
         self.repository.trim_played_items().await;
     }
 
-    pub fn subscribe_status(&self) -> broadcast::Receiver<StatusEvent> {
-        self.status_tx.subscribe()
-    }
-
-    pub fn publish_status(&self, event: StatusEvent) {
-        if self.status_tx.send(event).is_err() {
-            tracing::debug!(station_id = %self.station_id(), "no status listeners");
-        }
-    }
-
-    pub fn subscribe_queue(&self) -> broadcast::Receiver<String> {
-        self.queue_tx.subscribe()
-    }
-
-    pub async fn push_queue_update(&self) {
-        let message = self.repository.queue_json().await;
-        if self.queue_tx.send(message).is_err() {
-            tracing::debug!(station_id = %self.station_id(), "no queue listeners");
-        }
+    pub async fn queue_json(&self) -> String {
+        self.repository.queue_json().await
     }
 
     pub fn current_song_index(&self) -> usize {
@@ -108,7 +78,6 @@ impl QueueManager {
         self.repository.trim_played_items().await;
         self.repository.refill(upcoming).await;
         self.reload_from_db().await;
-        self.push_queue_update().await;
         self.successor_after(key).map(track_key)
     }
 }

@@ -7,7 +7,7 @@ use super::{SongInfo, StatusEvent};
 enum StationCommand {
     Play(oneshot::Sender<Result<(), PipelineError>>),
     Pause(oneshot::Sender<Result<(), PipelineError>>),
-    Stop(oneshot::Sender<Result<(), PipelineError>>),
+    Shutdown(oneshot::Sender<Result<(), PipelineError>>),
     Skip(oneshot::Sender<Result<(), PipelineError>>),
     Reconnect(oneshot::Sender<Result<(), PipelineError>>),
     Reload {
@@ -34,9 +34,20 @@ impl StationRuntime {
         tokio::spawn(async move {
             loop {
                 tokio::select! {
-                    Some(command) = receiver.recv() => command.run(&mut controller).await,
-                    Some(event) = events.recv() => controller.handle_event(event).await,
-                    else => break,
+                    command = receiver.recv() => {
+                        let Some(command) = command else { break };
+                        if !command.run(&mut controller).await {
+                            break;
+                        }
+                    },
+                    event = events.recv() => match event {
+                        Some(event) => match controller.handle_event(event).await {
+                            Some(Ok(operation)) => launch(controller.driver(), operation, None),
+                            Some(Err(error)) => tracing::error!(error = %error, "failed to apply pipeline event"),
+                            None => {}
+                        },
+                        None => break,
+                    },
                 }
             }
         });
@@ -65,8 +76,8 @@ impl StationRuntime {
         self.request(StationCommand::Pause).await
     }
 
-    pub(crate) async fn stop(&self) -> Result<(), PipelineError> {
-        self.request(StationCommand::Stop).await
+    pub(crate) async fn shutdown(&self) -> Result<(), PipelineError> {
+        self.request(StationCommand::Shutdown).await
     }
 
     pub(crate) async fn skip(&self) -> Result<(), PipelineError> {
@@ -126,18 +137,25 @@ impl StationRuntime {
 }
 
 impl StationCommand {
-    async fn run(self, controller: &mut StationController) {
+    async fn run(self, controller: &mut StationController) -> bool {
         match self {
-            Self::Play(response) => send(response, controller.play().await),
-            Self::Pause(response) => send(response, controller.pause().await),
-            Self::Stop(response) => send(response, controller.stop().await),
-            Self::Skip(response) => send(response, controller.skip().await),
-            Self::Reconnect(response) => send(response, controller.reconnect().await),
-            Self::Reload { songs, response } => send(response, controller.reload(songs).await),
-            Self::UpdateConfig { config, response } => {
-                controller.update_config(config);
-                send(response, Ok(()));
+            Self::Play(response) => launch(controller.driver(), controller.play(), Some(response)),
+            Self::Pause(response) => launch(controller.driver(), controller.pause(), Some(response)),
+            Self::Shutdown(response) => {
+                let result = controller.driver().execute(controller.stop()).await.map(|_| ());
+                send(response, result);
+                return false;
             }
+            Self::Skip(response) => match controller.skip().await {
+                Ok(operation) => launch(controller.driver(), operation, Some(response)),
+                Err(error) => send(response, Err(error)),
+            },
+            Self::Reconnect(response) => launch(controller.driver(), controller.reconnect(), Some(response)),
+            Self::Reload { songs, response } => send(response, controller.reload(songs).await),
+            Self::UpdateConfig { config, response } => match controller.update_config(config) {
+                Some(operation) => launch(controller.driver(), operation, Some(response)),
+                None => send(response, Ok(())),
+            },
             Self::PushQueueUpdate(response) => {
                 controller.push_queue_update().await;
                 let _ = response.send(());
@@ -150,7 +168,23 @@ impl StationCommand {
                 let _ = response.send(controller.status().await);
             }
         }
+        true
     }
+}
+
+fn launch(
+    driver: super::driver::PipelineDriver,
+    operation: super::driver::PipelineOperation,
+    response: Option<oneshot::Sender<Result<(), PipelineError>>>,
+) {
+    tokio::spawn(async move {
+        let result = driver.execute(operation).await.map(|_| ());
+        if let Some(response) = response {
+            send(response, result);
+        } else if let Err(error) = result {
+            tracing::error!(error = %error, "pipeline operation failed");
+        }
+    });
 }
 
 fn send(response: oneshot::Sender<Result<(), PipelineError>>, result: Result<(), PipelineError>) {

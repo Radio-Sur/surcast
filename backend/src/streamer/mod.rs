@@ -1,4 +1,5 @@
 pub mod controller;
+mod driver;
 pub mod gstreamer;
 pub mod pipeline;
 pub mod queue_manager;
@@ -59,6 +60,8 @@ pub enum StatusEvent {
 pub struct StationStreamer {
     runtime: StationRuntime,
     queue: Arc<QueueManager>,
+    status_tx: broadcast::Sender<StatusEvent>,
+    queue_tx: broadcast::Sender<String>,
 }
 
 impl StationStreamer {
@@ -82,18 +85,24 @@ impl StationStreamer {
             .unwrap_or(0)
             .max(0);
         let initial_idx = songs.iter().position(|song| song.position >= saved_index).unwrap_or(songs.len());
-        let queue = Arc::new(QueueManager::new(
-            db.clone(),
-            station_id,
-            upload_dir.into(),
-            songs,
-            initial_idx,
+        let queue = Arc::new(QueueManager::new(db.clone(), station_id, upload_dir.into(), songs, initial_idx));
+        let (controller, events) = StationController::new(
+            queue.clone(),
+            db,
+            mount,
+            prebuffer_bytes,
+            factory,
+            status_tx.clone(),
+            queue_tx.clone(),
+        )
+        .await?;
+        let runtime = StationRuntime::spawn(controller, events);
+        Ok(Arc::new(Self {
+            runtime,
+            queue,
             status_tx,
             queue_tx,
-        ));
-        let (controller, events) = StationController::new(queue.clone(), db, mount, prebuffer_bytes, factory).await?;
-        let runtime = StationRuntime::spawn(controller, events);
-        Ok(Arc::new(Self { runtime, queue }))
+        }))
     }
 
     pub(crate) async fn skip(&self) -> Result<(), PipelineError> {
@@ -106,7 +115,7 @@ impl StationStreamer {
         self.runtime.pause().await
     }
     pub(crate) async fn stop(&self) -> Result<(), PipelineError> {
-        self.runtime.stop().await
+        self.runtime.shutdown().await
     }
 
     pub(crate) async fn reconnect(&self) -> Result<(), PipelineError> {
@@ -114,7 +123,7 @@ impl StationStreamer {
     }
 
     pub async fn shutdown(&self) {
-        let _ = self.stop().await;
+        let _ = self.runtime.shutdown().await;
     }
     pub(crate) async fn status(&self) -> StatusEvent {
         self.runtime.status().await.unwrap_or_else(|_| {
@@ -152,10 +161,10 @@ impl StationStreamer {
         self.queue.current_song_index()
     }
     pub(crate) fn subscribe_status(&self) -> broadcast::Receiver<StatusEvent> {
-        self.queue.subscribe_status()
+        self.status_tx.subscribe()
     }
     pub(crate) fn subscribe_queue(&self) -> broadcast::Receiver<String> {
-        self.queue.subscribe_queue()
+        self.queue_tx.subscribe()
     }
     pub(crate) async fn push_queue_update(&self) {
         self.runtime.push_queue_update().await;

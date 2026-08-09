@@ -13,8 +13,8 @@ use gstreamer as gst;
 use tokio::sync::mpsc;
 
 use super::pipeline::{
-    resolve_transition, IcecastTarget, PairPlan, PipelineConfig, PipelineError, PipelineEvent, PipelineInstance, PipelineSnapshot,
-    PipelineState, PlaybackPipeline, PlaybackPipelineFactory, TrackKey,
+    resolve_transition, IcecastTarget, OutputConfig, PairPlan, PipelineConfig, PipelineError, PipelineEvent, PipelineInstance,
+    PipelineSnapshot, PipelineState, PlaybackPipeline, PlaybackPipelineFactory, TrackKey,
 };
 use branch::Branch;
 
@@ -52,6 +52,9 @@ struct ActivePlan {
 pub(crate) struct GStreamerPipeline {
     pipeline: gst::Pipeline,
     mixer: gst::Element,
+    output_queue: gst::Element,
+    output_caps: gst::Element,
+    encoder: gst::Element,
     sink: Mutex<gst::Element>,
     clock_gate: gst::Element,
     sink_factory: &'static str,
@@ -89,6 +92,11 @@ impl GStreamerPipeline {
 
 #[async_trait]
 impl PlaybackPipeline for GStreamerPipeline {
+    async fn apply_output(&self, output: OutputConfig) -> Result<(), PipelineError> {
+        graph::configure_output(&self.output_queue, &self.output_caps, &self.encoder, output);
+        Ok(())
+    }
+
     async fn replace(&self, plan: PairPlan) -> Result<(), PipelineError> {
         if self
             .active
@@ -253,6 +261,9 @@ impl PlaybackPipelineFactory for GStreamerPipelineFactory {
         let graph::Backbone {
             pipeline,
             mixer,
+            output_queue,
+            output_caps,
+            encoder,
             sink,
             clock_gate,
         } = graph::build_backbone(&config, self.sink_factory)?;
@@ -263,6 +274,9 @@ impl PlaybackPipelineFactory for GStreamerPipelineFactory {
             pipeline: Arc::new(GStreamerPipeline {
                 pipeline,
                 mixer,
+                output_queue,
+                output_caps,
+                encoder,
                 sink: Mutex::new(sink),
                 clock_gate,
                 sink_factory: self.sink_factory,
@@ -282,15 +296,17 @@ impl PlaybackPipelineFactory for GStreamerPipelineFactory {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::streamer::pipeline::{IcecastTarget, PipelineTrack, TransitionPlan};
+    use crate::streamer::pipeline::{IcecastTarget, OutputConfig, PipelineTrack, TransitionPlan};
 
     fn config() -> PipelineConfig {
         PipelineConfig {
             target: IcecastTarget::parse("localhost:8000", "secret".into(), "test", "test".into()).unwrap(),
-            prebuffer_bytes: 16_384,
-            sample_rate: 44_100,
-            channels: 2,
-            bitrate_kbps: 128,
+            output: OutputConfig {
+                prebuffer_bytes: 16_384,
+                sample_rate: 44_100,
+                channels: 2,
+                bitrate_kbps: 128,
+            },
         }
     }
     fn write_wav(file: &std::path::Path, duration: Duration, sample: i16) {

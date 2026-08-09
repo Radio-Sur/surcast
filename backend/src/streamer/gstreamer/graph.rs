@@ -3,7 +3,7 @@ use std::sync::LazyLock;
 use gst::prelude::*;
 use gstreamer as gst;
 
-use super::super::pipeline::{PipelineConfig, PipelineError};
+use super::super::pipeline::{OutputConfig, PipelineConfig, PipelineError};
 use super::sink;
 
 const REQUIRED_ELEMENTS: &[&str] = &[
@@ -25,6 +25,9 @@ static GST_INIT: LazyLock<Result<(), String>> = LazyLock::new(|| gst::init().map
 pub(super) struct Backbone {
     pub(super) pipeline: gst::Pipeline,
     pub(super) mixer: gst::Element,
+    pub(super) output_queue: gst::Element,
+    pub(super) output_caps: gst::Element,
+    pub(super) encoder: gst::Element,
     pub(super) sink: gst::Element,
     pub(super) clock_gate: gst::Element,
 }
@@ -57,27 +60,11 @@ pub(super) fn build_backbone(config: &PipelineConfig, sink_factory: &'static str
     let mixer = element("audiomixer")?;
     mixer.set_property("ignore-inactive-pads", true);
     let queue = element("queue")?;
-    let threshold_ns = (config.prebuffer_bytes.max(1024) as u64).saturating_mul(1_000_000_000) / 16_000;
-    queue.set_property("min-threshold-time", threshold_ns);
-    queue.set_property("max-size-time", threshold_ns.saturating_mul(2).max(5_000_000_000));
-    queue.set_property("max-size-bytes", 0u32);
-    queue.set_property("max-size-buffers", 0u32);
     let convert = element("audioconvert")?;
     let resample = element("audioresample")?;
     let capsfilter = element("capsfilter")?;
-    capsfilter.set_property(
-        "caps",
-        gst::Caps::builder("audio/x-raw")
-            .field("format", "S16LE")
-            .field("rate", config.sample_rate as i32)
-            .field("channels", config.channels as i32)
-            .field("layout", "interleaved")
-            .build(),
-    );
     let encoder = element("lamemp3enc")?;
-    encoder.set_property_from_str("target", "bitrate");
-    encoder.set_property("cbr", true);
-    encoder.set_property("bitrate", config.bitrate_kbps as i32);
+    configure_output(&queue, &capsfilter, &encoder, config.output);
     let parser = element("mpegaudioparse")?;
     let clock_gate = element("identity")?;
     clock_gate.set_property("name", "clock_gate");
@@ -113,7 +100,30 @@ pub(super) fn build_backbone(config: &PipelineConfig, sink_factory: &'static str
     Ok(Backbone {
         pipeline,
         mixer,
+        output_queue: queue,
+        output_caps: capsfilter,
+        encoder,
         sink,
         clock_gate,
     })
+}
+
+pub(super) fn configure_output(queue: &gst::Element, capsfilter: &gst::Element, encoder: &gst::Element, output: OutputConfig) {
+    let threshold_ns = (output.prebuffer_bytes.max(1024) as u64).saturating_mul(1_000_000_000) / 16_000;
+    queue.set_property("min-threshold-time", threshold_ns);
+    queue.set_property("max-size-time", threshold_ns.saturating_mul(2).max(5_000_000_000));
+    queue.set_property("max-size-bytes", 0u32);
+    queue.set_property("max-size-buffers", 0u32);
+    capsfilter.set_property(
+        "caps",
+        gst::Caps::builder("audio/x-raw")
+            .field("format", "S16LE")
+            .field("rate", output.sample_rate as i32)
+            .field("channels", output.channels as i32)
+            .field("layout", "interleaved")
+            .build(),
+    );
+    encoder.set_property_from_str("target", "bitrate");
+    encoder.set_property("cbr", true);
+    encoder.set_property("bitrate", output.bitrate_kbps as i32);
 }
