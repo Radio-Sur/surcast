@@ -54,19 +54,40 @@ impl StationController {
         tokio::spawn(async move {
             while let Some(event) = events.recv().await {
                 match event {
-                    PipelineEvent::DecodeFailed { generation, track, .. }
-                    | PipelineEvent::CurrentEos {
+                    PipelineEvent::DecodeFailed {
+                        generation,
+                        track,
+                        message,
+                    } => {
+                        tracing::warn!(station_id = %self.queue.station_id, generation, %message, "GStreamer decoder exposed no usable audio branch");
+                        let current = self.queue.current_song_info().map(|song| song.queue_item_id);
+                        if generation == self.generation.load(Ordering::Acquire) && current == Some(track.queue_item_id) {
+                            if let Err(error) = self.skip().await {
+                                tracing::error!(station_id = %self.queue.station_id, error = %error, "failed to advance undecodable current track");
+                            }
+                        }
+                    }
+                    PipelineEvent::CurrentEos {
                         generation,
                         current: track,
                     } => {
                         let current = self.queue.current_song_info().map(|song| song.queue_item_id);
                         if generation == self.generation.load(Ordering::Acquire) && current == Some(track.queue_item_id) {
                             if let Err(error) = self.skip().await {
-                                tracing::error!(station_id = %self.queue.station_id, error = %error, "failed to advance completed or undecodable current track");
+                                tracing::error!(station_id = %self.queue.station_id, error = %error, "failed to advance completed current track");
                             }
                         }
                     }
-                    PipelineEvent::Handover { .. } => {}
+                    PipelineEvent::Handover {
+                        generation,
+                        current: track,
+                    } => {
+                        let current = self.queue.current_song_info().map(|song| song.queue_item_id);
+                        if generation == self.generation.load(Ordering::Acquire) && current != Some(track.queue_item_id) {
+                            self.queue.commit_current(&track).await;
+                            self.publish_song_change();
+                        }
+                    }
                     PipelineEvent::SinkDisconnected { generation, message } => {
                         tracing::error!(station_id = %self.queue.station_id, generation, %message, "GStreamer output disconnected");
                     }
@@ -241,10 +262,6 @@ mod tests {
     impl PlaybackPipeline for FakePipeline {
         async fn replace(&self, _: PairPlan) -> Result<(), PipelineError> {
             self.replacements.fetch_add(1, Ordering::Release);
-            Ok(())
-        }
-
-        async fn append(&self, _: PairPlan) -> Result<(), PipelineError> {
             Ok(())
         }
 

@@ -166,7 +166,6 @@ impl std::error::Error for PipelineError {}
 #[async_trait]
 pub(crate) trait PlaybackPipeline: Send + Sync {
     async fn replace(&self, plan: PairPlan) -> Result<(), PipelineError>;
-    async fn append(&self, plan: PairPlan) -> Result<(), PipelineError>;
     async fn set_playing(&self, playing: bool) -> Result<(), PipelineError>;
     async fn reconnect(&self, target: IcecastTarget) -> Result<(), PipelineError>;
     async fn snapshot(&self) -> Result<PipelineSnapshot, PipelineError>;

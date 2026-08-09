@@ -3,23 +3,41 @@ use axum::response::IntoResponse;
 use axum::Json;
 use serde_json::json;
 use sqlx::PgPool;
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 use tokio::net::TcpStream;
 
 use crate::api::router::StreamersMap;
 use crate::errors::AppError;
 use crate::icecast::IcecastManager;
+use crate::streamer::StationStreamer;
 
 use super::models::{self, IcecastMode, IcecastSettingsUpdate};
 
-async fn reconnect_streamers(streamers: &StreamersMap) {
+async fn quiesce_streamers(streamers: &StreamersMap) -> Vec<(Arc<StationStreamer>, bool)> {
     let active = {
         let streamers = streamers.lock().unwrap_or_else(|error| error.into_inner());
         streamers.values().cloned().collect::<Vec<_>>()
     };
     futures::future::join_all(active.into_iter().map(|streamer| async move {
+        let was_playing = streamer.status_json().await["playing"].as_bool().unwrap_or(false);
+        if was_playing {
+            if let Err(error) = streamer.pause().await {
+                tracing::warn!(%error, "failed to pause streamer before Icecast restart");
+            }
+        }
+        (streamer, was_playing)
+    }))
+    .await
+}
+
+async fn reconnect_streamers(active: Vec<(Arc<StationStreamer>, bool)>) {
+    futures::future::join_all(active.into_iter().map(|(streamer, was_playing)| async move {
         if let Err(error) = streamer.reconnect().await {
             tracing::warn!(%error, "failed to reconnect streamer after Icecast restart");
+        } else if was_playing {
+            if let Err(error) = streamer.play().await {
+                tracing::warn!(%error, "failed to resume streamer after Icecast restart");
+            }
         }
     }))
     .await;
@@ -51,6 +69,7 @@ pub async fn patch_settings(
             tracing::warn!("Failed to stop icecast during patch: {e}");
         }
     } else if settings.enabled {
+        let active = quiesce_streamers(&streamers).await;
         if let Err(error) = icecast_manager
             .restart(
                 settings.port,
@@ -62,7 +81,7 @@ pub async fn patch_settings(
         {
             tracing::warn!(%error, "failed to restart Icecast during patch");
         } else {
-            reconnect_streamers(&streamers).await;
+            reconnect_streamers(active).await;
         }
     } else {
         if let Err(e) = icecast_manager.stop().await {
