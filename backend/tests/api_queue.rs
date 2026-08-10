@@ -19,7 +19,7 @@ fn make_song_form() -> MultipartForm {
 async fn setup_with_station_and_song() -> (TestServer, String, Uuid, Uuid) {
     let pool = common::setup_db().await;
     let app = api_common::create_test_app(pool);
-    let server = TestServer::new(app).expect("server");
+    let server = TestServer::new(app);
 
     let init_resp = server
         .post("/api/setup/init")

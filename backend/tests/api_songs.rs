@@ -18,7 +18,7 @@ fn make_song_form(title: &str, artist: &str) -> MultipartForm {
 async fn setup_auth() -> (TestServer, String) {
     let pool = common::setup_db().await;
     let app = api_common::create_test_app(pool);
-    let server = TestServer::new(app).expect("server");
+    let server = TestServer::new(app);
 
     server
         .post("/api/setup/init")

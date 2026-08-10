@@ -8,7 +8,7 @@ use sqlx::PgPool;
 async fn setup() -> (PgPool, TestServer, String) {
     let db = common::setup_db().await;
     let app = api_common::create_test_app(db.clone());
-    let server = TestServer::new(app).expect("server");
+    let server = TestServer::new(app);
     let token = {
         server
             .post("/api/setup/init")

@@ -90,7 +90,7 @@ pub fn create_router(db: PgPool, config: Config, icecast_manager: IcecastManager
             get(stations::handlers::list_stations).post(stations::handlers::create_station),
         )
         .route(
-            "/api/stations/:id",
+            "/api/stations/{id}",
             get(stations::handlers::get_station)
                 .put(stations::handlers::update_station)
                 .delete(stations::handlers::delete_station),
@@ -100,7 +100,7 @@ pub fn create_router(db: PgPool, config: Config, icecast_manager: IcecastManager
             get(api_keys::handlers::list_api_keys).post(api_keys::handlers::create_api_key),
         )
         .route(
-            "/api/api-keys/:id",
+            "/api/api-keys/{id}",
             put(api_keys::handlers::update_api_key).delete(api_keys::handlers::delete_api_key),
         )
         .route(
@@ -117,51 +117,60 @@ pub fn create_router(db: PgPool, config: Config, icecast_manager: IcecastManager
             "/api/uploads",
             post(songs::handlers::upload_jobs::start_upload).layer(DefaultBodyLimit::max(500 * 1024 * 1024)),
         )
-        .route("/api/uploads/:id", get(songs::handlers::upload_jobs::get_upload_job))
+        .route("/api/uploads/{id}", get(songs::handlers::upload_jobs::get_upload_job))
         .route("/api/songs/search", get(songs::handlers::search_songs))
         .route("/api/songs/artists", get(songs::handlers::list_artists))
         .route("/api/songs/count", post(songs::handlers::count_songs))
         .route("/api/songs/batch", delete(songs::handlers::delete_songs_batch))
         .route(
-            "/api/songs/:id",
+            "/api/songs/{id}",
             get(songs::handlers::get_song)
                 .put(songs::handlers::update_song)
                 .delete(songs::handlers::delete_song),
         )
-        .route("/api/songs/:id/stations", post(songs::handlers::add_song_stations))
-        .route("/api/songs/:id/stations/:station_id", delete(songs::handlers::remove_song_station))
+        .route("/api/songs/{id}/stations", post(songs::handlers::add_song_stations))
         .route(
-            "/api/stations/:id/songs",
+            "/api/songs/{id}/stations/{station_id}",
+            delete(songs::handlers::remove_song_station),
+        )
+        .route(
+            "/api/stations/{id}/songs",
             get(stations::handlers::list_station_songs).post(stations::handlers::add_station_songs),
         )
-        .route("/api/stations/:id/songs/:song_id", delete(stations::handlers::remove_station_song))
         .route(
-            "/api/stations/:id/queue",
+            "/api/stations/{id}/songs/{song_id}",
+            delete(stations::handlers::remove_station_song),
+        )
+        .route(
+            "/api/stations/{id}/queue",
             get(stations::handlers::list_queue).post(stations::handlers::add_songs_to_queue),
         )
-        .route("/api/stations/:id/queue/reorder", put(stations::handlers::reorder_queue))
+        .route("/api/stations/{id}/queue/reorder", put(stations::handlers::reorder_queue))
         .route(
-            "/api/stations/:id/queue/insert",
+            "/api/stations/{id}/queue/insert",
             post(stations::handlers::insert_song_at_queue_position),
         )
         .route(
-            "/api/stations/:id/queue/playlist/:playlist_id",
+            "/api/stations/{id}/queue/playlist/{playlist_id}",
             delete(stations::handlers::remove_playlist_songs_from_queue),
         )
         .route(
-            "/api/stations/:id/queue/:song_id",
+            "/api/stations/{id}/queue/{song_id}",
             delete(stations::handlers::remove_song_from_queue),
         )
-        .route("/api/stations/:id/playlist", get(stations::handlers::get_station_playlist_m3u))
-        .route("/api/stations/:id/stream/status", get(stations::handlers::stream_status))
-        .route("/api/stations/:id/stream/skip", post(stations::handlers::stream_skip))
-        .route("/api/stations/:id/stream/play", post(stations::handlers::stream_play))
-        .route("/api/stations/:id/stream/pause", post(stations::handlers::stream_pause))
-        .route("/api/stations/:id/stream/stop", post(stations::handlers::stream_stop))
-        .route("/api/stations/:id/stream/restart", post(stations::handlers::stream_restart))
-        .route("/api/stations/:id/listeners/live", get(listeners::handlers::station_listeners_live))
+        .route("/api/stations/{id}/playlist", get(stations::handlers::get_station_playlist_m3u))
+        .route("/api/stations/{id}/stream/status", get(stations::handlers::stream_status))
+        .route("/api/stations/{id}/stream/skip", post(stations::handlers::stream_skip))
+        .route("/api/stations/{id}/stream/play", post(stations::handlers::stream_play))
+        .route("/api/stations/{id}/stream/pause", post(stations::handlers::stream_pause))
+        .route("/api/stations/{id}/stream/stop", post(stations::handlers::stream_stop))
+        .route("/api/stations/{id}/stream/restart", post(stations::handlers::stream_restart))
         .route(
-            "/api/stations/:id/listeners/history",
+            "/api/stations/{id}/listeners/live",
+            get(listeners::handlers::station_listeners_live),
+        )
+        .route(
+            "/api/stations/{id}/listeners/history",
             get(listeners::handlers::station_listeners_history),
         )
         .route("/api/listeners/overview", get(listeners::handlers::listeners_overview))
@@ -170,62 +179,68 @@ pub fn create_router(db: PgPool, config: Config, icecast_manager: IcecastManager
             get(playlists::handlers::list_playlists).post(playlists::handlers::create_playlist),
         )
         .route(
-            "/api/playlists/:id",
+            "/api/playlists/{id}",
             get(playlists::handlers::get_playlist)
                 .put(playlists::handlers::update_playlist)
                 .delete(playlists::handlers::delete_playlist),
         )
         .route(
-            "/api/playlists/:id/songs",
+            "/api/playlists/{id}/songs",
             get(playlists::handlers::list_playlist_songs).post(playlists::handlers::add_playlist_songs),
         )
-        .route("/api/playlists/:id/songs/reorder", put(playlists::handlers::reorder_playlist_songs))
         .route(
-            "/api/playlists/:id/songs/batch",
+            "/api/playlists/{id}/songs/reorder",
+            put(playlists::handlers::reorder_playlist_songs),
+        )
+        .route(
+            "/api/playlists/{id}/songs/batch",
             delete(playlists::handlers::remove_playlist_songs_batch),
         )
         .route(
-            "/api/playlists/:id/songs/:song_id",
+            "/api/playlists/{id}/songs/{song_id}",
             delete(playlists::handlers::remove_playlist_song),
         )
         .route(
-            "/api/playlists/:id/add-to-queue/:station_id",
+            "/api/playlists/{id}/add-to-queue/{station_id}",
             post(playlists::handlers::add_playlist_to_queue),
         )
         .route(
-            "/api/stations/:id/schedule-events",
+            "/api/stations/{id}/schedule-events",
             get(scheduling::handlers::list_schedule_events).post(scheduling::handlers::create_schedule_event),
         )
         .route(
-            "/api/stations/:id/schedule-events/:event_id",
+            "/api/stations/{id}/schedule-events/{event_id}",
             put(scheduling::handlers::update_schedule_event).delete(scheduling::handlers::delete_schedule_event),
         )
         .route(
-            "/api/stations/:id/schedules",
+            "/api/stations/{id}/schedules",
             get(scheduling::handlers::list_schedules).post(scheduling::handlers::create_schedule),
         )
         .route(
-            "/api/stations/:id/schedules/:schedule_id",
+            "/api/stations/{id}/schedules/{schedule_id}",
             put(scheduling::handlers::update_schedule).delete(scheduling::handlers::delete_schedule),
         )
         .route(
-            "/api/stations/:id/auto-fill",
+            "/api/stations/{id}/auto-fill",
             get(scheduling::handlers::get_auto_fill).put(scheduling::handlers::update_auto_fill),
         )
         .route(
-            "/api/stations/:id/auto-fill/playlists",
+            "/api/stations/{id}/auto-fill/playlists",
             post(scheduling::handlers::add_auto_fill_playlist),
         )
         .route(
-            "/api/stations/:id/auto-fill/playlists/:playlist_id",
+            "/api/stations/{id}/auto-fill/playlists/{playlist_id}",
             put(scheduling::handlers::update_auto_fill_playlist).delete(scheduling::handlers::delete_auto_fill_playlist),
         )
-        .route("/api/stations/:id/auto-fill/trigger", post(scheduling::handlers::trigger_auto_fill))
+        .route(
+            "/api/stations/{id}/auto-fill/trigger",
+            post(scheduling::handlers::trigger_auto_fill),
+        )
         .route_layer(middleware::from_fn_with_state(state.clone(), auth::middleware::auth_middleware));
 
     let admin_routes = Router::new()
         .route(
-            "/api/users/:id",
+            "/api/users/{id}",
             put(auth::handlers::update_user).delete(auth::handlers::delete_user),
         )
         .route(
@@ -245,8 +260,8 @@ pub fn create_router(db: PgPool, config: Config, icecast_manager: IcecastManager
         .route("/api/setup/init", axum::routing::post(auth::handlers::setup_init))
         .route("/api/auth/login", axum::routing::post(auth::handlers::login))
         .route("/api/auth/refresh", axum::routing::post(auth::handlers::refresh))
-        .route("/api/songs/:id/file", get(songs::handlers::serve_song_file))
-        .route("/api/songs/:id/cover", get(songs::handlers::serve_song_cover))
+        .route("/api/songs/{id}/file", get(songs::handlers::serve_song_file))
+        .route("/api/songs/{id}/cover", get(songs::handlers::serve_song_cover))
         .route("/api/ws", get(stations::handlers::global_ws))
         .merge(protected_routes)
         .merge(admin_routes)

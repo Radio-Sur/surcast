@@ -7,7 +7,7 @@ use serde_json::json;
 async fn setup_two_users() -> (TestServer, String, String) {
     let pool = common::setup_db().await;
     let app = api_common::create_test_app(pool);
-    let server = TestServer::new(app).expect("server");
+    let server = TestServer::new(app);
 
     server
         .post("/api/setup/init")
@@ -50,7 +50,7 @@ async fn test_list_users_as_admin_returns_200() {
 async fn test_list_users_without_admin_returns_403() {
     let pool = common::setup_db().await;
     let app = api_common::create_test_app(pool);
-    let server = TestServer::new(app).expect("server");
+    let server = TestServer::new(app);
 
     server
         .post("/api/setup/init")
@@ -94,7 +94,7 @@ async fn test_update_user_role_returns_200() {
 async fn test_delete_user_returns_204() {
     let pool = common::setup_db().await;
     let app = api_common::create_test_app(pool);
-    let server = TestServer::new(app).expect("server");
+    let server = TestServer::new(app);
 
     server
         .post("/api/setup/init")

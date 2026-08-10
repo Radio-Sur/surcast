@@ -299,7 +299,8 @@ async fn kill_zombie_icecast() {
             let pid_str = entry.file_name().to_string_lossy().to_string();
             if let Ok(pid) = pid_str.parse::<i32>() {
                 if let Ok(exe) = std::fs::read_link(format!("/proc/{pid}/exe")) {
-                    if exe.to_string_lossy().contains("icecast") {
+                    let name = exe.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+                    if name == "icecast" || name == "icecast2" {
                         tracing::warn!("Killing zombie icecast PID {pid}");
                         let _ = std::process::Command::new("kill").arg("-9").arg(pid.to_string()).output();
                     }

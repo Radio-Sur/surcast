@@ -8,7 +8,7 @@ use uuid::Uuid;
 async fn setup_auth() -> (TestServer, String) {
     let pool = common::setup_db().await;
     let app = api_common::create_test_app(pool);
-    let server = TestServer::new(app).expect("server");
+    let server = TestServer::new(app);
 
     server
         .post("/api/setup/init")
@@ -161,7 +161,7 @@ async fn test_get_station_after_delete_returns_404() {
 async fn test_create_station_without_auth_returns_401() {
     let pool = common::setup_db().await;
     let app = api_common::create_test_app(pool);
-    let server = TestServer::new(app).expect("server");
+    let server = TestServer::new(app);
 
     let resp = server.post("/api/stations").json(&json!({"name": "Unauthorized"})).await;
     assert_eq!(resp.status_code(), 401);

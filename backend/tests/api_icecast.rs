@@ -7,7 +7,7 @@ use serde_json::{json, Value};
 async fn setup() -> (TestServer, String) {
     let db = common::setup_db().await;
     let app = api_common::create_test_app(db);
-    let server = TestServer::new(app).expect("server");
+    let server = TestServer::new(app);
     server
         .post("/api/setup/init")
         .json(&json!({"username": "admin", "password": "admin123", "name": "Admin"}))
@@ -120,7 +120,7 @@ async fn test_test_connection_with_auth_returns_200_or_500() {
 async fn test_non_admin_user_cannot_access_icecast() {
     let db = common::setup_db().await;
     let app = api_common::create_test_app(db);
-    let server = TestServer::new(app).expect("server");
+    let server = TestServer::new(app);
     server
         .post("/api/setup/init")
         .json(&json!({"username": "admin", "password": "admin123", "name": "Admin"}))

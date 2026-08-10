@@ -16,7 +16,7 @@ async fn setup_auth_token(server: &TestServer) -> String {
 async fn test_setup_status_before_init() {
     let pool = common::setup_db().await;
     let app = api_common::create_test_app(pool);
-    let server = TestServer::new(app).expect("server");
+    let server = TestServer::new(app);
 
     let resp = server.get("/api/setup/status").await;
     assert_eq!(resp.status_code(), 200);
@@ -28,7 +28,7 @@ async fn test_setup_status_before_init() {
 async fn test_setup_init_creates_admin() {
     let pool = common::setup_db().await;
     let app = api_common::create_test_app(pool);
-    let server = TestServer::new(app).expect("server");
+    let server = TestServer::new(app);
 
     let resp = server
         .post("/api/setup/init")
@@ -41,7 +41,7 @@ async fn test_setup_init_creates_admin() {
 async fn test_setup_init_twice_returns_400() {
     let pool = common::setup_db().await;
     let app = api_common::create_test_app(pool);
-    let server = TestServer::new(app).expect("server");
+    let server = TestServer::new(app);
 
     server
         .post("/api/setup/init")
@@ -59,7 +59,7 @@ async fn test_setup_init_twice_returns_400() {
 async fn test_setup_status_after_init() {
     let pool = common::setup_db().await;
     let app = api_common::create_test_app(pool);
-    let server = TestServer::new(app).expect("server");
+    let server = TestServer::new(app);
 
     server
         .post("/api/setup/init")
@@ -75,7 +75,7 @@ async fn test_setup_status_after_init() {
 async fn test_login_correct_returns_tokens() {
     let pool = common::setup_db().await;
     let app = api_common::create_test_app(pool);
-    let server = TestServer::new(app).expect("server");
+    let server = TestServer::new(app);
 
     server
         .post("/api/setup/init")
@@ -97,7 +97,7 @@ async fn test_login_correct_returns_tokens() {
 async fn test_login_wrong_password_returns_401() {
     let pool = common::setup_db().await;
     let app = api_common::create_test_app(pool);
-    let server = TestServer::new(app).expect("server");
+    let server = TestServer::new(app);
 
     server
         .post("/api/setup/init")
@@ -115,7 +115,7 @@ async fn test_login_wrong_password_returns_401() {
 async fn test_login_wrong_username_returns_401() {
     let pool = common::setup_db().await;
     let app = api_common::create_test_app(pool);
-    let server = TestServer::new(app).expect("server");
+    let server = TestServer::new(app);
 
     server
         .post("/api/setup/init")
@@ -133,7 +133,7 @@ async fn test_login_wrong_username_returns_401() {
 async fn test_me_with_token_returns_user() {
     let pool = common::setup_db().await;
     let app = api_common::create_test_app(pool);
-    let server = TestServer::new(app).expect("server");
+    let server = TestServer::new(app);
 
     server
         .post("/api/setup/init")
@@ -154,7 +154,7 @@ async fn test_me_with_token_returns_user() {
 async fn test_me_without_token_returns_401() {
     let pool = common::setup_db().await;
     let app = api_common::create_test_app(pool);
-    let server = TestServer::new(app).expect("server");
+    let server = TestServer::new(app);
 
     server
         .post("/api/setup/init")
@@ -169,7 +169,7 @@ async fn test_me_without_token_returns_401() {
 async fn test_refresh_with_valid_token() {
     let pool = common::setup_db().await;
     let app = api_common::create_test_app(pool);
-    let server = TestServer::new(app).expect("server");
+    let server = TestServer::new(app);
 
     server
         .post("/api/setup/init")
@@ -199,7 +199,7 @@ async fn test_refresh_with_valid_token() {
 async fn test_refresh_with_invalid_token_returns_401() {
     let pool = common::setup_db().await;
     let app = api_common::create_test_app(pool);
-    let server = TestServer::new(app).expect("server");
+    let server = TestServer::new(app);
 
     server
         .post("/api/setup/init")
