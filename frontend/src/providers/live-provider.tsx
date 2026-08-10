@@ -30,7 +30,7 @@ export function LiveProvider({ children }: { children: ReactNode }) {
   const [stations, setStations] = useState<Record<string, LiveStationState>>({});
   const [socketConnected, setSocketConnected] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
-  const reconnectTimer = useRef<ReturnType<typeof setTimeout>>();
+  const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const retryCount = useRef(0);
   const subCountsRef = useRef<Record<string, number>>({});
 
@@ -190,7 +190,7 @@ export function LiveProvider({ children }: { children: ReactNode }) {
 
     return () => {
       closed = true;
-      clearTimeout(reconnectTimer.current);
+      clearTimeout(reconnectTimer.current ?? undefined);
       wsRef.current?.close();
       wsRef.current = null;
     };
