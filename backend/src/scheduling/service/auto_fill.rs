@@ -1,6 +1,5 @@
-use rand::prelude::SliceRandom;
-use rand::Rng;
-use rand::SeedableRng;
+use rand::prelude::IndexedRandom;
+use rand::RngExt;
 use sqlx::PgPool;
 use uuid::Uuid;
 
@@ -103,8 +102,8 @@ async fn pick_weighted(db: &PgPool, station_id: Uuid) -> Result<Vec<Uuid>, AppEr
     }
 
     let total_weight: i32 = weighted.iter().map(|(_, w)| w).sum();
-    let mut rng = rand::rngs::StdRng::from_entropy();
-    let pick = rng.gen_range(0..total_weight);
+    let mut rng = rand::make_rng::<rand::rngs::StdRng>();
+    let pick = rng.random_range(0..total_weight);
     let mut cumulative = 0i32;
     let mut selected_playlist = weighted[0].0;
     for (pid, w) in &weighted {
@@ -126,7 +125,7 @@ async fn apply_mode_to_candidates(db: &PgPool, candidates: &[Uuid], mode: &AutoD
     if candidates.is_empty() {
         return Err(AppError::BadRequest("No songs available for selection".into()));
     }
-    let mut rng = rand::rngs::StdRng::from_entropy();
+    let mut rng = rand::make_rng::<rand::rngs::StdRng>();
     let selected = match mode {
         AutoDjMode::Sequential => {
             sqlx::query_scalar::<_, Option<i32>>(
@@ -163,7 +162,7 @@ async fn apply_mode_to_candidates(db: &PgPool, candidates: &[Uuid], mode: &AutoD
                 None => candidates[candidates.len() - 1],
             }
         }
-        AutoDjMode::Random => candidates[rng.gen_range(0..candidates.len())],
+        AutoDjMode::Random => candidates[rng.random_range(0..candidates.len())],
     };
     Ok(selected)
 }
@@ -248,7 +247,7 @@ async fn pick_song_for_source(
                 .db_error("failed to find recent queue entries")?;
 
                 let mut safe = Vec::new();
-                let mut rng = rand::rngs::StdRng::from_entropy();
+                let mut rng = rand::make_rng::<rand::rngs::StdRng>();
                 for id in &song_ids {
                     if recent_ids.contains(id) {
                         continue;
