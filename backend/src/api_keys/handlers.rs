@@ -3,7 +3,7 @@ use axum::http::StatusCode;
 use axum::Extension;
 use axum::Json;
 use chrono::Utc;
-use rand::Rng;
+use rand::RngExt;
 use sha2::{Digest, Sha256};
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -43,10 +43,10 @@ mod tests {
 }
 
 fn generate_api_key() -> (String, String, String) {
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     let random_part: String = (0..40)
         .map(|_| {
-            let idx = rng.gen_range(0..62);
+            let idx = rng.random_range(0..62);
             b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"[idx] as char
         })
         .collect();
