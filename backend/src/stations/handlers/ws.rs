@@ -153,13 +153,13 @@ async fn authenticate(
     }
 
     sender
-        .send(Message::Text(serde_json::json!({"type": "auth_ok"}).to_string()))
+        .send(Message::Text(serde_json::json!({"type": "auth_ok"}).to_string().into()))
         .await
         .map_err(|_| "send failed".to_string())
 }
 
 fn error_msg(data: &str) -> Message {
-    Message::Text(serde_json::json!({"type":"error","data":data}).to_string())
+    Message::Text(serde_json::json!({"type":"error","data":data}).to_string().into())
 }
 
 /// Drains the per-connection outbound queue and forwards it to the socket,
@@ -169,7 +169,7 @@ async fn ws_send_task(mut sender: SplitSink<WebSocket, Message>, mut out_rx: mps
     loop {
         tokio::select! {
             _ = heartbeat.tick() => {
-                if sender.send(Message::Ping(vec![])).await.is_err() {
+                if sender.send(Message::Ping(vec![].into())).await.is_err() {
                     return;
                 }
             }
@@ -177,7 +177,7 @@ async fn ws_send_task(mut sender: SplitSink<WebSocket, Message>, mut out_rx: mps
                 match msg {
                     Some(out) => {
                         let text = serde_json::to_string(&out).unwrap_or_default();
-                        if sender.send(Message::Text(text)).await.is_err() {
+                        if sender.send(Message::Text(text.into())).await.is_err() {
                             return;
                         }
                     }
