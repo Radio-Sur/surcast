@@ -30,6 +30,82 @@ enum StationCommand {
     Status(oneshot::Sender<StatusEvent>),
 }
 
+struct ReconnectRetry {
+    commands: mpsc::Sender<StationCommand>,
+    generation: u64,
+    output_epoch: u64,
+    attempt: u32,
+}
+
+enum PendingPipelineAction {
+    Execute {
+        operation: super::driver::PipelineOperation,
+        response: Option<oneshot::Sender<Result<(), PipelineError>>>,
+        reconnect_retry: Option<ReconnectRetry>,
+    },
+}
+
+impl PendingPipelineAction {
+    fn operation(operation: super::driver::PipelineOperation, response: Option<oneshot::Sender<Result<(), PipelineError>>>) -> Self {
+        Self::Execute {
+            operation,
+            response,
+            reconnect_retry: None,
+        }
+    }
+
+    fn reconnect(
+        target: super::pipeline::IcecastTarget,
+        commands: mpsc::Sender<StationCommand>,
+        generation: u64,
+        output_epoch: u64,
+        attempt: u32,
+    ) -> Self {
+        Self::Execute {
+            operation: super::driver::PipelineOperation::Reconnect(target),
+            response: None,
+            reconnect_retry: Some(ReconnectRetry {
+                commands,
+                generation,
+                output_epoch,
+                attempt,
+            }),
+        }
+    }
+
+    fn launch(self, driver: super::driver::PipelineDriver) {
+        tokio::spawn(async move {
+            let Self::Execute {
+                operation,
+                response,
+                reconnect_retry,
+            } = self;
+            let result = driver.execute(operation).await.map(|_| ());
+            if let Some(response) = response {
+                send(response, result);
+                return;
+            }
+            if let Err(error) = result {
+                if let Some(retry) = reconnect_retry {
+                    let delay = Duration::from_secs(1_u64 << retry.attempt.min(5));
+                    tracing::warn!(%error, generation = retry.generation, output_epoch = retry.output_epoch, ?delay, "retrying GStreamer output reconnect");
+                    tokio::time::sleep(delay).await;
+                    let _ = retry
+                        .commands
+                        .send(StationCommand::RetryReconnect {
+                            generation: retry.generation,
+                            output_epoch: retry.output_epoch,
+                            attempt: retry.attempt.saturating_add(1),
+                        })
+                        .await;
+                } else {
+                    tracing::error!(error = %error, "pipeline operation failed");
+                }
+            }
+        });
+    }
+}
+
 #[derive(Clone)]
 pub(crate) struct StationRuntime {
     commands: mpsc::Sender<StationCommand>,
@@ -52,15 +128,16 @@ impl StationRuntime {
                         Some(PipelineEvent::SinkDisconnected { generation, output_epoch, message }) => {
                             match controller.handle_event(PipelineEvent::SinkDisconnected { generation, output_epoch, message }).await {
                                 Some(Ok(super::driver::PipelineOperation::Reconnect(target))) => {
-                                    launch_reconnect(controller.driver(), target, retries.clone(), generation, output_epoch, 0);
+                                    PendingPipelineAction::reconnect(target, retries.clone(), generation, output_epoch, 0)
+                                        .launch(controller.driver());
                                 }
-                                Some(Ok(operation)) => launch(controller.driver(), operation, None),
+                                Some(Ok(operation)) => PendingPipelineAction::operation(operation, None).launch(controller.driver()),
                                 Some(Err(error)) => tracing::error!(error = %error, "failed to apply pipeline event"),
                                 None => {}
                             }
                         },
                         Some(event) => match controller.handle_event(event).await {
-                            Some(Ok(operation)) => launch(controller.driver(), operation, None),
+                            Some(Ok(operation)) => PendingPipelineAction::operation(operation, None).launch(controller.driver()),
                             Some(Err(error)) => tracing::error!(error = %error, "failed to apply pipeline event"),
                             None => {}
                         },
@@ -157,18 +234,20 @@ impl StationRuntime {
 impl StationCommand {
     async fn run(self, controller: &mut StationController, retries: mpsc::Sender<StationCommand>) -> bool {
         match self {
-            Self::Play(response) => launch(controller.driver(), controller.play(), Some(response)),
-            Self::Pause(response) => launch(controller.driver(), controller.pause(), Some(response)),
+            Self::Play(response) => PendingPipelineAction::operation(controller.play(), Some(response)).launch(controller.driver()),
+            Self::Pause(response) => PendingPipelineAction::operation(controller.pause(), Some(response)).launch(controller.driver()),
             Self::Shutdown(response) => {
                 let result = controller.driver().execute(controller.stop()).await.map(|_| ());
                 send(response, result);
                 return false;
             }
             Self::Skip(response) => match controller.skip().await {
-                Ok(operation) => launch(controller.driver(), operation, Some(response)),
+                Ok(operation) => PendingPipelineAction::operation(operation, Some(response)).launch(controller.driver()),
                 Err(error) => send(response, Err(error)),
             },
-            Self::Reconnect(response) => launch(controller.driver(), controller.reconnect(), Some(response)),
+            Self::Reconnect(response) => {
+                PendingPipelineAction::operation(controller.reconnect(), Some(response)).launch(controller.driver())
+            }
             Self::RetryReconnect {
                 generation,
                 output_epoch,
@@ -176,12 +255,12 @@ impl StationCommand {
             } => {
                 if let Some(super::driver::PipelineOperation::Reconnect(target)) = controller.reconnect_if_current(generation, output_epoch)
                 {
-                    launch_reconnect(controller.driver(), target, retries, generation, output_epoch, attempt);
+                    PendingPipelineAction::reconnect(target, retries, generation, output_epoch, attempt).launch(controller.driver());
                 }
             }
             Self::Reload { songs, response } => send(response, controller.reload(songs).await),
             Self::UpdateConfig { config, response } => match controller.update_config(config) {
-                Some(operation) => launch(controller.driver(), operation, Some(response)),
+                Some(operation) => PendingPipelineAction::operation(operation, Some(response)).launch(controller.driver()),
                 None => send(response, Ok(())),
             },
             Self::PushQueueUpdate(response) => {
@@ -198,45 +277,6 @@ impl StationCommand {
         }
         true
     }
-}
-
-fn launch(
-    driver: super::driver::PipelineDriver,
-    operation: super::driver::PipelineOperation,
-    response: Option<oneshot::Sender<Result<(), PipelineError>>>,
-) {
-    tokio::spawn(async move {
-        let result = driver.execute(operation).await.map(|_| ());
-        if let Some(response) = response {
-            send(response, result);
-        } else if let Err(error) = result {
-            tracing::error!(error = %error, "pipeline operation failed");
-        }
-    });
-}
-
-fn launch_reconnect(
-    driver: super::driver::PipelineDriver,
-    target: super::pipeline::IcecastTarget,
-    retries: mpsc::Sender<StationCommand>,
-    generation: u64,
-    output_epoch: u64,
-    attempt: u32,
-) {
-    tokio::spawn(async move {
-        if let Err(error) = driver.execute(super::driver::PipelineOperation::Reconnect(target)).await {
-            let delay = Duration::from_secs(1_u64 << attempt.min(5));
-            tracing::warn!(%error, generation, output_epoch, ?delay, "retrying GStreamer output reconnect");
-            tokio::time::sleep(delay).await;
-            let _ = retries
-                .send(StationCommand::RetryReconnect {
-                    generation,
-                    output_epoch,
-                    attempt: attempt.saturating_add(1),
-                })
-                .await;
-        }
-    });
 }
 
 fn send(response: oneshot::Sender<Result<(), PipelineError>>, result: Result<(), PipelineError>) {
