@@ -1,6 +1,6 @@
 mod common;
 
-use chrono::{NaiveDate, NaiveTime};
+use chrono::{Datelike, NaiveDate, NaiveTime};
 use surcast_backend::auth::models::Role;
 use surcast_backend::auth::repository as auth_repo;
 use surcast_backend::playlists::repository as playlists_repo;
@@ -8,6 +8,7 @@ use surcast_backend::scheduling::models::{AutoDjMode, RecurrenceType, SourceType
 use surcast_backend::scheduling::repository;
 use surcast_backend::stations::repository as stations_repo;
 use surcast_backend::stations::repository::CreateStationParams;
+use surcast_backend::scheduling::service;
 use uuid::Uuid;
 
 async fn make_user(db: &sqlx::PgPool) -> Uuid {
@@ -288,4 +289,78 @@ async fn test_auto_fill_playlists_add_update_delete() {
         .await
         .expect("find auto-fill playlists failed");
     assert!(playlists.is_empty());
+}
+
+#[tokio::test]
+async fn test_auto_fill_excludes_durable_current_and_upcoming_songs() {
+    let db = common::setup_db().await;
+    let user_id = make_user(&db).await;
+    let station_id = make_station(&db, user_id).await;
+    let songs = [Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4()];
+    for (position, song_id) in songs.into_iter().enumerate() {
+        sqlx::query(
+            "INSERT INTO songs (id, title, file_path, uploaded_by)
+             VALUES ($1, $2, $3, $4)",
+        )
+        .bind(song_id)
+        .bind(format!("song-{position}"))
+        .bind(format!("/tmp/song-{position}.mp3"))
+        .bind(user_id)
+        .execute(&db)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO station_songs (station_id, song_id, position) VALUES ($1, $2, $3)")
+            .bind(station_id)
+            .bind(song_id)
+            .bind(position as i32)
+            .execute(&db)
+            .await
+            .unwrap();
+    }
+
+    let current_queue_item_id = Uuid::new_v4();
+    sqlx::query("INSERT INTO station_queue (id, station_id, song_id, position) VALUES ($1, $2, $3, 0), ($4, $2, $5, 1)")
+        .bind(current_queue_item_id)
+        .bind(station_id)
+        .bind(songs[0])
+        .bind(Uuid::new_v4())
+        .bind(songs[1])
+        .execute(&db)
+        .await
+        .unwrap();
+    sqlx::query(
+        "UPDATE stations
+         SET current_queue_item_id = $1, consumed_queue_item_ids = ARRAY[]::uuid[], current_queue_cursor_format = 1
+         WHERE id = $2",
+    )
+    .bind(current_queue_item_id)
+    .bind(station_id)
+    .execute(&db)
+    .await
+    .unwrap();
+
+    let weekday = chrono::Local::now().weekday().num_days_from_monday() as i16;
+    sqlx::query(
+        "INSERT INTO station_schedules
+         (station_id, day_of_week, start_time, end_time, source_type, auto_dj_mode, auto_dj_avoid_repeat, auto_dj_min_gap, auto_dj_songs_ahead)
+         VALUES ($1, $2, '00:00', '23:59:59', 'station_library', 'sequential', false, 0, 2)",
+    )
+    .bind(station_id)
+    .bind(weekday)
+    .execute(&db)
+    .await
+    .unwrap();
+
+    service::fill_queue_from_schedule(&db, station_id, Some(1), "/tmp")
+        .await
+        .unwrap();
+
+    let queued_song_ids: Vec<Uuid> = sqlx::query_scalar(
+        "SELECT song_id FROM station_queue WHERE station_id = $1 ORDER BY position",
+    )
+    .bind(station_id)
+    .fetch_all(&db)
+    .await
+    .unwrap();
+    assert_eq!(queued_song_ids, vec![songs[0], songs[1], songs[2]]);
 }
