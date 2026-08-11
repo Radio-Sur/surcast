@@ -89,6 +89,18 @@ impl QueueRepository {
         }
     }
 
+    pub(crate) async fn commit_cursor_and_refill(
+        &self,
+        previous_current_queue_item_id: Option<Uuid>,
+        cursor: &QueueCursor,
+        upcoming: i64,
+    ) -> Result<(), sqlx::Error> {
+        self.persist_cursor_if_current(previous_current_queue_item_id, cursor).await?;
+        self.trim_played_items().await;
+        self.refill(upcoming).await;
+        Ok(())
+    }
+
     pub(crate) async fn refill(&self, upcoming: i64) {
         if let Err(error) =
             crate::scheduling::service::fill_queue_from_schedule(&self.db, self.station_id, Some(upcoming), &self.upload_dir).await

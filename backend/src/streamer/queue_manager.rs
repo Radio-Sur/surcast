@@ -116,22 +116,32 @@ impl QueueManager {
             state.commit_current(song, anchor);
             (previous_current_queue_item_id, state.persistence_cursor(), state.upcoming())
         };
-        if let Err(error) = self
-            .repository
-            .persist_cursor_if_current(previous_current_queue_item_id, &cursor)
-            .await
-        {
+        let owns_refill = reserve_refill(
+            &mut self.refill_attempted_for.lock().unwrap_or_else(|error| error.into_inner()),
+            key,
+        );
+        let result = if owns_refill {
+            self.repository
+                .commit_cursor_and_refill(previous_current_queue_item_id, &cursor, upcoming)
+                .await
+        } else {
+            self.repository
+                .persist_cursor_if_current(previous_current_queue_item_id, &cursor)
+                .await
+        };
+        if let Err(error) = result {
+            if owns_refill {
+                release_refill(
+                    &mut self.refill_attempted_for.lock().unwrap_or_else(|error| error.into_inner()),
+                    key,
+                );
+            }
             tracing::warn!(station_id = %self.station_id(), %error, "deferring queue cursor persistence");
             *self.dirty_cursor.lock().unwrap_or_else(|error| error.into_inner()) = Some((previous_current_queue_item_id, cursor));
             return self.successor_after(key).map(track_key);
         }
         *self.dirty_cursor.lock().unwrap_or_else(|error| error.into_inner()) = None;
-        if reserve_refill(
-            &mut self.refill_attempted_for.lock().unwrap_or_else(|error| error.into_inner()),
-            key,
-        ) {
-            self.repository.trim_played_items().await;
-            self.repository.refill(upcoming).await;
+        if owns_refill {
             self.reload_from_db().await;
         }
         self.successor_after(key).map(track_key)
@@ -151,6 +161,11 @@ fn reserve_refill(attempted_for: &mut Option<TrackKey>, target: &TrackKey) -> bo
     } else {
         *attempted_for = Some(target.clone());
         true
+    }
+}
+fn release_refill(attempted_for: &mut Option<TrackKey>, target: &TrackKey) {
+    if attempted_for.as_ref() == Some(target) {
+        *attempted_for = None;
     }
 }
 
@@ -221,6 +236,10 @@ mod tests {
         let mut attempted_for = None;
 
         assert!(reserve_refill(&mut attempted_for, &target));
+        assert!(!reserve_refill(&mut attempted_for, &target));
+        release_refill(&mut attempted_for, &target);
+        assert!(reserve_refill(&mut attempted_for, &target));
+        release_refill(&mut attempted_for, &replacement);
         assert!(!reserve_refill(&mut attempted_for, &target));
         assert!(reserve_refill(&mut attempted_for, &replacement));
     }
