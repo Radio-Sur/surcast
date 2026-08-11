@@ -17,6 +17,22 @@ pub struct AutoFillConfig {
     pub songs_ahead: i32,
 }
 
+async fn active_song_ids(db: &PgPool, station_id: Uuid) -> Result<HashSet<Uuid>, AppError> {
+    sqlx::query_scalar(
+        "SELECT sq.song_id
+         FROM station_queue sq
+         JOIN stations st ON st.id = sq.station_id
+         WHERE sq.station_id = $1
+           AND (sq.id IS NOT DISTINCT FROM st.current_queue_item_id
+                OR sq.id <> ALL(st.consumed_queue_item_ids))",
+    )
+    .bind(station_id)
+    .fetch_all(db)
+    .await
+    .db_error("failed to load active queue songs")
+    .map(|song_ids: Vec<Uuid>| song_ids.into_iter().collect())
+}
+
 pub(crate) async fn fill_from_playlist(db: &PgPool, station_id: Uuid, playlist_id: Uuid, upload_dir: &str) -> Result<(), AppError> {
     let song_ids: Vec<Uuid> = sqlx::query_scalar(
         "SELECT ps.song_id FROM playlist_songs ps WHERE ps.playlist_id = $1 AND ps.song_id NOT IN (SELECT song_id FROM station_queue WHERE station_id = $2) ORDER BY ps.position",
@@ -49,7 +65,8 @@ pub(crate) async fn fill_from_playlist(db: &PgPool, station_id: Uuid, playlist_i
         .await
         .db_error("failed to find next queue position")?;
 
-    for (i, song_id) in song_ids.iter().enumerate() {
+    let active_song_ids = active_song_ids(db, station_id).await?;
+    for (i, song_id) in song_ids.iter().filter(|song_id| !active_song_ids.contains(song_id)).enumerate() {
         sqlx::query(
             "INSERT INTO station_queue (station_id, song_id, position, origin_playlist_id) VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING",
         )
@@ -242,7 +259,7 @@ async fn pick_song_for_source(
 
                 let mut safe = Vec::new();
                 let mut rng = rand::make_rng::<rand::rngs::StdRng>();
-                for id in &song_ids {
+                for id in candidates {
                     if recent_ids.contains(id) {
                         continue;
                     }
@@ -350,21 +367,7 @@ pub(crate) async fn fill_from_auto_dj_source(
     }
 
     let need = target - upcoming_count;
-    let consumed: Vec<Uuid> = sqlx::query_scalar("SELECT unnest(consumed_queue_item_ids) FROM stations WHERE id = $1")
-        .bind(station_id)
-        .fetch_all(db)
-        .await
-        .db_error("failed to load durable queue cursor")?;
-    let mut excluded: HashSet<Uuid> = sqlx::query_scalar(
-        "SELECT sq.song_id FROM station_queue sq JOIN stations st ON st.id = sq.station_id WHERE sq.station_id = $1 AND sq.id <> ALL(st.consumed_queue_item_ids)",
-    )
-    .bind(station_id)
-    .fetch_all(db)
-    .await
-    .db_error("failed to load active queue songs")?
-    .into_iter()
-    .collect();
-    let _ = consumed;
+    let mut excluded = active_song_ids(db, station_id).await?;
     let mut added = 0i32;
     let mut attempts = 0;
 
