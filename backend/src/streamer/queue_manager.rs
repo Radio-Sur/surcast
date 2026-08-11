@@ -15,6 +15,7 @@ pub(crate) struct QueueManager {
     repository: QueueRepository,
     state: Mutex<QueueState>,
     dirty_cursor: Mutex<Option<(Option<Uuid>, QueueCursor)>>,
+    refill_attempted_for: Mutex<Option<TrackKey>>,
 }
 
 impl QueueManager {
@@ -24,6 +25,7 @@ impl QueueManager {
             repository: QueueRepository::new(db, station_id, upload_dir),
             state: Mutex::new(QueueState::new(songs, initial_idx)),
             dirty_cursor: Mutex::new(None),
+            refill_attempted_for: Mutex::new(None),
         }
     }
     pub fn new_with_cursor(db: PgPool, station_id: Uuid, upload_dir: String, songs: Vec<SongInfo>, cursor: QueueCursor) -> Self {
@@ -31,6 +33,7 @@ impl QueueManager {
             repository: QueueRepository::new(db, station_id, upload_dir),
             state: Mutex::new(QueueState::from_cursor(songs, cursor)),
             dirty_cursor: Mutex::new(None),
+            refill_attempted_for: Mutex::new(None),
         }
     }
 
@@ -123,9 +126,14 @@ impl QueueManager {
             return self.successor_after(key).map(track_key);
         }
         *self.dirty_cursor.lock().unwrap_or_else(|error| error.into_inner()) = None;
-        self.repository.trim_played_items().await;
-        self.repository.refill(upcoming).await;
-        self.reload_from_db().await;
+        if reserve_refill(
+            &mut self.refill_attempted_for.lock().unwrap_or_else(|error| error.into_inner()),
+            key,
+        ) {
+            self.repository.trim_played_items().await;
+            self.repository.refill(upcoming).await;
+            self.reload_from_db().await;
+        }
         self.successor_after(key).map(track_key)
     }
 }
@@ -134,6 +142,15 @@ fn track_key(song: SongInfo) -> TrackKey {
     TrackKey {
         queue_item_id: song.queue_item_id,
         song_id: song.song_id,
+    }
+}
+
+fn reserve_refill(attempted_for: &mut Option<TrackKey>, target: &TrackKey) -> bool {
+    if attempted_for.as_ref() == Some(target) {
+        false
+    } else {
+        *attempted_for = Some(target.clone());
+        true
     }
 }
 
@@ -189,5 +206,22 @@ mod tests {
         let anchor = state.anchor_after_current();
         assert!(state.commit_current(second.clone(), anchor).is_none());
         assert_eq!(state.current_song_info().unwrap().queue_item_id, second.queue_item_id);
+    }
+
+    #[test]
+    fn refill_is_attempted_once_per_pair_target() {
+        let target = TrackKey {
+            queue_item_id: Uuid::new_v4(),
+            song_id: Uuid::new_v4(),
+        };
+        let replacement = TrackKey {
+            queue_item_id: Uuid::new_v4(),
+            song_id: Uuid::new_v4(),
+        };
+        let mut attempted_for = None;
+
+        assert!(reserve_refill(&mut attempted_for, &target));
+        assert!(!reserve_refill(&mut attempted_for, &target));
+        assert!(reserve_refill(&mut attempted_for, &replacement));
     }
 }
