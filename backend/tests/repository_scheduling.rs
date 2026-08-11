@@ -6,9 +6,9 @@ use surcast_backend::auth::repository as auth_repo;
 use surcast_backend::playlists::repository as playlists_repo;
 use surcast_backend::scheduling::models::{AutoDjMode, RecurrenceType, SourceType};
 use surcast_backend::scheduling::repository;
+use surcast_backend::scheduling::service;
 use surcast_backend::stations::repository as stations_repo;
 use surcast_backend::stations::repository::CreateStationParams;
-use surcast_backend::scheduling::service;
 use uuid::Uuid;
 
 async fn make_user(db: &sqlx::PgPool) -> Uuid {
@@ -351,16 +351,12 @@ async fn test_auto_fill_excludes_durable_current_and_upcoming_songs() {
     .await
     .unwrap();
 
-    service::fill_queue_from_schedule(&db, station_id, Some(1), "/tmp")
+    service::fill_queue_from_schedule(&db, station_id, Some(1), "/tmp").await.unwrap();
+
+    let queued_song_ids: Vec<Uuid> = sqlx::query_scalar("SELECT song_id FROM station_queue WHERE station_id = $1 ORDER BY position")
+        .bind(station_id)
+        .fetch_all(&db)
         .await
         .unwrap();
-
-    let queued_song_ids: Vec<Uuid> = sqlx::query_scalar(
-        "SELECT song_id FROM station_queue WHERE station_id = $1 ORDER BY position",
-    )
-    .bind(station_id)
-    .fetch_all(&db)
-    .await
-    .unwrap();
     assert_eq!(queued_song_ids, vec![songs[0], songs[1], songs[2]]);
 }
