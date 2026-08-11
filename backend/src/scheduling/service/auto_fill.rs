@@ -2,7 +2,7 @@ use std::collections::HashSet;
 
 use rand::prelude::IndexedRandom;
 use rand::RngExt;
-use sqlx::PgPool;
+use sqlx::{pool::PoolConnection, PgPool, Postgres};
 use uuid::Uuid;
 
 use crate::errors::{AppError, DbResult};
@@ -15,6 +15,26 @@ pub struct AutoFillConfig {
     pub avoid_repeat: bool,
     pub min_gap: i32,
     pub songs_ahead: i32,
+}
+
+async fn lock_station_queue(db: &PgPool, station_id: Uuid) -> Result<PoolConnection<Postgres>, AppError> {
+    let mut connection = db.acquire().await.db_error("failed to acquire AutoDJ queue lock")?;
+    sqlx::query("SELECT pg_advisory_lock(hashtextextended($1, 0))")
+        .bind(station_id.to_string())
+        .execute(&mut *connection)
+        .await
+        .db_error("failed to lock AutoDJ queue")?;
+    Ok(connection)
+}
+
+async fn unlock_station_queue(connection: &mut PoolConnection<Postgres>, station_id: Uuid) {
+    if let Err(error) = sqlx::query("SELECT pg_advisory_unlock(hashtextextended($1, 0))")
+        .bind(station_id.to_string())
+        .execute(&mut **connection)
+        .await
+    {
+        tracing::error!(%error, %station_id, "failed to unlock AutoDJ queue");
+    }
 }
 
 async fn active_song_ids(db: &PgPool, station_id: Uuid) -> Result<HashSet<Uuid>, AppError> {
@@ -34,12 +54,16 @@ async fn active_song_ids(db: &PgPool, station_id: Uuid) -> Result<HashSet<Uuid>,
 }
 
 pub(crate) async fn fill_from_playlist(db: &PgPool, station_id: Uuid, playlist_id: Uuid, upload_dir: &str) -> Result<(), AppError> {
-    let song_ids: Vec<Uuid> = sqlx::query_scalar(
-        "SELECT ps.song_id FROM playlist_songs ps WHERE ps.playlist_id = $1 AND ps.song_id NOT IN (SELECT song_id FROM station_queue WHERE station_id = $2) ORDER BY ps.position",
-    )
-    .bind(playlist_id)
-    .bind(station_id)
-    .fetch_all(db)
+    let mut lock = lock_station_queue(db, station_id).await?;
+    let result = fill_from_playlist_locked(db, station_id, playlist_id, upload_dir).await;
+    unlock_station_queue(&mut lock, station_id).await;
+    result
+}
+
+async fn fill_from_playlist_locked(db: &PgPool, station_id: Uuid, playlist_id: Uuid, upload_dir: &str) -> Result<(), AppError> {
+    let song_ids: Vec<Uuid> = sqlx::query_scalar("SELECT ps.song_id FROM playlist_songs ps WHERE ps.playlist_id = $1 ORDER BY ps.position")
+        .bind(playlist_id)
+        .fetch_all(db)
         .await
         .db_error("failed to fetch playlist songs")?;
 
@@ -341,6 +365,19 @@ async fn pick_and_insert_song(
 }
 
 pub(crate) async fn fill_from_auto_dj_source(
+    db: &PgPool,
+    station_id: Uuid,
+    config: &AutoFillConfig,
+    upcoming_count: Option<i64>,
+    upload_dir: &str,
+) -> Result<(), AppError> {
+    let mut lock = lock_station_queue(db, station_id).await?;
+    let result = fill_from_auto_dj_source_locked(db, station_id, config, upcoming_count, upload_dir).await;
+    unlock_station_queue(&mut lock, station_id).await;
+    result
+}
+
+async fn fill_from_auto_dj_source_locked(
     db: &PgPool,
     station_id: Uuid,
     config: &AutoFillConfig,
