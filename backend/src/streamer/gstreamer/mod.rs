@@ -252,29 +252,35 @@ impl PlaybackPipeline for GStreamerPipeline {
             return Ok(());
         }
 
-        self.set_state(PipelineState::Paused)?;
-        self.pipeline
-            .set_state(gst::State::Ready)
-            .map_err(|error| PipelineError::Pipeline(error.to_string()))?;
+        let expected_state = match previous_state {
+            PipelineState::Playing => gst::State::Playing,
+            PipelineState::Paused => gst::State::Paused,
+            PipelineState::Stopped => unreachable!("stopped reconnect returned above"),
+        };
+
         let old_sink = self.sink.lock().unwrap_or_else(|error| error.into_inner()).clone();
         let candidate = sink::build(self.sink_factory, &target)?;
         self.pipeline
             .add(&candidate)
             .map_err(|error| PipelineError::Pipeline(error.to_string()))?;
+        if let Err(error) = candidate.sync_state_with_parent() {
+            let _ = self.pipeline.remove(&candidate);
+            return Err(PipelineError::Pipeline(error.to_string()));
+        }
 
         self.clock_gate.unlink(&old_sink);
         if let Err(error) = self.clock_gate.link(&candidate) {
+            let _ = candidate.set_state(gst::State::Null);
             let _ = self.pipeline.remove(&candidate);
             let _ = self.clock_gate.link(&old_sink);
             return Err(PipelineError::Pipeline(error.to_string()));
         }
-
         self.pipeline
-            .set_state(gst::State::Paused)
+            .set_state(expected_state)
             .map_err(|error| PipelineError::Pipeline(error.to_string()))?;
         let (result, current, pending) = self.pipeline.state(gst::ClockTime::from_seconds(5));
         result.map_err(|error| PipelineError::Pipeline(error.to_string()))?;
-        if current != gst::State::Paused {
+        if current != expected_state {
             self.clock_gate.unlink(&candidate);
             let _ = candidate.set_state(gst::State::Null);
             let _ = self.pipeline.remove(&candidate);
@@ -284,7 +290,7 @@ impl PlaybackPipeline for GStreamerPipeline {
                 return Err(PipelineError::Pipeline("sink replacement and rollback failed".into()));
             }
             return Err(PipelineError::Pipeline(format!(
-                "reconnect transition to Paused stalled at {current:?} with {pending:?} pending"
+                "reconnect transition to {expected_state:?} stalled at {current:?} with {pending:?} pending"
             )));
         }
         old_sink
@@ -294,9 +300,6 @@ impl PlaybackPipeline for GStreamerPipeline {
             .remove(&old_sink)
             .map_err(|error| PipelineError::Pipeline(error.to_string()))?;
         *self.sink.lock().unwrap_or_else(|error| error.into_inner()) = candidate;
-        if previous_state == PipelineState::Playing {
-            self.set_state(PipelineState::Playing)?;
-        }
         Ok(())
     }
 
