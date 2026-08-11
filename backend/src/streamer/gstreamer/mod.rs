@@ -257,16 +257,22 @@ impl PlaybackPipeline for GStreamerPipeline {
             PipelineState::Paused => gst::State::Paused,
             PipelineState::Stopped => unreachable!("stopped reconnect returned above"),
         };
+        // A paused pipeline has no active output to preserve. Cycling it through Ready
+        // forces a newly inserted sink to complete its later preroll before resume.
+        if previous_state == PipelineState::Paused {
+            // Reassert Paused before the Ready cycle so every newly inserted child
+            // participates in the same state transition when playback resumes.
+            self.set_state(PipelineState::Paused)?;
+            self.pipeline
+                .set_state(gst::State::Ready)
+                .map_err(|error| PipelineError::Pipeline(error.to_string()))?;
+        }
 
         let old_sink = self.sink.lock().unwrap_or_else(|error| error.into_inner()).clone();
         let candidate = sink::build(self.sink_factory, &target)?;
         self.pipeline
             .add(&candidate)
             .map_err(|error| PipelineError::Pipeline(error.to_string()))?;
-        if let Err(error) = candidate.sync_state_with_parent() {
-            let _ = self.pipeline.remove(&candidate);
-            return Err(PipelineError::Pipeline(error.to_string()));
-        }
 
         self.clock_gate.unlink(&old_sink);
         if let Err(error) = self.clock_gate.link(&candidate) {
@@ -432,14 +438,21 @@ mod tests {
     #[tokio::test]
     async fn reconnect_preserves_paused_and_playing_state() {
         let target = config().target;
+        let file = tempfile::NamedTempFile::new().unwrap();
+        write_wav(file.path(), Duration::from_secs(5), 0);
         let instance = GStreamerPipelineFactory::with_test_sink().create(config()).await.unwrap();
+        instance
+            .pipeline
+            .replace(initial_plan(1, track(file.path(), 0), None, TransitionPlan::Cut))
+            .await
+            .unwrap();
         instance.pipeline.set_playing(false).await.unwrap();
         instance.pipeline.reconnect(target.clone()).await.unwrap();
         assert_eq!(instance.pipeline.snapshot().await.unwrap().state, PipelineState::Paused);
+        instance.pipeline.set_playing(true).await.unwrap();
+        assert_eq!(instance.pipeline.snapshot().await.unwrap().state, PipelineState::Playing);
         instance.pipeline.stop().await.unwrap();
 
-        let file = tempfile::NamedTempFile::new().unwrap();
-        write_wav(file.path(), Duration::from_secs(5), 0);
         let instance = GStreamerPipelineFactory::with_test_sink().create(config()).await.unwrap();
         instance
             .pipeline

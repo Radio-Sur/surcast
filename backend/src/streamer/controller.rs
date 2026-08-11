@@ -151,7 +151,7 @@ impl StationController {
                 message,
             } => {
                 tracing::error!(station_id = %self.station_id, generation, output_epoch, %message, "GStreamer output disconnected");
-                if generation == self.generation && output_epoch == self.output_epoch && self.state != PipelineState::Stopped {
+                if generation == self.generation && output_epoch == self.output_epoch && self.state == PipelineState::Playing {
                     return Some(Ok(self.reconnect()));
                 }
             }
@@ -236,7 +236,7 @@ impl StationController {
         PipelineOperation::Reconnect(self.target.clone())
     }
     pub(crate) fn reconnect_if_current(&self, generation: u64, output_epoch: u64) -> Option<PipelineOperation> {
-        (generation == self.generation && output_epoch == self.output_epoch && self.state != PipelineState::Stopped)
+        (generation == self.generation && output_epoch == self.output_epoch && self.state == PipelineState::Playing)
             .then(|| self.reconnect())
     }
 
@@ -491,6 +491,8 @@ mod tests {
             Some(PipelineOperation::Reconnect(_))
         ));
         assert!(controller.reconnect_if_current(0, 3).is_none());
+        controller.state = PipelineState::Paused;
+        assert!(controller.reconnect_if_current(1, 3).is_none());
         controller.stop();
         assert!(controller.reconnect_if_current(1, 3).is_none());
     }
