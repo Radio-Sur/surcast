@@ -4,19 +4,33 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use super::pipeline::TrackKey;
-use super::{queue_repository::QueueRepository, queue_state::QueueState, SongInfo};
+use super::{
+    queue_repository::QueueRepository,
+    queue_state::{QueueAnchor, QueueCursor, QueueState},
+    SongInfo,
+};
 
 
 pub(crate) struct QueueManager {
     repository: QueueRepository,
     state: Mutex<QueueState>,
+    dirty_cursor: Mutex<Option<(Option<Uuid>, QueueCursor)>>,
 }
 
 impl QueueManager {
+    #[cfg(test)]
     pub fn new(db: PgPool, station_id: Uuid, upload_dir: String, songs: Vec<SongInfo>, initial_idx: usize) -> Self {
         Self {
             repository: QueueRepository::new(db, station_id, upload_dir),
             state: Mutex::new(QueueState::new(songs, initial_idx)),
+            dirty_cursor: Mutex::new(None),
+        }
+    }
+    pub fn new_with_cursor(db: PgPool, station_id: Uuid, upload_dir: String, songs: Vec<SongInfo>, cursor: QueueCursor) -> Self {
+        Self {
+            repository: QueueRepository::new(db, station_id, upload_dir),
+            state: Mutex::new(QueueState::from_cursor(songs, cursor)),
+            dirty_cursor: Mutex::new(None),
         }
     }
 
@@ -24,16 +38,40 @@ impl QueueManager {
         self.repository.station_id()
     }
 
+    async fn retry_dirty_cursor(&self) {
+        let dirty = self.dirty_cursor.lock().unwrap_or_else(|error| error.into_inner()).clone();
+        let Some((previous_current_queue_item_id, cursor)) = dirty else {
+            return;
+        };
+        if self
+            .repository
+            .persist_cursor_if_current(previous_current_queue_item_id, &cursor)
+            .await
+            .is_ok()
+        {
+            let mut dirty = self.dirty_cursor.lock().unwrap_or_else(|error| error.into_inner());
+            if dirty.as_ref() == Some(&(previous_current_queue_item_id, cursor)) {
+                *dirty = None;
+            }
+        }
+    }
+
     pub async fn reload_from_db(&self) {
+        self.retry_dirty_cursor().await;
         let (songs, current_index) = self.repository.load().await;
+        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        if state.current_song_info().is_none() {
+            *state = QueueState::new(songs, current_index);
+        } else {
+            state.replace(songs, true);
+        }
+    }
+
+    pub fn reload_songs(&self, songs: Vec<SongInfo>, retain_missing_current: bool) {
         self.state
             .lock()
             .unwrap_or_else(|error| error.into_inner())
-            .replace_with_current_index(songs, current_index);
-    }
-
-    pub fn reload_songs(&self, songs: Vec<SongInfo>) {
-        self.state.lock().unwrap_or_else(|error| error.into_inner()).replace(songs);
+            .replace(songs, retain_missing_current);
     }
 
     pub async fn trim_played_items(&self) {
@@ -52,10 +90,6 @@ impl QueueManager {
         self.state.lock().unwrap_or_else(|error| error.into_inner()).song_count()
     }
 
-    pub fn song_info(&self, index: usize) -> Option<SongInfo> {
-        self.state.lock().unwrap_or_else(|error| error.into_inner()).song_info(index)
-    }
-
     pub fn current_song_info(&self) -> Option<SongInfo> {
         self.state.lock().unwrap_or_else(|error| error.into_inner()).current_song_info()
     }
@@ -67,14 +101,28 @@ impl QueueManager {
     pub fn successor_after(&self, key: &TrackKey) -> Option<SongInfo> {
         self.state.lock().unwrap_or_else(|error| error.into_inner()).successor_after(key)
     }
+    pub(crate) fn anchor_after_current(&self) -> QueueAnchor {
+        self.state.lock().unwrap_or_else(|error| error.into_inner()).anchor_after_current()
+    }
 
-    pub async fn commit_current(&self, key: &TrackKey) -> Option<TrackKey> {
-        let (position, upcoming) = {
+    pub async fn commit_current(&self, key: &TrackKey, anchor: QueueAnchor) -> Option<TrackKey> {
+        let (previous_current_queue_item_id, cursor, upcoming) = {
             let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
-            state.commit_current(key);
-            (state.current_position(key.position), state.upcoming_after(key))
+            let previous_current_queue_item_id = state.current_song_info().map(|song| song.queue_item_id);
+            let song = state.song_by_queue_item_id(key.queue_item_id)?;
+            state.commit_current(song, anchor);
+            (previous_current_queue_item_id, state.persistence_cursor(), state.upcoming())
         };
-        self.repository.persist_current(position).await;
+        if let Err(error) = self
+            .repository
+            .persist_cursor_if_current(previous_current_queue_item_id, &cursor)
+            .await
+        {
+            tracing::warn!(station_id = %self.station_id(), %error, "deferring queue cursor persistence");
+            *self.dirty_cursor.lock().unwrap_or_else(|error| error.into_inner()) = Some((previous_current_queue_item_id, cursor));
+            return self.successor_after(key).map(track_key);
+        }
+        *self.dirty_cursor.lock().unwrap_or_else(|error| error.into_inner()) = None;
         self.repository.trim_played_items().await;
         self.repository.refill(upcoming).await;
         self.reload_from_db().await;
@@ -86,7 +134,6 @@ fn track_key(song: SongInfo) -> TrackKey {
     TrackKey {
         queue_item_id: song.queue_item_id,
         song_id: song.song_id,
-        position: song.position,
     }
 }
 
@@ -128,7 +175,6 @@ mod tests {
             .successor_after(&TrackKey {
                 queue_item_id: first_item,
                 song_id: repeated_song,
-                position: 1,
             })
             .unwrap();
 
@@ -140,14 +186,8 @@ mod tests {
         let second = song(Uuid::new_v4(), Uuid::new_v4(), 2);
         let mut state = QueueState::new(vec![first, second.clone()], 0);
 
-        assert_eq!(
-            state.commit_current(&TrackKey {
-                queue_item_id: second.queue_item_id,
-                song_id: second.song_id,
-                position: second.position,
-            }),
-            None
-        );
+        let anchor = state.anchor_after_current();
+        assert!(state.commit_current(second.clone(), anchor).is_none());
         assert_eq!(state.current_song_info().unwrap().queue_item_id, second.queue_item_id);
     }
 }

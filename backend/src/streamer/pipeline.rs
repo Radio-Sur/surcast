@@ -10,7 +10,6 @@ use uuid::Uuid;
 pub(crate) struct TrackKey {
     pub queue_item_id: Uuid,
     pub song_id: Uuid,
-    pub position: i32,
 }
 
 #[derive(Clone, Debug)]
@@ -118,11 +117,43 @@ pub(crate) enum TransitionPlan {
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct PairPlan {
-    pub generation: u64,
-    pub current: PipelineTrack,
-    pub next: Option<PipelineTrack>,
+pub(crate) enum ReplaceMode {
+    InitialReplaceFromStopped,
+    ActiveReplace {
+        expected_generation: u64,
+        expected_current: TrackKey,
+    },
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct PlannedNext {
+    pub track: PipelineTrack,
     pub transition: TransitionPlan,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct PairPlan {
+    pub mode: ReplaceMode,
+    pub generation: u64,
+    pub output_epoch: u64,
+    pub current: PipelineTrack,
+    pub next: Option<PlannedNext>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) enum RollingChange {
+    Attach(PlannedNext),
+    ReplaceNext {
+        expected_next: TrackKey,
+        replacement: Option<PlannedNext>,
+    },
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct RollingPlan {
+    pub generation: u64,
+    pub current: TrackKey,
+    pub change: RollingChange,
 }
 
 #[derive(Clone)]
@@ -208,10 +239,24 @@ pub(crate) struct PipelineSnapshot {
 
 #[derive(Clone, Debug)]
 pub(crate) enum PipelineEvent {
-    Handover { generation: u64, current: TrackKey },
-    CurrentEos { generation: u64, current: TrackKey },
-    DecodeFailed { generation: u64, track: TrackKey, message: String },
-    SinkDisconnected { generation: u64, message: String },
+    Handover {
+        generation: u64,
+        current: TrackKey,
+    },
+    CurrentEos {
+        generation: u64,
+        current: TrackKey,
+    },
+    DecodeFailed {
+        generation: u64,
+        track: TrackKey,
+        message: String,
+    },
+    SinkDisconnected {
+        generation: u64,
+        output_epoch: u64,
+        message: String,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -242,6 +287,7 @@ impl std::error::Error for PipelineError {}
 #[async_trait]
 pub(crate) trait PlaybackPipeline: Send + Sync {
     async fn replace(&self, plan: PairPlan) -> Result<(), PipelineError>;
+    async fn roll(&self, plan: RollingPlan) -> Result<(), PipelineError>;
     async fn apply_output(&self, output: OutputConfig) -> Result<(), PipelineError>;
     async fn set_playing(&self, playing: bool) -> Result<(), PipelineError>;
     async fn reconnect(&self, target: IcecastTarget) -> Result<(), PipelineError>;
@@ -373,7 +419,6 @@ mod tests {
             key: TrackKey {
                 queue_item_id: Uuid::nil(),
                 song_id: Uuid::nil(),
-                position: 0,
             },
             path: PathBuf::from("/tmp/test.wav"),
             cue_in: Duration::from_secs(cue_in),

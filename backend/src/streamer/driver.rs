@@ -2,10 +2,11 @@ use std::sync::Arc;
 
 use tokio::sync::{mpsc, oneshot};
 
-use super::pipeline::{IcecastTarget, OutputConfig, PairPlan, PipelineError, PipelineSnapshot, PlaybackPipeline};
+use super::pipeline::{IcecastTarget, OutputConfig, PairPlan, PipelineError, PipelineSnapshot, PlaybackPipeline, RollingPlan};
 
 pub(crate) enum PipelineOperation {
     Replace(Box<PairPlan>),
+    Roll(Box<RollingPlan>),
     ApplyOutput(OutputConfig),
     SetPlaying(bool),
     Stop,
@@ -54,6 +55,10 @@ async fn execute(pipeline: &dyn PlaybackPipeline, operation: PipelineOperation) 
     match operation {
         PipelineOperation::Replace(plan) => {
             pipeline.replace(*plan).await?;
+            Ok(PipelineOperationResult::Unit)
+        }
+        PipelineOperation::Roll(plan) => {
+            pipeline.roll(*plan).await?;
             Ok(PipelineOperationResult::Unit)
         }
         PipelineOperation::ApplyOutput(output) => {

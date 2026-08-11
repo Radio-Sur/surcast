@@ -14,7 +14,8 @@ use tokio::sync::mpsc;
 
 use super::pipeline::{
     resolve_transition, IcecastTarget, OutputConfig, PairPlan, PipelineConfig, PipelineError, PipelineEvent, PipelineInstance,
-    PipelineSnapshot, PipelineState, PlaybackPipeline, PlaybackPipelineFactory, TrackKey,
+    PipelineSnapshot, PipelineState, PlaybackPipeline, PlaybackPipelineFactory, ReplaceMode, RollingChange, RollingPlan, TrackKey,
+    TransitionPlan,
 };
 use branch::Branch;
 
@@ -41,10 +42,12 @@ impl GStreamerPipelineFactory {
 #[derive(Clone)]
 struct ActivePlan {
     generation: u64,
+    output_epoch: u64,
     current: TrackKey,
     next: Option<TrackKey>,
     handover_at: Option<gst::ClockTime>,
     started_at: Option<gst::ClockTime>,
+    current_epoch: gst::ClockTime,
     last_elapsed: gst::ClockTime,
     handed_over: bool,
 }
@@ -98,16 +101,20 @@ impl PlaybackPipeline for GStreamerPipeline {
     }
 
     async fn replace(&self, plan: PairPlan) -> Result<(), PipelineError> {
-        if self
-            .active
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .as_ref()
-            .is_some_and(|active| active.generation > plan.generation)
         {
-            return Err(PipelineError::StalePlan);
+            let active = self.active.lock().unwrap_or_else(|error| error.into_inner());
+            match (&plan.mode, active.as_ref()) {
+                (ReplaceMode::InitialReplaceFromStopped, None) => {}
+                (
+                    ReplaceMode::ActiveReplace {
+                        expected_generation,
+                        expected_current,
+                    },
+                    Some(active),
+                ) if active.generation == *expected_generation && active.current == *expected_current => {}
+                _ => return Err(PipelineError::StalePlan),
+            }
         }
-
         if self.snapshot.lock().unwrap_or_else(|error| error.into_inner()).state != PipelineState::Stopped {
             self.set_state(PipelineState::Paused)?;
             self.pipeline.send_event(gst::event::FlushStart::new());
@@ -131,15 +138,17 @@ impl PlaybackPipeline for GStreamerPipeline {
         let current_duration = branch::wait_duration(&self.branches, 0).await;
 
         let mut scheduled_next = None;
+        let mut transition_plan = TransitionPlan::Cut;
         if let (Some(next), Some(_)) = (plan.next.as_ref(), current_duration) {
-            let next_branch = branch::attach(&self.pipeline, &self.mixer, self.events.clone(), next, plan.generation, 0.0)?;
+            let next_branch = branch::attach(&self.pipeline, &self.mixer, self.events.clone(), &next.track, plan.generation, 0.0)?;
             next_branch
                 .source
                 .state(gst::ClockTime::from_seconds(5))
                 .0
                 .map_err(|error| PipelineError::Pipeline(error.to_string()))?;
             self.branches.lock().unwrap_or_else(|error| error.into_inner()).push(next_branch);
-            scheduled_next = Some(next.key.clone());
+            scheduled_next = Some(next.track.key.clone());
+            transition_plan = next.transition;
         }
         let next_duration = if scheduled_next.is_some() {
             branch::wait_duration(&self.branches, 1).await
@@ -150,23 +159,83 @@ impl PlaybackPipeline for GStreamerPipeline {
             let branches = self.branches.lock().unwrap_or_else(|error| error.into_inner());
             (branch::seekable(&branches[0]), branches.get(1).is_some_and(branch::seekable))
         };
-        let transition = resolve_transition(plan.transition, current_duration, next_duration, current_seekable, next_seekable);
+        let transition = resolve_transition(transition_plan, current_duration, next_duration, current_seekable, next_seekable);
 
         let handover_at = {
             let branches = self.branches.lock().unwrap_or_else(|error| error.into_inner());
-            transition::apply(transition, &branches, current_duration)?
+            transition::apply_initial(transition, &branches, current_duration)?.handover
         };
 
         *self.active.lock().unwrap_or_else(|error| error.into_inner()) = Some(ActivePlan {
             generation: plan.generation,
+            output_epoch: plan.output_epoch,
             current: plan.current.key,
             next: scheduled_next,
             handover_at,
             handed_over: false,
             started_at: None,
+            current_epoch: gst::ClockTime::ZERO,
             last_elapsed: gst::ClockTime::ZERO,
         });
         self.set_state(PipelineState::Playing)
+    }
+
+    async fn roll(&self, plan: RollingPlan) -> Result<(), PipelineError> {
+        let (attaching, expected_next, replacement) = match plan.change {
+            RollingChange::Attach(next) => (true, None, Some(next)),
+            RollingChange::ReplaceNext {
+                expected_next,
+                replacement,
+            } => (false, Some(expected_next), replacement),
+        };
+        {
+            let active = self.active.lock().unwrap_or_else(|error| error.into_inner());
+            let Some(active) = active.as_ref() else {
+                return Err(PipelineError::StalePlan);
+            };
+            if active.generation != plan.generation
+                || active.current != plan.current
+                || expected_next.as_ref().is_some_and(|key| active.next.as_ref() != Some(key))
+                || expected_next.is_none() && active.next.is_some()
+            {
+                return Err(PipelineError::StalePlan);
+            }
+        }
+
+        {
+            let mut branches = self.branches.lock().unwrap_or_else(|error| error.into_inner());
+            if attaching {
+                branch::remove_first(&self.pipeline, &self.mixer, &mut branches);
+            } else if expected_next.is_some() {
+                branch::truncate(&self.pipeline, &self.mixer, &mut branches, 1);
+            }
+        }
+        let (next_key, handover_at) = if let Some(next) = replacement {
+            let branch = branch::attach(&self.pipeline, &self.mixer, self.events.clone(), &next.track, plan.generation, 0.0)?;
+            self.branches.lock().unwrap_or_else(|error| error.into_inner()).push(branch);
+            let current_duration = branch::wait_duration(&self.branches, 0).await;
+            let next_duration = branch::wait_duration(&self.branches, 1).await;
+            let branches = self.branches.lock().unwrap_or_else(|error| error.into_inner());
+            let transition = resolve_transition(
+                next.transition,
+                current_duration,
+                next_duration,
+                branch::seekable(&branches[0]),
+                branch::seekable(&branches[1]),
+            );
+            let handover_at = transition::apply_rolling(transition, &branches, current_duration)?.handover;
+            (Some(next.track.key), handover_at)
+        } else {
+            (None, None)
+        };
+        let mut active = self.active.lock().unwrap_or_else(|error| error.into_inner());
+        let Some(active) = active.as_mut() else {
+            return Err(PipelineError::StalePlan);
+        };
+        active.next = next_key;
+        active.handover_at = handover_at;
+        active.handed_over = false;
+        Ok(())
     }
 
     async fn set_playing(&self, playing: bool) -> Result<(), PipelineError> {
@@ -184,55 +253,47 @@ impl PlaybackPipeline for GStreamerPipeline {
         }
 
         self.set_state(PipelineState::Paused)?;
-        {
-            let mut active = self.active.lock().unwrap_or_else(|error| error.into_inner());
-            if let Some(plan) = active.as_mut() {
-                plan.handover_at = plan.handover_at.map(|handover_at| handover_at.saturating_sub(plan.last_elapsed));
-                plan.started_at = None;
-                plan.last_elapsed = gst::ClockTime::ZERO;
-            }
-        }
-        let position = self.pipeline.query_position::<gst::ClockTime>().unwrap_or(gst::ClockTime::ZERO);
-        let transition = |target| -> Result<(), PipelineError> {
-            self.pipeline
-                .set_state(target)
-                .map_err(|error| PipelineError::Pipeline(error.to_string()))?;
-            let (result, current, pending) = self.pipeline.state(gst::ClockTime::from_seconds(5));
-            result.map_err(|error| PipelineError::Pipeline(error.to_string()))?;
-            if current != target {
-                return Err(PipelineError::Pipeline(format!(
-                    "reconnect transition to {target:?} stalled at {current:?} with {pending:?} pending"
-                )));
-            }
-            Ok(())
-        };
-
-        transition(gst::State::Ready)?;
+        self.pipeline
+            .set_state(gst::State::Ready)
+            .map_err(|error| PipelineError::Pipeline(error.to_string()))?;
         let old_sink = self.sink.lock().unwrap_or_else(|error| error.into_inner()).clone();
+        let candidate = sink::build(self.sink_factory, &target)?;
+        self.pipeline
+            .add(&candidate)
+            .map_err(|error| PipelineError::Pipeline(error.to_string()))?;
+
         self.clock_gate.unlink(&old_sink);
+        if let Err(error) = self.clock_gate.link(&candidate) {
+            let _ = self.pipeline.remove(&candidate);
+            let _ = self.clock_gate.link(&old_sink);
+            return Err(PipelineError::Pipeline(error.to_string()));
+        }
+
+        self.pipeline
+            .set_state(gst::State::Paused)
+            .map_err(|error| PipelineError::Pipeline(error.to_string()))?;
+        let (result, current, pending) = self.pipeline.state(gst::ClockTime::from_seconds(5));
+        result.map_err(|error| PipelineError::Pipeline(error.to_string()))?;
+        if current != gst::State::Paused {
+            self.clock_gate.unlink(&candidate);
+            let _ = candidate.set_state(gst::State::Null);
+            let _ = self.pipeline.remove(&candidate);
+            if self.clock_gate.link(&old_sink).is_err() {
+                let _ = self.set_state(PipelineState::Stopped);
+                *self.active.lock().unwrap_or_else(|poison| poison.into_inner()) = None;
+                return Err(PipelineError::Pipeline("sink replacement and rollback failed".into()));
+            }
+            return Err(PipelineError::Pipeline(format!(
+                "reconnect transition to Paused stalled at {current:?} with {pending:?} pending"
+            )));
+        }
         old_sink
             .set_state(gst::State::Null)
             .map_err(|error| PipelineError::Pipeline(error.to_string()))?;
         self.pipeline
             .remove(&old_sink)
             .map_err(|error| PipelineError::Pipeline(error.to_string()))?;
-
-        let new_sink = sink::build(self.sink_factory, &target)?;
-        self.pipeline
-            .add(&new_sink)
-            .map_err(|error| PipelineError::Pipeline(error.to_string()))?;
-        self.clock_gate
-            .link(&new_sink)
-            .map_err(|error| PipelineError::Pipeline(error.to_string()))?;
-        *self.sink.lock().unwrap_or_else(|error| error.into_inner()) = new_sink;
-        transition(gst::State::Paused)?;
-        {
-            let branches = self.branches.lock().unwrap_or_else(|error| error.into_inner());
-            if let Some(current) = branches.first() {
-                branch::seek(current, Duration::from_nanos(position.nseconds()), None)?;
-            }
-        }
-
+        *self.sink.lock().unwrap_or_else(|error| error.into_inner()) = candidate;
         if previous_state == PipelineState::Playing {
             self.set_state(PipelineState::Playing)?;
         }
@@ -242,8 +303,8 @@ impl PlaybackPipeline for GStreamerPipeline {
     async fn snapshot(&self) -> Result<PipelineSnapshot, PipelineError> {
         let mut snapshot = self.snapshot.lock().unwrap_or_else(|error| error.into_inner());
         if snapshot.state != PipelineState::Stopped {
-            if let Some(position) = self.pipeline.query_position::<gst::ClockTime>() {
-                snapshot.elapsed = Duration::from_nanos(position.nseconds());
+            if let Some(active) = self.active.lock().unwrap_or_else(|error| error.into_inner()).as_ref() {
+                snapshot.elapsed = Duration::from_nanos(active.last_elapsed.saturating_sub(active.current_epoch).nseconds());
             }
         }
         Ok(snapshot.clone())
@@ -296,7 +357,7 @@ impl PlaybackPipelineFactory for GStreamerPipelineFactory {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::streamer::pipeline::{IcecastTarget, OutputConfig, PipelineTrack, TransitionPlan};
+    use crate::streamer::pipeline::{IcecastTarget, OutputConfig, PipelineTrack, PlannedNext, TransitionPlan};
 
     fn config() -> PipelineConfig {
         PipelineConfig {
@@ -332,18 +393,27 @@ mod tests {
         std::fs::write(file, wav).unwrap();
     }
 
-    fn track(path: &std::path::Path, position: i32) -> PipelineTrack {
+    fn track(path: &std::path::Path, _position: i32) -> PipelineTrack {
         PipelineTrack {
             key: TrackKey {
                 queue_item_id: uuid::Uuid::new_v4(),
                 song_id: uuid::Uuid::new_v4(),
-                position,
             },
             path: path.to_path_buf(),
             cue_in: Duration::ZERO,
             cue_out: Duration::ZERO,
             cross_start_next: Duration::ZERO,
             analyzed: false,
+        }
+    }
+
+    fn initial_plan(generation: u64, current: PipelineTrack, next: Option<PipelineTrack>, transition: TransitionPlan) -> PairPlan {
+        PairPlan {
+            mode: ReplaceMode::InitialReplaceFromStopped,
+            generation,
+            output_epoch: 1,
+            current,
+            next: next.map(|track| PlannedNext { track, transition }),
         }
     }
 
@@ -358,7 +428,7 @@ mod tests {
 
     #[tokio::test]
     async fn decodes_a_wav_branch_without_a_second_playback_backend() {
-        use crate::streamer::pipeline::{PairPlan, PipelineTrack, TrackKey, TransitionPlan};
+        use crate::streamer::pipeline::{PipelineTrack, TrackKey};
         use tempfile::NamedTempFile;
         use uuid::Uuid;
 
@@ -382,12 +452,11 @@ mod tests {
         let key = TrackKey {
             queue_item_id: Uuid::new_v4(),
             song_id: Uuid::new_v4(),
-            position: 0,
         };
         pipeline
-            .replace(PairPlan {
-                generation: 1,
-                current: PipelineTrack {
+            .replace(initial_plan(
+                1,
+                PipelineTrack {
                     key: key.clone(),
                     path: file.path().to_path_buf(),
                     cue_in: Duration::ZERO,
@@ -395,9 +464,9 @@ mod tests {
                     cross_start_next: Duration::ZERO,
                     analyzed: false,
                 },
-                next: None,
-                transition: TransitionPlan::Cut,
-            })
+                None,
+                TransitionPlan::Cut,
+            ))
             .await
             .unwrap();
         assert_eq!(pipeline.snapshot().await.unwrap().state, PipelineState::Playing);
@@ -421,14 +490,14 @@ mod tests {
         let started = std::time::Instant::now();
 
         pipeline
-            .replace(PairPlan {
-                generation: 7,
+            .replace(initial_plan(
+                7,
                 current,
-                next: Some(next),
-                transition: TransitionPlan::NaiveCrossfade {
+                Some(next),
+                TransitionPlan::NaiveCrossfade {
                     requested_fade: Duration::from_millis(400),
                 },
-            })
+            ))
             .await
             .unwrap();
 
@@ -454,16 +523,23 @@ mod tests {
         let third = track(third_file.path(), 2);
         let third_key = third.key.clone();
         let PipelineInstance { pipeline, mut events } = GStreamerPipelineFactory::with_test_sink().create(config()).await.unwrap();
-        let plan = |generation, current, next| PairPlan {
+        let plan = |generation, mode, current, next| PairPlan {
+            mode,
             generation,
+            output_epoch: 1,
             current,
-            next: Some(next),
-            transition: TransitionPlan::NaiveCrossfade {
-                requested_fade: Duration::from_millis(400),
-            },
+            next: Some(PlannedNext {
+                track: next,
+                transition: TransitionPlan::NaiveCrossfade {
+                    requested_fade: Duration::from_millis(400),
+                },
+            }),
         };
 
-        pipeline.replace(plan(1, first, second.clone())).await.unwrap();
+        pipeline
+            .replace(plan(1, ReplaceMode::InitialReplaceFromStopped, first, second.clone()))
+            .await
+            .unwrap();
         tokio::time::timeout(Duration::from_secs(3), async {
             while !matches!(events.recv().await, Some(PipelineEvent::Handover { generation: 1, .. })) {}
         })
@@ -471,7 +547,18 @@ mod tests {
         .unwrap();
 
         let started = std::time::Instant::now();
-        pipeline.replace(plan(2, second, third)).await.unwrap();
+        pipeline
+            .replace(plan(
+                2,
+                ReplaceMode::ActiveReplace {
+                    expected_generation: 1,
+                    expected_current: second.key.clone(),
+                },
+                second,
+                third,
+            ))
+            .await
+            .unwrap();
         tokio::time::timeout(Duration::from_secs(3), async {
             while !matches!(
                 events.recv().await,
@@ -483,6 +570,7 @@ mod tests {
         })
         .await
         .unwrap();
+        assert!(pipeline.snapshot().await.unwrap().elapsed < Duration::from_millis(250));
         assert!(started.elapsed() >= Duration::from_millis(500));
         pipeline.stop().await.unwrap();
     }
@@ -500,11 +588,11 @@ mod tests {
         let started = std::time::Instant::now();
 
         pipeline
-            .replace(PairPlan {
-                generation: 8,
+            .replace(initial_plan(
+                8,
                 current,
-                next: Some(next),
-                transition: TransitionPlan::AutoCueCrossfade {
+                Some(next),
+                TransitionPlan::AutoCueCrossfade {
                     current_start: Duration::from_millis(200),
                     fade_start: Duration::from_millis(800),
                     current_end: Duration::from_millis(1_200),
@@ -512,7 +600,7 @@ mod tests {
                     duration: Duration::from_millis(400),
                     fallback_fade: Duration::from_millis(300),
                 },
-            })
+            ))
             .await
             .unwrap();
 
@@ -526,8 +614,99 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn rolling_attach_promotes_handover_and_schedules_the_following_track() {
+        let first_file = tempfile::NamedTempFile::new().unwrap();
+        let second_file = tempfile::NamedTempFile::new().unwrap();
+        let third_file = tempfile::NamedTempFile::new().unwrap();
+        write_wav(first_file.path(), Duration::from_secs(1), 8_000);
+        write_wav(second_file.path(), Duration::from_secs(1), -8_000);
+        write_wav(third_file.path(), Duration::from_secs(1), 4_000);
+        let first = track(first_file.path(), 0);
+        let second = track(second_file.path(), 1);
+        let third = track(third_file.path(), 2);
+        let second_key = second.key.clone();
+        let third_key = third.key.clone();
+        let PipelineInstance { pipeline, mut events } = GStreamerPipelineFactory::with_test_sink().create(config()).await.unwrap();
+
+        pipeline
+            .replace(initial_plan(
+                1,
+                first,
+                Some(second),
+                TransitionPlan::NaiveCrossfade {
+                    requested_fade: Duration::from_millis(400),
+                },
+            ))
+            .await
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(3), async {
+            while !matches!(events.recv().await, Some(PipelineEvent::Handover { generation: 1, ref current }) if current == &second_key) {}
+        })
+        .await
+        .unwrap();
+
+        pipeline
+            .roll(RollingPlan {
+                generation: 1,
+                current: second_key,
+                change: RollingChange::Attach(PlannedNext {
+                    track: third,
+                    transition: TransitionPlan::NaiveCrossfade {
+                        requested_fade: Duration::from_millis(400),
+                    },
+                }),
+            })
+            .await
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(3), async {
+            while !matches!(events.recv().await, Some(PipelineEvent::Handover { generation: 1, ref current }) if current == &third_key) {}
+        })
+        .await
+        .unwrap();
+        pipeline.stop().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn rolling_replace_next_rejects_a_stale_terminal_key() {
+        let first_file = tempfile::NamedTempFile::new().unwrap();
+        let second_file = tempfile::NamedTempFile::new().unwrap();
+        let replacement_file = tempfile::NamedTempFile::new().unwrap();
+        write_wav(first_file.path(), Duration::from_secs(1), 8_000);
+        write_wav(second_file.path(), Duration::from_secs(1), -8_000);
+        write_wav(replacement_file.path(), Duration::from_secs(1), 4_000);
+        let first = track(first_file.path(), 0);
+        let second = track(second_file.path(), 1);
+        let replacement = track(replacement_file.path(), 2);
+        let first_key = first.key.clone();
+        let PipelineInstance { pipeline, .. } = GStreamerPipelineFactory::with_test_sink().create(config()).await.unwrap();
+
+        pipeline
+            .replace(initial_plan(1, first, Some(second), TransitionPlan::Cut))
+            .await
+            .unwrap();
+        let result = pipeline
+            .roll(RollingPlan {
+                generation: 1,
+                current: first_key,
+                change: RollingChange::ReplaceNext {
+                    expected_next: TrackKey {
+                        queue_item_id: uuid::Uuid::new_v4(),
+                        song_id: uuid::Uuid::new_v4(),
+                    },
+                    replacement: Some(PlannedNext {
+                        track: replacement,
+                        transition: TransitionPlan::Cut,
+                    }),
+                },
+            })
+            .await;
+        assert!(matches!(result, Err(PipelineError::StalePlan)));
+        pipeline.stop().await.unwrap();
+    }
+
+    #[tokio::test]
     async fn replacing_a_branch_releases_its_mixer_request_pad() {
-        use crate::streamer::pipeline::{PairPlan, PipelineTrack, TrackKey, TransitionPlan};
+        use crate::streamer::pipeline::{PipelineTrack, TrackKey};
         use tempfile::NamedTempFile;
         use uuid::Uuid;
 
@@ -535,13 +714,14 @@ mod tests {
         let wav = b"RIFF$\0\0\0WAVEfmt \x10\0\0\0\x01\0\x02\0\x44\xAC\0\0\x10\xB1\x02\0\x04\0\x10\0data\0\0\0\0";
         std::fs::write(file.path(), wav).unwrap();
         let instance = GStreamerPipelineFactory::with_test_sink().create(config()).await.unwrap();
-        let plan = |generation| PairPlan {
+        let plan = |generation, mode| PairPlan {
+            mode,
             generation,
+            output_epoch: 1,
             current: PipelineTrack {
                 key: TrackKey {
                     queue_item_id: Uuid::new_v4(),
                     song_id: Uuid::new_v4(),
-                    position: 0,
                 },
                 path: file.path().to_path_buf(),
                 cue_in: Duration::ZERO,
@@ -550,11 +730,64 @@ mod tests {
                 analyzed: false,
             },
             next: None,
-            transition: TransitionPlan::Cut,
         };
-        instance.pipeline.replace(plan(1)).await.unwrap();
-        instance.pipeline.replace(plan(2)).await.unwrap();
+        let first = plan(1, ReplaceMode::InitialReplaceFromStopped);
+        let first_key = first.current.key.clone();
+        instance.pipeline.replace(first).await.unwrap();
+        instance
+            .pipeline
+            .replace(plan(
+                2,
+                ReplaceMode::ActiveReplace {
+                    expected_generation: 1,
+                    expected_current: first_key,
+                },
+            ))
+            .await
+            .unwrap();
         instance.pipeline.stop().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn rolling_replace_next_swaps_only_the_terminal_branch() {
+        let first_file = tempfile::NamedTempFile::new().unwrap();
+        let second_file = tempfile::NamedTempFile::new().unwrap();
+        let replacement_file = tempfile::NamedTempFile::new().unwrap();
+        write_wav(first_file.path(), Duration::from_secs(1), 8_000);
+        write_wav(second_file.path(), Duration::from_secs(1), -8_000);
+        write_wav(replacement_file.path(), Duration::from_secs(1), 4_000);
+        let first = track(first_file.path(), 0);
+        let second = track(second_file.path(), 1);
+        let replacement = track(replacement_file.path(), 2);
+        let first_key = first.key.clone();
+        let second_key = second.key.clone();
+        let replacement_key = replacement.key.clone();
+        let PipelineInstance { pipeline, mut events } = GStreamerPipelineFactory::with_test_sink().create(config()).await.unwrap();
+
+        pipeline
+            .replace(initial_plan(1, first, Some(second), TransitionPlan::Cut))
+            .await
+            .unwrap();
+        pipeline
+            .roll(RollingPlan {
+                generation: 1,
+                current: first_key,
+                change: RollingChange::ReplaceNext {
+                    expected_next: second_key,
+                    replacement: Some(PlannedNext {
+                        track: replacement,
+                        transition: TransitionPlan::Cut,
+                    }),
+                },
+            })
+            .await
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(3), async {
+            while !matches!(events.recv().await, Some(PipelineEvent::Handover { generation: 1, ref current }) if current == &replacement_key) {}
+        })
+        .await
+        .unwrap();
+        pipeline.stop().await.unwrap();
     }
 
     #[test]

@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use tokio::sync::{mpsc, oneshot};
 
 use super::controller::StationController;
@@ -10,6 +12,11 @@ enum StationCommand {
     Shutdown(oneshot::Sender<Result<(), PipelineError>>),
     Skip(oneshot::Sender<Result<(), PipelineError>>),
     Reconnect(oneshot::Sender<Result<(), PipelineError>>),
+    RetryReconnect {
+        generation: u64,
+        output_epoch: u64,
+        attempt: u32,
+    },
     Reload {
         songs: Vec<SongInfo>,
         response: oneshot::Sender<Result<(), PipelineError>>,
@@ -31,16 +38,27 @@ pub(crate) struct StationRuntime {
 impl StationRuntime {
     pub(crate) fn spawn(mut controller: StationController, mut events: mpsc::UnboundedReceiver<PipelineEvent>) -> Self {
         let (commands, mut receiver) = mpsc::channel::<StationCommand>(32);
+        let retries = commands.clone();
         tokio::spawn(async move {
             loop {
                 tokio::select! {
                     command = receiver.recv() => {
                         let Some(command) = command else { break };
-                        if !command.run(&mut controller).await {
+                        if !command.run(&mut controller, retries.clone()).await {
                             break;
                         }
                     },
                     event = events.recv() => match event {
+                        Some(PipelineEvent::SinkDisconnected { generation, output_epoch, message }) => {
+                            match controller.handle_event(PipelineEvent::SinkDisconnected { generation, output_epoch, message }).await {
+                                Some(Ok(super::driver::PipelineOperation::Reconnect(target))) => {
+                                    launch_reconnect(controller.driver(), target, retries.clone(), generation, output_epoch, 0);
+                                }
+                                Some(Ok(operation)) => launch(controller.driver(), operation, None),
+                                Some(Err(error)) => tracing::error!(error = %error, "failed to apply pipeline event"),
+                                None => {}
+                            }
+                        },
                         Some(event) => match controller.handle_event(event).await {
                             Some(Ok(operation)) => launch(controller.driver(), operation, None),
                             Some(Err(error)) => tracing::error!(error = %error, "failed to apply pipeline event"),
@@ -137,7 +155,7 @@ impl StationRuntime {
 }
 
 impl StationCommand {
-    async fn run(self, controller: &mut StationController) -> bool {
+    async fn run(self, controller: &mut StationController, retries: mpsc::Sender<StationCommand>) -> bool {
         match self {
             Self::Play(response) => launch(controller.driver(), controller.play(), Some(response)),
             Self::Pause(response) => launch(controller.driver(), controller.pause(), Some(response)),
@@ -151,6 +169,16 @@ impl StationCommand {
                 Err(error) => send(response, Err(error)),
             },
             Self::Reconnect(response) => launch(controller.driver(), controller.reconnect(), Some(response)),
+            Self::RetryReconnect {
+                generation,
+                output_epoch,
+                attempt,
+            } => {
+                if let Some(super::driver::PipelineOperation::Reconnect(target)) = controller.reconnect_if_current(generation, output_epoch)
+                {
+                    launch_reconnect(controller.driver(), target, retries, generation, output_epoch, attempt);
+                }
+            }
             Self::Reload { songs, response } => send(response, controller.reload(songs).await),
             Self::UpdateConfig { config, response } => match controller.update_config(config) {
                 Some(operation) => launch(controller.driver(), operation, Some(response)),
@@ -183,6 +211,30 @@ fn launch(
             send(response, result);
         } else if let Err(error) = result {
             tracing::error!(error = %error, "pipeline operation failed");
+        }
+    });
+}
+
+fn launch_reconnect(
+    driver: super::driver::PipelineDriver,
+    target: super::pipeline::IcecastTarget,
+    retries: mpsc::Sender<StationCommand>,
+    generation: u64,
+    output_epoch: u64,
+    attempt: u32,
+) {
+    tokio::spawn(async move {
+        if let Err(error) = driver.execute(super::driver::PipelineOperation::Reconnect(target)).await {
+            let delay = Duration::from_secs(1_u64 << attempt.min(5));
+            tracing::warn!(%error, generation, output_epoch, ?delay, "retrying GStreamer output reconnect");
+            tokio::time::sleep(delay).await;
+            let _ = retries
+                .send(StationCommand::RetryReconnect {
+                    generation,
+                    output_epoch,
+                    attempt: attempt.saturating_add(1),
+                })
+                .await;
         }
     });
 }

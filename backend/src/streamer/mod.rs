@@ -16,6 +16,7 @@ use uuid::Uuid;
 use self::controller::StationController;
 use self::pipeline::{PipelineError, PlaybackPipelineFactory, StationPlaybackConfig};
 use self::queue_manager::QueueManager;
+use self::queue_state::QueueCursor;
 use self::runtime::StationRuntime;
 
 #[derive(Clone, Serialize, Debug)]
@@ -76,16 +77,34 @@ impl StationStreamer {
     ) -> Result<Arc<Self>, PipelineError> {
         let (status_tx, _) = broadcast::channel(64);
         let (queue_tx, _) = broadcast::channel(64);
-        let saved_index = sqlx::query_scalar::<_, i32>("SELECT current_song_index FROM stations WHERE id = $1")
-            .bind(station_id)
-            .fetch_optional(&db)
-            .await
-            .ok()
-            .flatten()
-            .unwrap_or(0)
-            .max(0);
-        let initial_idx = songs.iter().position(|song| song.position >= saved_index).unwrap_or(songs.len());
-        let queue = Arc::new(QueueManager::new(db.clone(), station_id, upload_dir.into(), songs, initial_idx));
+        let cursor_row = sqlx::query_as::<_, (Option<Uuid>, Vec<Uuid>, i32, i16)>(
+            "SELECT current_queue_item_id, consumed_queue_item_ids, current_song_index, current_queue_cursor_format FROM stations WHERE id = $1",
+        )
+        .bind(station_id)
+        .fetch_optional(&db)
+        .await
+        .map_err(|error| PipelineError::Pipeline(error.to_string()))?;
+        let (current_queue_item_id, consumed_queue_item_ids, legacy_position) = match cursor_row {
+            Some((current, consumed, legacy, 1)) => (current, consumed, legacy),
+            Some((_, _, legacy, _)) => {
+                let current_index = songs.iter().position(|song| song.position >= legacy.max(0)).unwrap_or(songs.len());
+                let current = songs.get(current_index).map(|song| song.queue_item_id);
+                let consumed = songs.iter().take(current_index).map(|song| song.queue_item_id).collect();
+                (current, consumed, legacy.max(0))
+            }
+            None => (None, Vec::new(), 0),
+        };
+        let queue = Arc::new(QueueManager::new_with_cursor(
+            db.clone(),
+            station_id,
+            upload_dir.into(),
+            songs,
+            QueueCursor {
+                current_queue_item_id,
+                consumed_queue_item_ids,
+                legacy_position,
+            },
+        ));
         let (controller, events) = StationController::new(
             queue.clone(),
             db,
@@ -128,7 +147,7 @@ impl StationStreamer {
     pub(crate) async fn status(&self) -> StatusEvent {
         self.runtime.status().await.unwrap_or_else(|_| {
             let song_index = self.queue.current_song_index();
-            let song = self.queue.song_info(song_index);
+            let song = self.queue.current_song_info();
             StatusEvent::State {
                 playing: false,
                 song_index,

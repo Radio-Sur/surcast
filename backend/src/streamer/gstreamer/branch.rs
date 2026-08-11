@@ -25,6 +25,27 @@ pub(super) fn clear(pipeline: &gst::Pipeline, mixer: &gst::Element, branches: &m
         }
     }
 }
+pub(super) fn truncate(pipeline: &gst::Pipeline, mixer: &gst::Element, branches: &mut Vec<Branch>, len: usize) {
+    while branches.len() > len {
+        let branch = branches.pop().expect("length checked");
+        mixer.release_request_pad(&branch.mixer_pad);
+        for element in branch.elements {
+            let _ = element.set_state(gst::State::Null);
+            let _ = pipeline.remove(&element);
+        }
+    }
+}
+pub(super) fn remove_first(pipeline: &gst::Pipeline, mixer: &gst::Element, branches: &mut Vec<Branch>) {
+    if branches.is_empty() {
+        return;
+    }
+    let branch = branches.remove(0);
+    mixer.release_request_pad(&branch.mixer_pad);
+    for element in branch.elements {
+        let _ = element.set_state(gst::State::Null);
+        let _ = pipeline.remove(&element);
+    }
+}
 
 pub(super) fn attach(
     pipeline: &gst::Pipeline,

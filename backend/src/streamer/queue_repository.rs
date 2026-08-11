@@ -1,7 +1,7 @@
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use super::SongInfo;
+use super::{queue_state::QueueCursor, SongInfo};
 use crate::stations::repository;
 
 pub(crate) struct QueueRepository {
@@ -59,14 +59,33 @@ impl QueueRepository {
         (songs, current_index)
     }
 
-    pub(crate) async fn persist_current(&self, position: i32) {
-        if let Err(error) = sqlx::query("UPDATE stations SET current_song_index = $1 WHERE id = $2")
-            .bind(position)
-            .bind(self.station_id)
-            .execute(&self.db)
-            .await
-        {
-            tracing::warn!(station_id = %self.station_id, %error, "failed to persist current queue item");
+    pub(crate) async fn persist_cursor_if_current(
+        &self,
+        previous_current_queue_item_id: Option<Uuid>,
+        cursor: &QueueCursor,
+    ) -> Result<(), sqlx::Error> {
+        let result = sqlx::query(
+            "UPDATE stations
+             SET current_queue_item_id = $1,
+                 consumed_queue_item_ids = $2,
+                 current_song_index = $3,
+                 current_queue_cursor_format = 1
+             WHERE id = $4
+               AND (current_queue_cursor_format = 0
+                    OR current_queue_item_id IS NOT DISTINCT FROM $5
+                    OR current_queue_item_id IS NOT DISTINCT FROM $1)",
+        )
+        .bind(cursor.current_queue_item_id)
+        .bind(&cursor.consumed_queue_item_ids)
+        .bind(cursor.legacy_position)
+        .bind(self.station_id)
+        .bind(previous_current_queue_item_id)
+        .execute(&self.db)
+        .await?;
+        if result.rows_affected() == 1 {
+            Ok(())
+        } else {
+            Err(sqlx::Error::RowNotFound)
         }
     }
 

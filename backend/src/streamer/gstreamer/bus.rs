@@ -35,6 +35,7 @@ pub(super) fn install(
                     plan.handed_over = true;
                     plan.next.take().map(|next| {
                         plan.current = next.clone();
+                        plan.current_epoch = plan.last_elapsed;
                         (plan.generation, next)
                     })
                 } else {
@@ -72,6 +73,7 @@ pub(super) fn install(
             if let Some(active) = active.lock().unwrap_or_else(|error| error.into_inner()).as_ref() {
                 let _ = events.send(PipelineEvent::SinkDisconnected {
                     generation: active.generation,
+                    output_epoch: active.output_epoch,
                     message: error.error().to_string(),
                 });
             }

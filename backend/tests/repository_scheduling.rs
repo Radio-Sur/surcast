@@ -42,6 +42,35 @@ async fn make_station(db: &sqlx::PgPool, user_id: Uuid) -> Uuid {
 }
 
 #[tokio::test]
+async fn test_queue_cursor_expand_columns_persist_identity_and_format_marker() {
+    let db = common::setup_db().await;
+    let user_id = make_user(&db).await;
+    let station_id = make_station(&db, user_id).await;
+    let current = Uuid::new_v4();
+    let consumed = vec![Uuid::new_v4(), Uuid::new_v4()];
+
+    sqlx::query(
+        "UPDATE stations SET current_queue_item_id = $1, consumed_queue_item_ids = $2, current_queue_cursor_format = 1 WHERE id = $3",
+    )
+    .bind(current)
+    .bind(&consumed)
+    .bind(station_id)
+    .execute(&db)
+    .await
+    .unwrap();
+
+    let row: (Option<Uuid>, Vec<Uuid>, i16) =
+        sqlx::query_as("SELECT current_queue_item_id, consumed_queue_item_ids, current_queue_cursor_format FROM stations WHERE id = $1")
+            .bind(station_id)
+            .fetch_one(&db)
+            .await
+            .unwrap();
+    assert_eq!(row.0, Some(current));
+    assert_eq!(row.1, consumed);
+    assert_eq!(row.2, 1);
+}
+
+#[tokio::test]
 async fn test_schedule_crud() {
     let db = common::setup_db().await;
     let user_id = make_user(&db).await;
