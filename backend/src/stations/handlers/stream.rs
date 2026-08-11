@@ -64,7 +64,13 @@ async fn get_or_create_streamer(
     Ok(winner)
 }
 
-pub(crate) async fn sync_streamer_songs(db: &PgPool, streamers: &StreamersMap, upload_dir: &str, station_id: Uuid) -> Result<(), AppError> {
+pub(crate) async fn sync_streamer_songs(
+    db: &PgPool,
+    streamers: &StreamersMap,
+    upload_dir: &str,
+    station_id: Uuid,
+    align_next: bool,
+) -> Result<(), AppError> {
     {
         let map = streamers.lock().unwrap_or_else(|e| e.into_inner());
         if map.get(&station_id).is_none() {
@@ -96,7 +102,7 @@ pub(crate) async fn sync_streamer_songs(db: &PgPool, streamers: &StreamersMap, u
     };
     if let Some(streamer) = streamer {
         streamer
-            .reload_songs(songs)
+            .reload_songs(songs, align_next)
             .await
             .map_err(|_| AppError::Internal("Stream reload failed".into()))?;
     }

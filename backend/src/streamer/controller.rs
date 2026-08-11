@@ -122,6 +122,13 @@ impl StationController {
             } => {
                 let current = self.queue.current_song_info().map(|song| song.queue_item_id);
                 if generation == self.generation && current != Some(track.queue_item_id) {
+                    if !self.planned_next.as_ref().is_some_and(|(key, _)| key == &track) {
+                        // The staged next was replaced (queue realignment) and the
+                        // pipeline handed over to the old plan; the queue state must
+                        // not consume a track that will never play.
+                        tracing::warn!(station_id = %self.station_id, queue_item_id = %track.queue_item_id, "ignoring stale handover after queue realignment");
+                        return None;
+                    }
                     let anchor = self
                         .planned_next
                         .take()
@@ -282,10 +289,43 @@ impl StationController {
         Ok(operation)
     }
 
-    pub(crate) async fn reload(&mut self, songs: Vec<SongInfo>) -> Result<(), PipelineError> {
+    pub(crate) async fn reload(&mut self, songs: Vec<SongInfo>, align_next: bool) -> Result<Option<PipelineOperation>, PipelineError> {
         let retain_missing_current = matches!(self.state, PipelineState::Playing | PipelineState::Paused);
         self.queue.reload_songs(songs, retain_missing_current);
-        Ok(())
+        if !align_next || !matches!(self.state, PipelineState::Playing | PipelineState::Paused) {
+            return Ok(None);
+        }
+        let Some((staged_key, _)) = self.planned_next.clone() else {
+            return Ok(None);
+        };
+        let Some(current) = self.queue.current_song_info() else {
+            return Ok(None);
+        };
+        let next = self.queue.peek_next_song();
+        let next_key = next.as_ref().map(|song| TrackKey {
+            queue_item_id: song.queue_item_id,
+            song_id: song.song_id,
+        });
+        if next_key.as_ref() == Some(&staged_key) {
+            return Ok(None);
+        }
+        let current_track = Self::track(current);
+        let anchor = self.queue.anchor_after_current();
+        let replacement = next.map(|song| {
+            let track = Self::track(song);
+            let transition = super::pipeline::TransitionPlanner::plan(self.playback.transition, &current_track, Some(&track));
+            PlannedNext { track, transition }
+        });
+        self.planned_next = next_key.map(|key| (key, anchor));
+        tracing::info!(station_id = %self.station_id, "realigning staged next after queue change");
+        Ok(Some(PipelineOperation::Roll(Box::new(RollingPlan {
+            generation: self.generation,
+            current: current_track.key,
+            change: RollingChange::ReplaceNext {
+                expected_next: staged_key,
+                replacement,
+            },
+        }))))
     }
 
     pub(crate) fn update_config(&mut self, playback: StationPlaybackConfig) -> Option<PipelineOperation> {
@@ -762,5 +802,138 @@ mod tests {
         runtime.update_config(config).await.unwrap();
         runtime.shutdown().await.unwrap();
         assert_eq!(*pipeline.calls.lock().await, ["replace", "stop", "output", "stop"]);
+    }
+
+    fn song_at(position: i32, title: &str) -> SongInfo {
+        SongInfo {
+            queue_item_id: Uuid::new_v4(),
+            song_id: Uuid::new_v4(),
+            title: title.into(),
+            artist: String::new(),
+            duration: 1,
+            file_path: String::new(),
+            position,
+            cue_in: 0.0,
+            cue_out: 0.0,
+            cross_start_next: 0.0,
+            analyzed: false,
+        }
+    }
+
+    fn playing_controller(songs: Vec<SongInfo>) -> (StationController, Arc<FakePipeline>) {
+        let (status_tx, _) = broadcast::channel(1);
+        let (queue_tx, _) = broadcast::channel(1);
+        let db = sqlx::postgres::PgPoolOptions::new()
+            .connect_lazy("postgres://surcast:surcast@localhost:5433/surcast")
+            .unwrap();
+        let pipeline = Arc::new(FakePipeline {
+            replacements: AtomicUsize::new(0),
+            state_changes: AtomicUsize::new(0),
+            stops: AtomicUsize::new(0),
+        });
+        let mut controller = StationController {
+            queue: Arc::new(QueueManager::new(db, Uuid::new_v4(), String::new(), songs, 0)),
+            station_id: Uuid::new_v4(),
+            playback: StationPlaybackConfig::from_persisted("off", 0, 0, 0).unwrap(),
+            driver: PipelineDriver::spawn(pipeline.clone()),
+            target: IcecastTarget::parse("localhost:8000", "secret".into(), "test", "test".into()).unwrap(),
+            state: PipelineState::Stopped,
+            status_tx,
+            queue_tx,
+            generation: 0,
+            output_epoch: 0,
+            planned_next: None,
+        };
+        assert!(matches!(controller.play(), PipelineOperation::Replace(_)));
+        assert_eq!(controller.state, PipelineState::Playing);
+        (controller, pipeline)
+    }
+
+    #[tokio::test]
+    async fn reload_realigns_staged_next_to_reordered_head() {
+        let a = song_at(0, "A");
+        let b = song_at(1, "B");
+        let c = song_at(2, "C");
+        let x = song_at(3, "X");
+        let (mut controller, _) = playing_controller(vec![a.clone(), b.clone(), c.clone()]);
+        assert_eq!(controller.planned_next.as_ref().unwrap().0.queue_item_id, b.queue_item_id);
+
+        // A reorder moved X to the top: the staged next (B) must be replaced by X
+        let operation = controller.reload(vec![a.clone(), x.clone(), b.clone(), c.clone()], true).await.unwrap();
+        let Some(PipelineOperation::Roll(plan)) = operation else {
+            panic!("reorder reload must issue a rolling replacement");
+        };
+        assert_eq!(plan.current.queue_item_id, a.queue_item_id);
+        let RollingChange::ReplaceNext { expected_next, replacement } = plan.change else {
+            panic!("reorder reload must use ReplaceNext");
+        };
+        assert_eq!(expected_next.queue_item_id, b.queue_item_id);
+        let replacement = replacement.expect("replacement must be staged");
+        assert_eq!(replacement.track.key.queue_item_id, x.queue_item_id);
+        assert_eq!(controller.planned_next.as_ref().unwrap().0.queue_item_id, x.queue_item_id);
+    }
+
+    #[tokio::test]
+    async fn reload_without_align_keeps_the_staged_next() {
+        let a = song_at(0, "A");
+        let b = song_at(1, "B");
+        let x = song_at(3, "X");
+        let (mut controller, _) = playing_controller(vec![a.clone(), b.clone()]);
+        let operation = controller.reload(vec![a, x, b.clone()], false).await.unwrap();
+        assert!(operation.is_none(), "non-aligning reload must not touch the pipeline");
+        assert_eq!(controller.planned_next.as_ref().unwrap().0.queue_item_id, b.queue_item_id);
+    }
+
+    #[tokio::test]
+    async fn reload_with_unchanged_head_does_not_roll() {
+        let a = song_at(0, "A");
+        let b = song_at(1, "B");
+        let c = song_at(2, "C");
+        let x = song_at(3, "X");
+        let (mut controller, _) = playing_controller(vec![a.clone(), b.clone(), c.clone()]);
+        // Append-only change (e.g. a manual add): the head stays B, no swap needed
+        let operation = controller.reload(vec![a, b.clone(), c.clone(), x], true).await.unwrap();
+        assert!(operation.is_none(), "append-only reload must not roll");
+        assert_eq!(controller.planned_next.as_ref().unwrap().0.queue_item_id, b.queue_item_id);
+    }
+
+    #[tokio::test]
+    async fn reload_exhausting_queue_drops_the_staged_next() {
+        let a = song_at(0, "A");
+        let b = song_at(1, "B");
+        let (mut controller, _) = playing_controller(vec![a.clone(), b.clone()]);
+        let operation = controller.reload(vec![a.clone()], true).await.unwrap();
+        let Some(PipelineOperation::Roll(plan)) = operation else {
+            panic!("exhausting reload must issue a roll");
+        };
+        let RollingChange::ReplaceNext { expected_next, replacement } = plan.change else {
+            panic!("exhausting reload must use ReplaceNext");
+        };
+        assert_eq!(expected_next.queue_item_id, b.queue_item_id);
+        assert!(replacement.is_none(), "no successor may be staged after exhaustion");
+        assert!(controller.planned_next.is_none());
+    }
+
+    #[tokio::test]
+    async fn stale_handover_after_realignment_is_ignored() {
+        let a = song_at(0, "A");
+        let b = song_at(1, "B");
+        let x = song_at(3, "X");
+        let (mut controller, _) = playing_controller(vec![a.clone(), b.clone()]);
+        let b_key = StationController::track(b.clone()).key;
+        controller.reload(vec![a.clone(), x.clone(), b.clone()], true).await.unwrap();
+        assert_eq!(controller.planned_next.as_ref().unwrap().0.queue_item_id, x.queue_item_id);
+
+        // The pipeline handed over to the OLD staged next (B) right after the swap:
+        // the queue must not consume B because it will never play.
+        let operation = controller
+            .handle_event(PipelineEvent::Handover {
+                generation: 1,
+                current: b_key,
+            })
+            .await;
+        assert!(operation.is_none(), "stale handover must be ignored");
+        assert_eq!(controller.queue.current_song_info().unwrap().queue_item_id, a.queue_item_id);
+        assert_eq!(controller.planned_next.as_ref().unwrap().0.queue_item_id, x.queue_item_id);
     }
 }

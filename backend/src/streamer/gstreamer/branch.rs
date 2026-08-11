@@ -113,7 +113,11 @@ fn lock_paused(branch: &Branch) -> Result<(), PipelineError> {
     Ok(())
 }
 
-pub(super) fn prepare_paused(branch: &mut Branch) -> Result<(), PipelineError> {
+/// Unlocks the branch and syncs it to the parent's current state (PAUSED at
+/// startup, PLAYING for a mid-stream roll). The mixer pad offset must already
+/// be applied before this runs, so the first decoded buffer is scheduled at
+/// its handover time instead of crossing immediately.
+pub(super) fn prepare(branch: &mut Branch) -> Result<(), PipelineError> {
     for element in branch.elements.iter().rev() {
         element.set_locked_state(false);
         if let Err(error) = element.sync_state_with_parent() {
@@ -132,7 +136,7 @@ pub(super) fn release_paused(branch: &mut Branch) {
 }
 
 pub(super) fn activate_paused(branch: &mut Branch) -> Result<(), PipelineError> {
-    prepare_paused(branch)?;
+    prepare(branch)?;
     release_paused(branch);
     Ok(())
 }

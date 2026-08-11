@@ -191,8 +191,8 @@ impl StationStreamer {
     pub(crate) async fn trim_played_items(&self) {
         self.runtime.trim_played_items().await;
     }
-    pub(crate) async fn reload_songs(&self, songs: Vec<SongInfo>) -> Result<(), PipelineError> {
-        self.runtime.reload(songs).await
+    pub(crate) async fn reload_songs(&self, songs: Vec<SongInfo>, align_next: bool) -> Result<(), PipelineError> {
+        self.runtime.reload(songs, align_next).await
     }
 
     pub(crate) async fn update_config(&self, config: StationPlaybackConfig) -> Result<(), PipelineError> {

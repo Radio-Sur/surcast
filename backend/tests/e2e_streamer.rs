@@ -708,3 +708,192 @@ async fn manual_auto_dj_trigger_keeps_an_exhausted_memory_queue_playing() {
     }
     icecast_result.unwrap();
 }
+
+#[tokio::test]
+#[serial]
+async fn reorder_during_playback_plays_the_moved_track_next() {
+    let _ = tracing_subscriber::fmt().with_test_writer().try_init();
+    let db = common::setup_db().await;
+    let files = TempDir::new().unwrap();
+    let icecast_dir = TempDir::new().unwrap();
+    let port = free_port();
+    let icecast = IcecastManager::new(icecast_dir.path().into());
+    icecast.start(port.into(), "surcast", "admin", "surcast").await.unwrap();
+    let mut config = api_common::test_config();
+    config.upload_dir = files.path().display().to_string();
+    let streamers: StreamersMap = Arc::new(Mutex::new(HashMap::new()));
+
+    let result: Result<(), Box<dyn std::error::Error>> = async {
+        let server = TestServer::new(router::create_router(
+            db.clone(),
+            config,
+            streamers.clone(),
+            icecast.clone(),
+            ListenersState::new(),
+        ))?;
+        server
+            .post("/api/setup/init")
+            .json(&serde_json::json!({"username":"admin","password":"admin123","name":"Admin"}))
+            .await;
+        let login = server
+            .post("/api/auth/login")
+            .json(&serde_json::json!({"username":"admin","password":"admin123"}))
+            .await;
+        let auth = format!(
+            "Bearer {}",
+            login.json::<serde_json::Value>()["access_token"]
+                .as_str()
+                .ok_or_else(|| failure("login response has no access token"))?
+        );
+        sqlx::query(
+            "UPDATE icecast_settings SET enabled=true, mode='managed', port=$1, \
+             source_password='surcast', admin_user='admin', admin_password='surcast'",
+        )
+        .bind(port as i32)
+        .execute(&db)
+        .await?;
+        let station = server
+            .post("/api/stations")
+            .add_header("Authorization", &auth)
+            .json(&serde_json::json!({
+                "name": "Reorder head",
+                "stream_url": "reorder-head",
+                "prebuffer_bytes": 1024,
+                "transition_mode": "off"
+            }))
+            .await;
+        if station.status_code() != 201 {
+            return Err(failure(format!("station creation failed: {}", station.text())));
+        }
+        let station_id = station.json::<serde_json::Value>()["id"]
+            .as_str()
+            .ok_or_else(|| failure("station response has no id"))?
+            .to_owned();
+        let admin: (uuid::Uuid,) = sqlx::query_as("SELECT id FROM users WHERE username='admin'").fetch_one(&db).await?;
+
+        std::fs::create_dir(files.path().join("audio"))?;
+        let tones = [(330.0, "tone A"), (440.0, "tone B"), (550.0, "tone C"), (880.0, "tone X")];
+        let mut song_ids = Vec::new();
+        for (index, (frequency, title)) in tones.iter().enumerate() {
+            let song_id = uuid::Uuid::new_v4();
+            std::fs::write(
+                files.path().join("audio").join(format!("reorder-{index}.wav")),
+                wav_for(*frequency, 10),
+            )?;
+            sqlx::query(
+                "INSERT INTO songs (id,title,artist,file_path,file_size,mime_type,duration,uploaded_by) \
+                 VALUES ($1,$2,'test',$3,1,'audio/wav',10,$4)",
+            )
+            .bind(song_id)
+            .bind(title)
+            .bind(format!("reorder-{index}.wav"))
+            .bind(admin.0)
+            .execute(&db)
+            .await?;
+            let assigned = server
+                .post(&format!("/api/songs/{song_id}/stations"))
+                .add_header("Authorization", &auth)
+                .json(&serde_json::json!({"station_ids":[station_id.clone()]}))
+                .await;
+            if assigned.status_code().as_u16() >= 300 {
+                return Err(failure(format!("song assignment failed: {}", assigned.text())));
+            }
+            song_ids.push((song_id, title.to_string()));
+        }
+
+        let queue_ids = song_ids.iter().take(3).map(|(id, _)| *id).collect::<Vec<_>>();
+        let queued = server
+            .post(&format!("/api/stations/{station_id}/queue"))
+            .add_header("Authorization", &auth)
+            .json(&serde_json::json!({"song_ids": queue_ids}))
+            .await;
+        if queued.status_code().as_u16() >= 300 {
+            return Err(failure(format!("queue creation failed: {}", queued.text())));
+        }
+        let initial_items = queued.json::<Vec<serde_json::Value>>();
+        let a_id = initial_items[0]["id"].as_str().ok_or_else(|| failure("queue item has no id"))?.to_owned();
+        let b_id = initial_items[1]["id"].as_str().ok_or_else(|| failure("queue item has no id"))?.to_owned();
+        let c_id = initial_items[2]["id"].as_str().ok_or_else(|| failure("queue item has no id"))?.to_owned();
+
+        let started = server
+            .post(&format!("/api/stations/{station_id}/stream/restart"))
+            .add_header("Authorization", &auth)
+            .await;
+        if started.status_code() != 200 {
+            return Err(failure(format!("stream start failed: {}", started.text())));
+        }
+        let client = reqwest::Client::builder().timeout(Duration::from_secs(5)).build()?;
+        let url = format!("http://127.0.0.1:{port}/reorder-head.mp3");
+        let response = open_mount(&client, &url).await?;
+        drop(response);
+
+        let playing = wait_for_status(&server, &station_id, &auth, |status| {
+            status["title"].as_str() == Some("tone A") && status["playing"] == true
+        })
+        .await?;
+        if playing["song_index"].as_u64() != Some(0) {
+            return Err(failure(format!("unexpected start index: {playing}")));
+        }
+
+        // Add a fourth track and move it to the head of the queue while tone A
+        // is still playing. The staged next (tone B) must be replaced so the
+        // moved track plays right after the current one.
+        let added = server
+            .post(&format!("/api/stations/{station_id}/queue"))
+            .add_header("Authorization", &auth)
+            .json(&serde_json::json!({"song_ids": [song_ids[3].0]}))
+            .await;
+        if added.status_code().as_u16() >= 300 {
+            return Err(failure(format!("add failed: {}", added.text())));
+        }
+        let x_id = added.json::<Vec<serde_json::Value>>()[0]["id"]
+            .as_str()
+            .ok_or_else(|| failure("added queue item has no id"))?
+            .to_owned();
+        let reordered = server
+            .put(&format!("/api/stations/{station_id}/queue/reorder"))
+            .add_header("Authorization", &auth)
+            .json(&serde_json::json!({"queue_item_ids": [a_id, x_id, b_id, c_id]}))
+            .await;
+        if reordered.status_code() != 200 {
+            return Err(failure(format!("reorder failed: {}", reordered.text())));
+        }
+
+        // The moved track must play NEXT — not the previously staged tone B.
+        let next = wait_for_status(&server, &station_id, &auth, |status| {
+            status["playing"] == true && status["title"].as_str() != Some("tone A")
+        })
+        .await?;
+        if next["title"].as_str() != Some("tone X") {
+            return Err(failure(format!("moved track did not play next: {next}")));
+        }
+        if next["song_index"].as_u64() != Some(1) {
+            return Err(failure(format!("moved track played at the wrong index: {next}")));
+        }
+        let then_b = wait_for_status(&server, &station_id, &auth, |status| {
+            status["title"].as_str() == Some("tone B") && status["playing"] == true
+        })
+        .await?;
+        if then_b["song_index"].as_u64() != Some(2) {
+            return Err(failure(format!("queue order broken after the moved track: {then_b}")));
+        }
+        let then_c = wait_for_status(&server, &station_id, &auth, |status| {
+            status["title"].as_str() == Some("tone C") && status["playing"] == true
+        })
+        .await?;
+        if then_c["song_index"].as_u64() != Some(3) {
+            return Err(failure(format!("queue order broken at the tail: {then_c}")));
+        }
+        wait_for_status(&server, &station_id, &auth, |status| status["playing"] == false).await?;
+        Ok(())
+    }
+    .await;
+
+    let active = { streamers.lock().unwrap().values().cloned().collect::<Vec<_>>() };
+    futures::future::join_all(active.into_iter().map(|streamer| async move { streamer.shutdown().await })).await;
+    let icecast_result = icecast.stop().await;
+    if let Err(error) = result {
+        panic!("{error}");
+    }
+    icecast_result.unwrap();
+}

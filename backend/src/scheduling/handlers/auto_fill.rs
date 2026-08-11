@@ -201,7 +201,7 @@ pub async fn trigger_auto_fill(
     // The refill above writes rows straight into the DB; a live streamer keeps
     // its own in-memory queue copy, so reload it or the new tracks are never
     // picked up by the running pipeline.
-    crate::stations::handlers::sync_streamer_songs(&db, &streamers, &config.upload_dir, sid).await?;
+    crate::stations::handlers::sync_streamer_songs(&db, &streamers, &config.upload_dir, sid, false).await?;
     Ok(Json(json!({ "status": "ok" })))
 }
 #[cfg(test)]

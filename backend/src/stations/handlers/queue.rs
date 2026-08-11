@@ -102,7 +102,7 @@ pub async fn add_songs_to_queue(
 
     let items = fetch_queue_items(&db, station_id, Some(&req.song_ids)).await?;
 
-    sync_streamer_songs(&db, &streamers, &config.upload_dir, station_id).await?;
+    sync_streamer_songs(&db, &streamers, &config.upload_dir, station_id, false).await?;
 
     Ok((StatusCode::CREATED, Json(items)))
 }
@@ -117,7 +117,7 @@ pub async fn remove_song_from_queue(
     let station_id = resolve_station_id(&db, &station_id).await?;
     queue_repo::delete_queue_by_id(&db, item_id, station_id).await?;
 
-    sync_streamer_songs(&db, &streamers, &config.upload_dir, station_id).await?;
+    sync_streamer_songs(&db, &streamers, &config.upload_dir, station_id, false).await?;
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -134,10 +134,11 @@ pub async fn reorder_queue(
     for (i, &item_id) in req.queue_item_ids.iter().enumerate() {
         queue_repo::set_queue_position(&db, item_id, i as i32).await?;
     }
+    queue_repo::sync_current_song_index_after_renumber(&db, station_id).await?;
 
     let items = fetch_queue_items(&db, station_id, None).await?;
 
-    sync_streamer_songs(&db, &streamers, &config.upload_dir, station_id).await?;
+    sync_streamer_songs(&db, &streamers, &config.upload_dir, station_id, true).await?;
 
     Ok(Json(items))
 }
@@ -166,12 +167,13 @@ pub async fn insert_song_at_queue_position(
 
     queue_repo::shift_queue_positions_from(&db, station_id, req.position).await?;
     queue_repo::insert_queue_item_at(&db, station_id, req.song_id, req.position).await?;
+    queue_repo::sync_current_song_index_after_renumber(&db, station_id).await?;
 
     crate::songs::analysis::spawn_analysis(&db, req.song_id, station_id, &config.upload_dir);
 
     let items = fetch_queue_items(&db, station_id, None).await?;
 
-    sync_streamer_songs(&db, &streamers, &config.upload_dir, station_id).await?;
+    sync_streamer_songs(&db, &streamers, &config.upload_dir, station_id, true).await?;
 
     Ok(Json(items))
 }
@@ -192,8 +194,9 @@ pub async fn remove_playlist_songs_from_queue(
     for (i, (id,)) in ids.iter().enumerate() {
         queue_repo::set_queue_position(&db, *id, i as i32).await?;
     }
+    queue_repo::sync_current_song_index_after_renumber(&db, station_id).await?;
 
-    sync_streamer_songs(&db, &streamers, &config.upload_dir, station_id).await?;
+    sync_streamer_songs(&db, &streamers, &config.upload_dir, station_id, true).await?;
 
     Ok(StatusCode::NO_CONTENT)
 }

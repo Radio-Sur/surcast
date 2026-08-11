@@ -58,9 +58,11 @@ pub async fn insert_queue_items_batch(
 /// of the same playlist) would otherwise inflate the "Song X of Y" counters
 /// whenever new content is enqueued.
 ///
-/// Matches both cursor formats: identity-based (`consumed_queue_item_ids`) for
-/// the durable format-1 cursor, position-based (`position < current_song_index`)
-/// for legacy cursors and stations that never persisted a cursor.
+/// Trim is identity-based only: exactly the rows named in the durable format-1
+/// cursor's `consumed_queue_item_ids`. A positional cutoff such as
+/// `position < current_song_index` must never be used here: reorder/insert
+/// handlers renumber queue positions from 0 without moving the station cursor,
+/// so a stale index would delete unplayed current/upcoming tracks.
 pub async fn trim_consumed_queue_items(db: &PgPool, station_id: Uuid) -> Result<(), AppError> {
     sqlx::query(
         "DELETE FROM station_queue sq
@@ -68,16 +70,35 @@ pub async fn trim_consumed_queue_items(db: &PgPool, station_id: Uuid) -> Result<
            AND EXISTS (
              SELECT 1 FROM stations st
              WHERE st.id = $1
-               AND (
-                 sq.id = ANY(st.consumed_queue_item_ids)
-                 OR sq.position < st.current_song_index
-               )
+               AND sq.id = ANY(st.consumed_queue_item_ids)
            )",
     )
     .bind(station_id)
     .execute(db)
     .await
     .db_error("failed to trim consumed queue items")?;
+    Ok(())
+}
+
+/// Re-anchor the legacy `stations.current_song_index` to the current track's
+/// new position after an operation that renumbered queue positions (reorder,
+/// insert-at-position, playlist removal). Positional consumers — legacy
+/// format-0 load, the played-window trim and AutoDJ demand counting — rely on
+/// the index matching the current row's position; left stale after a renumber
+/// they would treat upcoming rows as played and delete/over-count them.
+pub async fn sync_current_song_index_after_renumber(db: &PgPool, station_id: Uuid) -> Result<(), AppError> {
+    sqlx::query(
+        "UPDATE stations st
+         SET current_song_index = sq.position
+         FROM station_queue sq
+         WHERE st.id = $1
+           AND st.current_queue_item_id IS NOT NULL
+           AND sq.id = st.current_queue_item_id",
+    )
+    .bind(station_id)
+    .execute(db)
+    .await
+    .db_error("failed to sync current song index after renumber")?;
     Ok(())
 }
 

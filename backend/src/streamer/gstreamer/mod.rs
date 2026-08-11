@@ -204,7 +204,7 @@ impl GStreamerPipeline {
             branch::truncate(&self.pipeline, &self.mixer, &mut candidates, 1);
         }
         for candidate in &mut candidates {
-            if let Err(error) = branch::prepare_paused(candidate) {
+            if let Err(error) = branch::prepare(candidate) {
                 branch::clear(&self.pipeline, &self.mixer, &mut candidates);
                 self.restore_state(previous_state)?;
                 return Err(error);
@@ -415,8 +415,9 @@ impl PlaybackPipeline for GStreamerPipeline {
         };
 
         let Some(next) = replacement else {
-            let previous_state = self.snapshot.lock().unwrap_or_else(|error| error.into_inner()).state;
-            self.set_state(PipelineState::Paused)?;
+            // Exhausted queue: drop the staged next without pausing the
+            // pipeline. Removing a playing branch is the same teardown every
+            // natural handover performs.
             let commit_result = (|| {
                 {
                     let active = self.active.lock().unwrap_or_else(|error| error.into_inner());
@@ -441,7 +442,7 @@ impl PlaybackPipeline for GStreamerPipeline {
                 active.handed_over = false;
                 Ok(())
             })();
-            return self.finish_paused_transaction(previous_state, commit_result);
+            return commit_result;
         };
 
         let candidate = branch::attach_paused(&self.pipeline, &self.mixer, self.events.clone(), &next.track, plan.generation, 0.0)?;
@@ -449,27 +450,10 @@ impl PlaybackPipeline for GStreamerPipeline {
         let current_duration = branch::wait_duration(&self.branches, current_index).await;
         let next_duration = branch::wait_duration(&self.branches, candidate_index).await;
 
-        let previous_state = self.snapshot.lock().unwrap_or_else(|error| error.into_inner()).state;
-        if let Err(error) = self.set_state(PipelineState::Paused) {
-            let mut branches = self.branches.lock().unwrap_or_else(|error| error.into_inner());
-            branch::remove_at(&self.pipeline, &self.mixer, &mut branches, candidate_index);
-            return Err(error);
-        }
-        {
-            let mut branches = self.branches.lock().unwrap_or_else(|error| error.into_inner());
-            if candidate_index >= branches.len() {
-                drop(branches);
-                self.restore_state(previous_state)?;
-                return Err(PipelineError::StalePlan);
-            }
-            let candidate = &mut branches[candidate_index];
-            if let Err(error) = branch::prepare_paused(candidate) {
-                branch::remove_at(&self.pipeline, &self.mixer, &mut branches, candidate_index);
-                drop(branches);
-                self.restore_state(previous_state)?;
-                return Err(error);
-            }
-        }
+        // No pipeline pause: the candidate stays locked until its pad offset
+        // is applied, so its first buffer cannot cross into the mixer before
+        // the transition math schedules the start. The current track's
+        // dataflow never stops.
         let commit_result = (|| {
             let (timeline_origin, current_elapsed) = {
                 let active = self.active.lock().unwrap_or_else(|error| error.into_inner());
@@ -495,11 +479,21 @@ impl PlaybackPipeline for GStreamerPipeline {
                 );
                 let handover_at =
                     transition::apply_rolling(transition, current, candidate, current_duration, timeline_origin, current_elapsed)?.handover;
+                // Unlock the candidate and sync it to the running pipeline:
+                // the first decoded buffer now crosses the mixer pad with the
+                // offset already applied and is held until the handover.
+                branch::prepare(branches.get_mut(candidate_index).ok_or(PipelineError::StalePlan)?)?;
+                handover_at
+            };
+            {
+                let mut branches = self.branches.lock().unwrap_or_else(|error| error.into_inner());
                 if let Some(obsolete_index) = obsolete_index {
                     branch::remove_at(&self.pipeline, &self.mixer, &mut branches, obsolete_index);
                 }
-                handover_at
-            };
+                if let Some(candidate) = branches.last_mut() {
+                    branch::release_paused(candidate);
+                }
+            }
             {
                 let mut active = self.active.lock().unwrap_or_else(|error| error.into_inner());
                 let active = active
@@ -510,17 +504,13 @@ impl PlaybackPipeline for GStreamerPipeline {
                 active.handover_at = handover_at;
                 active.handed_over = false;
             }
-            let mut branches = self.branches.lock().unwrap_or_else(|error| error.into_inner());
-            if let Some(candidate) = branches.last_mut() {
-                branch::release_paused(candidate);
-            }
             Ok(())
         })();
         if commit_result.is_err() {
             let mut branches = self.branches.lock().unwrap_or_else(|error| error.into_inner());
             branch::remove_at(&self.pipeline, &self.mixer, &mut branches, candidate_index);
         }
-        self.finish_paused_transaction(previous_state, commit_result)
+        commit_result
     }
 
     async fn set_playing(&self, playing: bool) -> Result<(), PipelineError> {
@@ -637,7 +627,7 @@ impl PlaybackPipelineFactory for GStreamerPipelineFactory {
         let (events, receiver) = mpsc::unbounded_channel();
         let active: Arc<Mutex<Option<ActivePlan>>> = Arc::new(Mutex::new(None));
         let replacing: Arc<Mutex<Option<ReplaceCancellation>>> = Arc::new(Mutex::new(None));
-        bus::install(&pipeline, &clock_gate, active.clone(), replacing.clone(), events.clone())?;
+        bus::install(&pipeline, &clock_gate, active.clone(), replacing.clone(), events.clone()).expect("bus installed");
         Ok(PipelineInstance {
             pipeline: Arc::new(GStreamerPipeline {
                 pipeline,
@@ -1277,5 +1267,198 @@ mod tests {
         pipeline.set_state(gst::State::Null).unwrap();
         assert_eq!(message.type_(), gst::MessageType::Eos, "{message:?}");
         assert!(!std::fs::read(path).unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn roll_replace_next_mid_stream_does_not_interrupt_the_output() {
+        use std::sync::Arc;
+        use std::sync::Mutex as StdMutex;
+        use std::time::Instant;
+
+        let current_file = tempfile::NamedTempFile::new().unwrap();
+        let next_file = tempfile::NamedTempFile::new().unwrap();
+        let replacement_file = tempfile::NamedTempFile::new().unwrap();
+        write_wav(current_file.path(), Duration::from_secs(1), 8_000);
+        write_wav(next_file.path(), Duration::from_secs(1), -8_000);
+        write_wav(replacement_file.path(), Duration::from_secs(1), 4_000);
+        let current = track(current_file.path(), 0);
+        let next = track(next_file.path(), 1);
+        let replacement = track(replacement_file.path(), 2);
+        let current_key = current.key.clone();
+        let next_key = next.key.clone();
+
+        // Build the concrete pipeline so the test can probe the clock gate pad.
+        let graph::Backbone {
+            pipeline,
+            mixer,
+            output_queue,
+            output_caps,
+            encoder,
+            sink,
+            clock_gate,
+        } = graph::build_backbone(&config(), "fakesink").expect("backbone built");
+        let (events, receiver) = mpsc::unbounded_channel();
+        let active: Arc<Mutex<Option<ActivePlan>>> = Arc::new(Mutex::new(None));
+        let replacing: Arc<Mutex<Option<ReplaceCancellation>>> = Arc::new(Mutex::new(None));
+        bus::install(&pipeline, &clock_gate, active.clone(), replacing.clone(), events.clone()).expect("bus installed");
+        let pipeline = GStreamerPipeline {
+            pipeline,
+            mixer,
+            output_queue,
+            output_caps,
+            encoder,
+            sink: Mutex::new(SinkSlot::Active(sink)),
+            clock_gate,
+            sink_factory: "fakesink",
+            branches: Mutex::new(Vec::new()),
+            active,
+            replacing,
+            snapshot: Mutex::new(PipelineSnapshot {
+                state: PipelineState::Stopped,
+                elapsed: Duration::ZERO,
+            }),
+            events,
+        };
+        let _events = receiver;
+        // Probe the clock-gated output (post-encoder, steady ~26ms frame
+        // cadence): a mid-track stall longer than the ~64ms output prebuffer
+        // would show up here as a gap well over one frame period.
+        let clock_gate = pipeline.pipeline.by_name("clock_gate").expect("clock gate present");
+        let gate_src = clock_gate.static_pad("src").expect("clock gate src pad");
+        let arrivals: Arc<StdMutex<Vec<Instant>>> = Arc::new(StdMutex::new(Vec::new()));
+        {
+            let arrivals = arrivals.clone();
+            gate_src
+                .add_probe(gst::PadProbeType::BUFFER, move |_, info| {
+                    if info.buffer().is_some() {
+                        arrivals.lock().unwrap_or_else(|error| error.into_inner()).push(Instant::now());
+                    }
+                    gst::PadProbeReturn::Ok
+                })
+                .expect("probe installed");
+        }
+
+        // Seconds 0-1: tone A. 300ms in we replace the staged next (B) with
+        // the moved track X, exactly like a reorder during playback. The swap
+        // pauses the pipeline, so the output prebuffer queue must keep the MP3
+        // frames flowing: a gap of more than one frame period (100ms bound,
+        // one ~26ms frame nominal) would be audible mid-track.
+        pipeline
+            .replace(initial_plan(17, current, Some(next), TransitionPlan::Cut))
+            .await
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        let roll_started = std::time::Instant::now();
+        pipeline
+            .roll(RollingPlan {
+                generation: 17,
+                current: current_key,
+                change: RollingChange::ReplaceNext {
+                    expected_next: next_key,
+                    replacement: Some(PlannedNext {
+                        track: replacement,
+                        transition: TransitionPlan::Cut,
+                    }),
+                },
+            })
+            .await
+            .unwrap();
+        let roll_elapsed = roll_started.elapsed();
+        // A ends at 1s; X plays after. Cover both plus margin.
+        tokio::time::sleep(Duration::from_millis(1_100)).await;
+        pipeline.stop().await.unwrap();
+
+        let arrivals = arrivals.lock().unwrap_or_else(|error| error.into_inner());
+        let max_gap = arrivals
+            .windows(2)
+            .map(|pair| pair[1].duration_since(pair[0]))
+            .max()
+            .unwrap_or_default();
+        tracing::info!(?roll_elapsed, ?max_gap, samples = arrivals.len(), "mid-stream replace next output gaps");
+        // The output runs at a steady ~26ms frame cadence; the swap must not
+        // stall it beyond the ~64ms prebuffer absorption (two frame periods of
+        // headroom for jitter). Any future regression that pauses the pipeline
+        // mid-track (or decodes the replacement slowly) trips this.
+        assert!(
+            max_gap < Duration::from_millis(50),
+            "audible output gap {max_gap:?} during a mid-stream replace (roll took {roll_elapsed:?})"
+        );
+    }
+
+    #[tokio::test]
+    async fn roll_replace_next_mid_rotation_keeps_the_promoted_track_playing() {
+        let first_file = tempfile::NamedTempFile::new().unwrap();
+        let second_file = tempfile::NamedTempFile::new().unwrap();
+        let third_file = tempfile::NamedTempFile::new().unwrap();
+        let replacement_file = tempfile::NamedTempFile::new().unwrap();
+        write_wav(first_file.path(), Duration::from_secs(1), 8_000);
+        write_wav(second_file.path(), Duration::from_secs(1), -8_000);
+        write_wav(third_file.path(), Duration::from_secs(1), 4_000);
+        write_wav(replacement_file.path(), Duration::from_secs(1), -4_000);
+        let first = track(first_file.path(), 0);
+        let second = track(second_file.path(), 1);
+        let third = track(third_file.path(), 2);
+        let replacement = track(replacement_file.path(), 3);
+        let second_key = second.key.clone();
+        let third_key = third.key.clone();
+        let replacement_key = replacement.key.clone();
+        let PipelineInstance { pipeline, mut events } = GStreamerPipelineFactory::with_test_sink().create(config()).await.unwrap();
+
+        // A plays, B staged. After the handover B is the current track and the
+        // Attach roll prunes A, so B plays from the first mixer slot.
+        pipeline
+            .replace(initial_plan(23, first, Some(second), TransitionPlan::Cut))
+            .await
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(3), async {
+            while !matches!(events.recv().await, Some(PipelineEvent::Handover { generation: 23, ref current }) if current == &second_key) {}
+        })
+        .await
+        .unwrap();
+        pipeline
+            .roll(RollingPlan {
+                generation: 23,
+                current: second_key.clone(),
+                change: RollingChange::Attach(PlannedNext {
+                    track: third,
+                    transition: TransitionPlan::Cut,
+                }),
+            })
+            .await
+            .unwrap();
+
+        // Reorder mid-B: move X to the head of the upcoming queue while the
+        // promoted second track is the one playing.
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        let replaced = std::time::Instant::now();
+        pipeline
+            .roll(RollingPlan {
+                generation: 23,
+                current: second_key.clone(),
+                change: RollingChange::ReplaceNext {
+                    expected_next: third_key,
+                    replacement: Some(PlannedNext {
+                        track: replacement,
+                        transition: TransitionPlan::Cut,
+                    }),
+                },
+            })
+            .await
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(3), async {
+            while !matches!(
+                events.recv().await,
+                Some(PipelineEvent::Handover { generation: 23, ref current }) if current == &replacement_key
+            ) {}
+        })
+        .await
+        .unwrap();
+        // B is a 1s track; the swap happened 200ms into it. The replacement
+        // must start at B's end, not immediately.
+        assert!(
+            replaced.elapsed() >= Duration::from_millis(500),
+            "replacement handover fired too early: {replaced:?}"
+        );
+        pipeline.stop().await.unwrap();
     }
 }

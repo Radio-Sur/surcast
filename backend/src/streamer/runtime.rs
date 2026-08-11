@@ -19,6 +19,7 @@ enum StationCommand {
     },
     Reload {
         songs: Vec<SongInfo>,
+        align_next: bool,
         response: oneshot::Sender<Result<(), PipelineError>>,
     },
     UpdateConfig {
@@ -183,10 +184,14 @@ impl StationRuntime {
         self.request(StationCommand::Reconnect).await
     }
 
-    pub(crate) async fn reload(&self, songs: Vec<SongInfo>) -> Result<(), PipelineError> {
+    pub(crate) async fn reload(&self, songs: Vec<SongInfo>, align_next: bool) -> Result<(), PipelineError> {
         let (response, receiver) = oneshot::channel();
         self.commands
-            .send(StationCommand::Reload { songs, response })
+            .send(StationCommand::Reload {
+                songs,
+                align_next,
+                response,
+            })
             .await
             .map_err(|_| PipelineError::Pipeline("station runtime stopped".to_owned()))?;
         receiver
@@ -258,7 +263,23 @@ impl StationCommand {
                     PendingPipelineAction::reconnect(target, retries, generation, output_epoch, attempt).launch(controller.driver());
                 }
             }
-            Self::Reload { songs, response } => send(response, controller.reload(songs).await),
+            Self::Reload {
+                songs,
+                align_next,
+                response,
+            } => match controller.reload(songs, align_next).await {
+                Ok(Some(operation)) => {
+                    // Executed synchronously so a stale handover event cannot
+                    // interleave with the swap; a lost race is non-fatal (the
+                    // staged next simply keeps playing).
+                    if let Err(error) = controller.driver().execute(operation).await {
+                        tracing::warn!(%error, "queue realignment roll failed; keeping the staged next");
+                    }
+                    send(response, Ok(()));
+                }
+                Ok(None) => send(response, Ok(())),
+                Err(error) => send(response, Err(error)),
+            },
             Self::UpdateConfig { config, response } => match controller.update_config(config) {
                 Some(operation) => PendingPipelineAction::operation(operation, Some(response)).launch(controller.driver()),
                 None => send(response, Ok(())),

@@ -280,7 +280,7 @@ pub async fn add_playlist_to_queue(
         crate::songs::analysis::spawn_analysis(&db, song_id, station_id, &config.upload_dir);
     }
 
-    crate::stations::handlers::sync_streamer_songs(&db, &streamers, &config.upload_dir, station_id).await?;
+    crate::stations::handlers::sync_streamer_songs(&db, &streamers, &config.upload_dir, station_id, false).await?;
 
     Ok((StatusCode::CREATED, Json(serde_json::json!({ "added": song_ids.len() as i32 }))))
 }
