@@ -52,13 +52,18 @@ struct ActivePlan {
     handed_over: bool,
 }
 
+enum SinkSlot {
+    Active(gst::Element),
+    Replacing { _old_sink: gst::Element, _candidate: gst::Element },
+}
+
 pub(crate) struct GStreamerPipeline {
     pipeline: gst::Pipeline,
     mixer: gst::Element,
     output_queue: gst::Element,
     output_caps: gst::Element,
     encoder: gst::Element,
-    sink: Mutex<gst::Element>,
+    sink: Mutex<SinkSlot>,
     clock_gate: gst::Element,
     sink_factory: &'static str,
     branches: Mutex<Vec<Branch>>,
@@ -246,8 +251,10 @@ impl PlaybackPipeline for GStreamerPipeline {
         let previous_state = self.snapshot.lock().unwrap_or_else(|error| error.into_inner()).state;
         if previous_state == PipelineState::Stopped {
             let sink = self.sink.lock().unwrap_or_else(|error| error.into_inner());
-            if self.sink_factory == sink::DEFAULT_FACTORY {
-                sink::configure(&sink, &target);
+            if let SinkSlot::Active(sink) = &*sink {
+                if self.sink_factory == sink::DEFAULT_FACTORY {
+                    sink::configure(sink, &target);
+                }
             }
             return Ok(());
         }
@@ -268,17 +275,25 @@ impl PlaybackPipeline for GStreamerPipeline {
                 .map_err(|error| PipelineError::Pipeline(error.to_string()))?;
         }
 
-        let old_sink = self.sink.lock().unwrap_or_else(|error| error.into_inner()).clone();
+        let old_sink = match &*self.sink.lock().unwrap_or_else(|error| error.into_inner()) {
+            SinkSlot::Active(sink) => sink.clone(),
+            SinkSlot::Replacing { .. } => return Err(PipelineError::StalePlan),
+        };
         let candidate = sink::build(self.sink_factory, &target)?;
         self.pipeline
             .add(&candidate)
             .map_err(|error| PipelineError::Pipeline(error.to_string()))?;
+        *self.sink.lock().unwrap_or_else(|error| error.into_inner()) = SinkSlot::Replacing {
+            _old_sink: old_sink.clone(),
+            _candidate: candidate.clone(),
+        };
 
         self.clock_gate.unlink(&old_sink);
         if let Err(error) = self.clock_gate.link(&candidate) {
             let _ = candidate.set_state(gst::State::Null);
             let _ = self.pipeline.remove(&candidate);
             let _ = self.clock_gate.link(&old_sink);
+            *self.sink.lock().unwrap_or_else(|error| error.into_inner()) = SinkSlot::Active(old_sink);
             return Err(PipelineError::Pipeline(error.to_string()));
         }
         self.pipeline
@@ -295,6 +310,7 @@ impl PlaybackPipeline for GStreamerPipeline {
                 *self.active.lock().unwrap_or_else(|poison| poison.into_inner()) = None;
                 return Err(PipelineError::Pipeline("sink replacement and rollback failed".into()));
             }
+            *self.sink.lock().unwrap_or_else(|error| error.into_inner()) = SinkSlot::Active(old_sink);
             return Err(PipelineError::Pipeline(format!(
                 "reconnect transition to {expected_state:?} stalled at {current:?} with {pending:?} pending"
             )));
@@ -305,7 +321,7 @@ impl PlaybackPipeline for GStreamerPipeline {
         self.pipeline
             .remove(&old_sink)
             .map_err(|error| PipelineError::Pipeline(error.to_string()))?;
-        *self.sink.lock().unwrap_or_else(|error| error.into_inner()) = candidate;
+        *self.sink.lock().unwrap_or_else(|error| error.into_inner()) = SinkSlot::Active(candidate);
         Ok(())
     }
 
@@ -347,7 +363,7 @@ impl PlaybackPipelineFactory for GStreamerPipelineFactory {
                 output_queue,
                 output_caps,
                 encoder,
-                sink: Mutex::new(sink),
+                sink: Mutex::new(SinkSlot::Active(sink)),
                 clock_gate,
                 sink_factory: self.sink_factory,
                 branches: Mutex::new(Vec::new()),
