@@ -427,6 +427,28 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn reconnect_preserves_paused_and_playing_state() {
+        let target = config().target;
+        let instance = GStreamerPipelineFactory::with_test_sink().create(config()).await.unwrap();
+        instance.pipeline.set_playing(false).await.unwrap();
+        instance.pipeline.reconnect(target.clone()).await.unwrap();
+        assert_eq!(instance.pipeline.snapshot().await.unwrap().state, PipelineState::Paused);
+        instance.pipeline.stop().await.unwrap();
+
+        let file = tempfile::NamedTempFile::new().unwrap();
+        write_wav(file.path(), Duration::from_secs(5), 0);
+        let instance = GStreamerPipelineFactory::with_test_sink().create(config()).await.unwrap();
+        instance
+            .pipeline
+            .replace(initial_plan(1, track(file.path(), 0), None, TransitionPlan::Cut))
+            .await
+            .unwrap();
+        instance.pipeline.reconnect(target).await.unwrap();
+        assert_eq!(instance.pipeline.snapshot().await.unwrap().state, PipelineState::Playing);
+        instance.pipeline.stop().await.unwrap();
+    }
+
+    #[tokio::test]
     async fn decodes_a_wav_branch_without_a_second_playback_backend() {
         use crate::streamer::pipeline::{PipelineTrack, TrackKey};
         use tempfile::NamedTempFile;
