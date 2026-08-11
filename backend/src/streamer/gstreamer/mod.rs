@@ -4,6 +4,7 @@ mod graph;
 mod sink;
 mod transition;
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -52,6 +53,36 @@ struct ActivePlan {
     handed_over: bool,
 }
 
+#[derive(Clone)]
+pub(super) struct ReplaceCancellation {
+    expected_generation: u64,
+    expected_current: TrackKey,
+    cancelled: Arc<AtomicBool>,
+}
+
+impl ReplaceCancellation {
+    pub(super) fn cancel_if_matches(&self, generation: u64, current: &TrackKey) -> bool {
+        if self.expected_generation == generation && self.expected_current == *current {
+            self.cancelled.store(true, Ordering::Release);
+            true
+        } else {
+            false
+        }
+    }
+
+    pub(super) fn is_cancelled(&self) -> bool {
+        self.cancelled.load(Ordering::Acquire)
+    }
+}
+
+struct ReplacementCleanup(Arc<Mutex<Option<ReplaceCancellation>>>);
+
+impl Drop for ReplacementCleanup {
+    fn drop(&mut self) {
+        *self.0.lock().unwrap_or_else(|error| error.into_inner()) = None;
+    }
+}
+
 enum SinkSlot {
     Active(gst::Element),
     Replacing { _old_sink: gst::Element, _candidate: gst::Element },
@@ -68,6 +99,7 @@ pub(crate) struct GStreamerPipeline {
     sink_factory: &'static str,
     branches: Mutex<Vec<Branch>>,
     active: Arc<Mutex<Option<ActivePlan>>>,
+    replacing: Arc<Mutex<Option<ReplaceCancellation>>>,
     snapshot: Mutex<PipelineSnapshot>,
     events: mpsc::UnboundedSender<PipelineEvent>,
 }
@@ -120,6 +152,22 @@ impl PlaybackPipeline for GStreamerPipeline {
                 _ => return Err(PipelineError::StalePlan),
             }
         }
+        let replacing = match &plan.mode {
+            ReplaceMode::ActiveReplace {
+                expected_generation,
+                expected_current,
+            } => {
+                let replacing = ReplaceCancellation {
+                    expected_generation: *expected_generation,
+                    expected_current: expected_current.clone(),
+                    cancelled: Arc::new(AtomicBool::new(false)),
+                };
+                *self.replacing.lock().unwrap_or_else(|error| error.into_inner()) = Some(replacing.clone());
+                Some(replacing)
+            }
+            ReplaceMode::InitialReplaceFromStopped => None,
+        };
+        let _replacement_cleanup = replacing.as_ref().map(|_| ReplacementCleanup(self.replacing.clone()));
         let mut staged_current = if matches!(plan.mode, ReplaceMode::ActiveReplace { .. }) {
             Some(branch::attach_staged(
                 &self.pipeline,
@@ -149,7 +197,8 @@ impl PlaybackPipeline for GStreamerPipeline {
         } else {
             None
         };
-        if self.snapshot.lock().unwrap_or_else(|error| error.into_inner()).state != PipelineState::Stopped {
+        let previous_state = self.snapshot.lock().unwrap_or_else(|error| error.into_inner()).state;
+        if previous_state != PipelineState::Stopped {
             if let Err(error) = self.set_state(PipelineState::Paused) {
                 if let Some(staged_current) = staged_current.take() {
                     branch::discard(&self.pipeline, &self.mixer, staged_current);
@@ -157,8 +206,22 @@ impl PlaybackPipeline for GStreamerPipeline {
                 if let Some(staged_next) = staged_next.take() {
                     branch::discard(&self.pipeline, &self.mixer, staged_next);
                 }
+                *self.replacing.lock().unwrap_or_else(|error| error.into_inner()) = None;
                 return Err(error);
             }
+        }
+        if replacing.as_ref().is_some_and(ReplaceCancellation::is_cancelled) {
+            if let Some(staged_current) = staged_current.take() {
+                branch::discard(&self.pipeline, &self.mixer, staged_current);
+            }
+            if let Some(staged_next) = staged_next.take() {
+                branch::discard(&self.pipeline, &self.mixer, staged_next);
+            }
+            *self.replacing.lock().unwrap_or_else(|error| error.into_inner()) = None;
+            if previous_state == PipelineState::Playing {
+                self.set_state(PipelineState::Playing)?;
+            }
+            return Err(PipelineError::StalePlan);
         }
         {
             let mut branches = self.branches.lock().unwrap_or_else(|error| error.into_inner());
@@ -240,6 +303,7 @@ impl PlaybackPipeline for GStreamerPipeline {
             current_epoch: gst::ClockTime::ZERO,
             last_elapsed: gst::ClockTime::ZERO,
         });
+        *self.replacing.lock().unwrap_or_else(|error| error.into_inner()) = None;
         self.set_state(PipelineState::Playing)
     }
 
@@ -394,6 +458,7 @@ impl PlaybackPipeline for GStreamerPipeline {
     }
 
     async fn stop(&self) -> Result<(), PipelineError> {
+        *self.replacing.lock().unwrap_or_else(|error| error.into_inner()) = None;
         *self.active.lock().unwrap_or_else(|error| error.into_inner()) = None;
         self.set_state(PipelineState::Stopped)
     }
@@ -413,7 +478,8 @@ impl PlaybackPipelineFactory for GStreamerPipelineFactory {
         } = graph::build_backbone(&config, self.sink_factory)?;
         let (events, receiver) = mpsc::unbounded_channel();
         let active: Arc<Mutex<Option<ActivePlan>>> = Arc::new(Mutex::new(None));
-        bus::install(&pipeline, &clock_gate, active.clone(), events.clone())?;
+        let replacing: Arc<Mutex<Option<ReplaceCancellation>>> = Arc::new(Mutex::new(None));
+        bus::install(&pipeline, &clock_gate, active.clone(), replacing.clone(), events.clone())?;
         Ok(PipelineInstance {
             pipeline: Arc::new(GStreamerPipeline {
                 pipeline,
@@ -426,6 +492,7 @@ impl PlaybackPipelineFactory for GStreamerPipelineFactory {
                 sink_factory: self.sink_factory,
                 branches: Mutex::new(Vec::new()),
                 active,
+                replacing,
                 snapshot: Mutex::new(PipelineSnapshot {
                     state: PipelineState::Stopped,
                     elapsed: Duration::ZERO,
@@ -466,6 +533,7 @@ mod tests {
         wav.extend_from_slice(&44_100u32.to_le_bytes());
         wav.extend_from_slice(&176_400u32.to_le_bytes());
         wav.extend_from_slice(&4u16.to_le_bytes());
+
         wav.extend_from_slice(&16u16.to_le_bytes());
         wav.extend_from_slice(b"data");
         wav.extend_from_slice(&data_len.to_le_bytes());
@@ -474,6 +542,23 @@ mod tests {
             wav.extend_from_slice(&sample.to_le_bytes());
         }
         std::fs::write(file, wav).unwrap();
+    }
+
+    #[test]
+    fn old_terminal_cancels_matching_staged_replacement() {
+        let current = TrackKey {
+            queue_item_id: uuid::Uuid::new_v4(),
+            song_id: uuid::Uuid::new_v4(),
+        };
+        let replacement = ReplaceCancellation {
+            expected_generation: 7,
+            expected_current: current.clone(),
+            cancelled: Arc::new(AtomicBool::new(false)),
+        };
+
+        assert!(!replacement.cancel_if_matches(8, &current));
+        assert!(replacement.cancel_if_matches(7, &current));
+        assert!(replacement.is_cancelled());
     }
 
     fn track(path: &std::path::Path, _position: i32) -> PipelineTrack {

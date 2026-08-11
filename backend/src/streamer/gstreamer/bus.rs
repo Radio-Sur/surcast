@@ -5,12 +5,13 @@ use gstreamer as gst;
 use tokio::sync::mpsc;
 
 use super::super::pipeline::{PipelineError, PipelineEvent};
-use super::ActivePlan;
+use super::{ActivePlan, ReplaceCancellation};
 
 pub(super) fn install(
     pipeline: &gst::Pipeline,
     clock_gate: &gst::Element,
     active: Arc<Mutex<Option<ActivePlan>>>,
+    replacing: Arc<Mutex<Option<ReplaceCancellation>>>,
     events: mpsc::UnboundedSender<PipelineEvent>,
 ) -> Result<(), PipelineError> {
     let handover_active = active.clone();
@@ -50,11 +51,15 @@ pub(super) fn install(
     });
 
     let eos_active = active.clone();
+    let eos_replacing = replacing.clone();
     let eos_events = events.clone();
     clock_gate_src.add_probe(gst::PadProbeType::EVENT_DOWNSTREAM, move |_, info| {
         if let Some(gst::PadProbeData::Event(event)) = &info.data {
             if event.type_() == gst::EventType::Eos {
                 if let Some(plan) = eos_active.lock().unwrap_or_else(|error| error.into_inner()).clone() {
+                    if let Some(replacing) = eos_replacing.lock().unwrap_or_else(|error| error.into_inner()).as_ref() {
+                        replacing.cancel_if_matches(plan.generation, &plan.current);
+                    }
                     let _ = eos_events.send(PipelineEvent::CurrentEos {
                         generation: plan.generation,
                         current: plan.current,
