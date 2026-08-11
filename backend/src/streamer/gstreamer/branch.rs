@@ -13,34 +13,32 @@ pub(super) struct Branch {
     pub(super) source: gst::Element,
     pub(super) volume: gst::Element,
     pub(super) timing_pad: gst::Pad,
-    pub(super) mixer_pad: gst::Pad,
+    pub(super) mixer_pad: Option<gst::Pad>,
+    staging_sink: Option<gst::Element>,
 }
 
 pub(super) fn clear(pipeline: &gst::Pipeline, mixer: &gst::Element, branches: &mut Vec<Branch>) {
     for branch in branches.drain(..) {
-        mixer.release_request_pad(&branch.mixer_pad);
-        for element in branch.elements {
-            let _ = element.set_state(gst::State::Null);
-            let _ = pipeline.remove(&element);
-        }
+        discard(pipeline, mixer, branch);
     }
 }
 pub(super) fn truncate(pipeline: &gst::Pipeline, mixer: &gst::Element, branches: &mut Vec<Branch>, len: usize) {
     while branches.len() > len {
         let branch = branches.pop().expect("length checked");
-        mixer.release_request_pad(&branch.mixer_pad);
-        for element in branch.elements {
-            let _ = element.set_state(gst::State::Null);
-            let _ = pipeline.remove(&element);
-        }
+        discard(pipeline, mixer, branch);
     }
 }
 pub(super) fn remove_first(pipeline: &gst::Pipeline, mixer: &gst::Element, branches: &mut Vec<Branch>) {
-    if branches.is_empty() {
-        return;
+    if !branches.is_empty() {
+        discard(pipeline, mixer, branches.remove(0));
     }
-    let branch = branches.remove(0);
-    mixer.release_request_pad(&branch.mixer_pad);
+}
+
+pub(super) fn discard(pipeline: &gst::Pipeline, mixer: &gst::Element, branch: Branch) {
+    if let Some(mixer_pad) = branch.mixer_pad {
+        let _ = branch.timing_pad.unlink(&mixer_pad);
+        mixer.release_request_pad(&mixer_pad);
+    }
     for element in branch.elements {
         let _ = element.set_state(gst::State::Null);
         let _ = pipeline.remove(&element);
@@ -54,6 +52,32 @@ pub(super) fn attach(
     track: &PipelineTrack,
     generation: u64,
     initial_volume: f64,
+) -> Result<Branch, PipelineError> {
+    let mut branch = attach_inner(pipeline, events, track, generation, initial_volume, None)?;
+    link_mixer(mixer, &mut branch)?;
+    Ok(branch)
+}
+
+pub(super) fn attach_staged(
+    pipeline: &gst::Pipeline,
+    events: mpsc::UnboundedSender<PipelineEvent>,
+    track: &PipelineTrack,
+    generation: u64,
+    initial_volume: f64,
+) -> Result<Branch, PipelineError> {
+    let staging_sink = graph::element("fakesink")?;
+    staging_sink.set_property("async", false);
+    staging_sink.set_property("sync", false);
+    attach_inner(pipeline, events, track, generation, initial_volume, Some(staging_sink))
+}
+
+fn attach_inner(
+    pipeline: &gst::Pipeline,
+    events: mpsc::UnboundedSender<PipelineEvent>,
+    track: &PipelineTrack,
+    generation: u64,
+    initial_volume: f64,
+    staging_sink: Option<gst::Element>,
 ) -> Result<Branch, PipelineError> {
     let uri = gst::glib::filename_to_uri(&track.path, None).map_err(|error| PipelineError::Pipeline(error.to_string()))?;
     let source = graph::element("uridecodebin")?;
@@ -78,6 +102,14 @@ pub(super) fn attach(
         .map_err(|error| PipelineError::Pipeline(error.to_string()))?;
     gst::Element::link_many([&queue, &convert, &resample, &capsfilter, &volume])
         .map_err(|error| PipelineError::Pipeline(error.to_string()))?;
+    if let Some(staging_sink) = staging_sink.as_ref() {
+        pipeline
+            .add(staging_sink)
+            .map_err(|error| PipelineError::Pipeline(error.to_string()))?;
+        volume
+            .link(staging_sink)
+            .map_err(|error| PipelineError::Pipeline(error.to_string()))?;
+    }
     let queue_sink = queue
         .static_pad("sink")
         .ok_or_else(|| PipelineError::Pipeline("queue has no sink pad".into()))?;
@@ -103,16 +135,13 @@ pub(super) fn attach(
             });
         }
     });
-    let mixer_pad = mixer
-        .request_pad_simple("sink_%u")
-        .ok_or_else(|| PipelineError::Pipeline("mixer rejected request pad".into()))?;
     let volume_src = volume
         .static_pad("src")
         .ok_or_else(|| PipelineError::Pipeline("volume has no source pad".into()))?;
-    volume_src
-        .link(&mixer_pad)
-        .map_err(|error| PipelineError::Pipeline(error.to_string()))?;
-    let elements = vec![source.clone(), queue, convert, resample, capsfilter, volume.clone()];
+    let mut elements = vec![source.clone(), queue, convert, resample, capsfilter, volume.clone()];
+    if let Some(staging_sink) = staging_sink.as_ref() {
+        elements.push(staging_sink.clone());
+    }
     for element in &elements {
         element
             .sync_state_with_parent()
@@ -123,8 +152,46 @@ pub(super) fn attach(
         source,
         volume,
         timing_pad: volume_src,
-        mixer_pad,
+        mixer_pad: None,
+        staging_sink,
     })
+}
+
+pub(super) fn activate(pipeline: &gst::Pipeline, mixer: &gst::Element, branch: &mut Branch) -> Result<(), PipelineError> {
+    if branch.mixer_pad.is_some() {
+        return Ok(());
+    }
+    let staging_sink = branch
+        .staging_sink
+        .take()
+        .ok_or_else(|| PipelineError::Pipeline("staged branch has no fakesink".into()))?;
+    let sink_pad = staging_sink
+        .static_pad("sink")
+        .ok_or_else(|| PipelineError::Pipeline("fakesink has no sink pad".into()))?;
+    branch
+        .timing_pad
+        .unlink(&sink_pad)
+        .map_err(|error| PipelineError::Pipeline(error.to_string()))?;
+    staging_sink
+        .set_state(gst::State::Null)
+        .map_err(|error| PipelineError::Pipeline(error.to_string()))?;
+    pipeline
+        .remove(&staging_sink)
+        .map_err(|error| PipelineError::Pipeline(error.to_string()))?;
+    branch.elements.retain(|element| element != &staging_sink);
+    link_mixer(mixer, branch)
+}
+
+fn link_mixer(mixer: &gst::Element, branch: &mut Branch) -> Result<(), PipelineError> {
+    let mixer_pad = mixer
+        .request_pad_simple("sink_%u")
+        .ok_or_else(|| PipelineError::Pipeline("mixer rejected request pad".into()))?;
+    branch
+        .timing_pad
+        .link(&mixer_pad)
+        .map_err(|error| PipelineError::Pipeline(error.to_string()))?;
+    branch.mixer_pad = Some(mixer_pad);
+    Ok(())
 }
 
 pub(super) async fn wait_duration(branches: &Mutex<Vec<Branch>>, index: usize) -> Option<Duration> {

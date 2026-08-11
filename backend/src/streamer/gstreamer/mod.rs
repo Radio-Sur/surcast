@@ -120,32 +120,87 @@ impl PlaybackPipeline for GStreamerPipeline {
                 _ => return Err(PipelineError::StalePlan),
             }
         }
+        let mut staged_current = if matches!(plan.mode, ReplaceMode::ActiveReplace { .. }) {
+            Some(branch::attach_staged(
+                &self.pipeline,
+                self.events.clone(),
+                &plan.current,
+                plan.generation,
+                1.0,
+            )?)
+        } else {
+            None
+        };
+        let mut staged_next = if staged_current.is_some() {
+            match plan.next.as_ref() {
+                Some(next) => match branch::attach_staged(&self.pipeline, self.events.clone(), &next.track, plan.generation, 0.0) {
+                    Ok(staged_next) => Some(staged_next),
+                    Err(error) => {
+                        branch::discard(
+                            &self.pipeline,
+                            &self.mixer,
+                            staged_current.take().expect("active replacement stages its current branch"),
+                        );
+                        return Err(error);
+                    }
+                },
+                None => None,
+            }
+        } else {
+            None
+        };
         if self.snapshot.lock().unwrap_or_else(|error| error.into_inner()).state != PipelineState::Stopped {
-            self.set_state(PipelineState::Paused)?;
-            self.pipeline.send_event(gst::event::FlushStart::new());
-            self.pipeline.send_event(gst::event::FlushStop::new(true));
+            if let Err(error) = self.set_state(PipelineState::Paused) {
+                if let Some(staged_current) = staged_current.take() {
+                    branch::discard(&self.pipeline, &self.mixer, staged_current);
+                }
+                if let Some(staged_next) = staged_next.take() {
+                    branch::discard(&self.pipeline, &self.mixer, staged_next);
+                }
+                return Err(error);
+            }
         }
         {
             let mut branches = self.branches.lock().unwrap_or_else(|error| error.into_inner());
             branch::clear(&self.pipeline, &self.mixer, &mut branches);
         }
+        if staged_current.is_some() {
+            self.pipeline
+                .set_state(gst::State::Ready)
+                .map_err(|error| PipelineError::Pipeline(error.to_string()))?;
+        }
 
-        let current = branch::attach(
-            &self.pipeline,
-            &self.mixer,
-            self.events.clone(),
-            &plan.current,
-            plan.generation,
-            1.0,
-        )?;
+        let current = if let Some(mut staged_current) = staged_current {
+            if let Err(error) = branch::activate(&self.pipeline, &self.mixer, &mut staged_current) {
+                branch::discard(&self.pipeline, &self.mixer, staged_current);
+                return Err(error);
+            }
+            staged_current
+        } else {
+            branch::attach(
+                &self.pipeline,
+                &self.mixer,
+                self.events.clone(),
+                &plan.current,
+                plan.generation,
+                1.0,
+            )?
+        };
         self.branches.lock().unwrap_or_else(|error| error.into_inner()).push(current);
         self.set_state(PipelineState::Paused)?;
         let current_duration = branch::wait_duration(&self.branches, 0).await;
-
         let mut scheduled_next = None;
         let mut transition_plan = TransitionPlan::Cut;
         if let (Some(next), Some(_)) = (plan.next.as_ref(), current_duration) {
-            let next_branch = branch::attach(&self.pipeline, &self.mixer, self.events.clone(), &next.track, plan.generation, 0.0)?;
+            let next_branch = if let Some(mut staged_next) = staged_next.take() {
+                if let Err(error) = branch::activate(&self.pipeline, &self.mixer, &mut staged_next) {
+                    branch::discard(&self.pipeline, &self.mixer, staged_next);
+                    return Err(error);
+                }
+                staged_next
+            } else {
+                branch::attach(&self.pipeline, &self.mixer, self.events.clone(), &next.track, plan.generation, 0.0)?
+            };
             next_branch
                 .source
                 .state(gst::ClockTime::from_seconds(5))
@@ -154,6 +209,9 @@ impl PlaybackPipeline for GStreamerPipeline {
             self.branches.lock().unwrap_or_else(|error| error.into_inner()).push(next_branch);
             scheduled_next = Some(next.track.key.clone());
             transition_plan = next.transition;
+        }
+        if let Some(staged_next) = staged_next {
+            branch::discard(&self.pipeline, &self.mixer, staged_next);
         }
         let next_duration = if scheduled_next.is_some() {
             branch::wait_duration(&self.branches, 1).await
@@ -449,6 +507,20 @@ mod tests {
         instance.pipeline.set_playing(false).await.unwrap();
         assert_eq!(instance.pipeline.snapshot().await.unwrap().state, PipelineState::Paused);
         instance.pipeline.stop().await.unwrap();
+    }
+
+    #[test]
+    fn staged_branch_has_no_mixer_request_pad() {
+        let graph::Backbone { pipeline, mixer, .. } = graph::build_backbone(&config(), "fakesink").unwrap();
+        let (events, _) = mpsc::unbounded_channel();
+        let file = tempfile::NamedTempFile::new().unwrap();
+        write_wav(file.path(), Duration::from_secs(1), 0);
+
+        let staged = branch::attach_staged(&pipeline, events, &track(file.path(), 0), 1, 0.0).unwrap();
+
+        assert!(staged.mixer_pad.is_none());
+        assert!(mixer.pads().iter().all(|pad| !pad.name().starts_with("sink_")));
+        branch::discard(&pipeline, &mixer, staged);
     }
 
     #[tokio::test]
