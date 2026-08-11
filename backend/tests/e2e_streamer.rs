@@ -17,8 +17,12 @@ use surcast_backend::{
 use tempfile::TempDir;
 
 fn wav(frequency: f32) -> Vec<u8> {
+    wav_for(frequency, 10)
+}
+
+fn wav_for(frequency: f32, seconds: u32) -> Vec<u8> {
     let rate = 44_100u32;
-    let frames = rate * 10;
+    let frames = rate * seconds;
     let size = frames * 4;
     let mut bytes = Vec::with_capacity(44 + size as usize);
     bytes.extend_from_slice(b"RIFF");
@@ -67,7 +71,7 @@ async fn wait_for_status(
         if Instant::now() >= deadline {
             return Err(failure(format!("stream status did not converge: {status}")));
         }
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        tokio::time::sleep(Duration::from_millis(25)).await;
     }
 }
 
@@ -180,6 +184,10 @@ async fn managed_icecast_serves_gstreamer_encoded_mp3() {
         if queued.status_code().as_u16() >= 300 {
             return Err(failure(format!("queue creation failed: {}", queued.text())));
         }
+        let first_queue_item_id = queued.json::<serde_json::Value>()[0]["id"]
+            .as_str()
+            .ok_or_else(|| failure("queue creation response has no first queue item id"))?
+            .to_owned();
 
         let started = server
             .post(&format!("/api/stations/{station_id}/stream/restart"))
@@ -275,6 +283,39 @@ async fn managed_icecast_serves_gstreamer_encoded_mp3() {
             status["song_index"] == 1 && status["title"] == "second tone"
         })
         .await?;
+        let inserted = server
+            .post(&format!("/api/stations/{station_id}/queue/insert"))
+            .add_header("Authorization", &auth)
+            .json(&serde_json::json!({"song_id": first_song, "position": 0}))
+            .await;
+        if inserted.status_code() != 200 {
+            return Err(failure(format!("queue insertion before current failed: {}", inserted.text())));
+        }
+        let removed = server
+            .delete(&format!("/api/stations/{station_id}/queue/{first_queue_item_id}"))
+            .add_header("Authorization", &auth)
+            .await;
+        if removed.status_code() != 204 {
+            return Err(failure(format!("queue removal before current failed: {}", removed.text())));
+        }
+        let retained = wait_for_status(&server, &station_id, &auth, |status| {
+            status["playing"] == true && status["title"] == "second tone"
+        })
+        .await?;
+        if retained["song_index"].as_u64() != Some(1) {
+            return Err(failure(format!("queue reload changed the active track: {retained}")));
+        }
+        let queue_after_mutation = server
+            .get(&format!("/api/stations/{station_id}/queue"))
+            .add_header("Authorization", &auth)
+            .await
+            .json::<serde_json::Value>();
+        if queue_after_mutation
+            .as_array()
+            .is_none_or(|items| items.iter().any(|item| item["id"] == first_queue_item_id))
+        {
+            return Err(failure(format!("deleted queue item returned after reload: {queue_after_mutation}")));
+        }
         tokio::time::sleep(Duration::from_millis(1_200)).await;
         let second_stable = wait_for_status(&server, &station_id, &auth, |status| status["playing"] == true).await?;
         if second_stable["song_index"] != second["song_index"] || second_stable["title"] != second["title"] {
@@ -323,6 +364,160 @@ async fn managed_icecast_serves_gstreamer_encoded_mp3() {
         tokio::time::sleep(Duration::from_millis(500)).await;
         if !streamers.lock().unwrap().is_empty() {
             return Err(failure("stopped stream reconnected itself"));
+        }
+        Ok(())
+    }
+    .await;
+
+    let active = { streamers.lock().unwrap().values().cloned().collect::<Vec<_>>() };
+    futures::future::join_all(active.into_iter().map(|streamer| async move { streamer.shutdown().await })).await;
+    let icecast_result = icecast.stop().await;
+    if let Err(error) = result {
+        panic!("{error}");
+    }
+    icecast_result.unwrap();
+}
+
+#[tokio::test]
+#[serial]
+async fn crossfade_naturally_promotes_each_queued_track_once() {
+    let _ = tracing_subscriber::fmt().with_test_writer().try_init();
+    let db = common::setup_db().await;
+    let files = TempDir::new().unwrap();
+    let icecast_dir = TempDir::new().unwrap();
+    let port = free_port();
+    let icecast = IcecastManager::new(icecast_dir.path().into());
+    icecast.start(port.into(), "surcast", "admin", "surcast").await.unwrap();
+    let mut config = api_common::test_config();
+    config.upload_dir = files.path().display().to_string();
+    let streamers: StreamersMap = Arc::new(Mutex::new(HashMap::new()));
+
+    let result: Result<(), Box<dyn std::error::Error>> = async {
+        let server = TestServer::new(router::create_router(
+            db.clone(),
+            config,
+            streamers.clone(),
+            icecast.clone(),
+            ListenersState::new(),
+        ))?;
+        server
+            .post("/api/setup/init")
+            .json(&serde_json::json!({"username":"admin","password":"admin123","name":"Admin"}))
+            .await;
+        let login = server
+            .post("/api/auth/login")
+            .json(&serde_json::json!({"username":"admin","password":"admin123"}))
+            .await;
+        let auth = format!(
+            "Bearer {}",
+            login.json::<serde_json::Value>()["access_token"]
+                .as_str()
+                .ok_or_else(|| failure("login response has no access token"))?
+        );
+        sqlx::query(
+            "UPDATE icecast_settings SET enabled=true, mode='managed', port=$1, \
+             source_password='surcast', admin_user='admin', admin_password='surcast'",
+        )
+        .bind(port as i32)
+        .execute(&db)
+        .await?;
+        let station = server
+            .post("/api/stations")
+            .add_header("Authorization", &auth)
+            .json(&serde_json::json!({
+                "name": "Natural crossfade",
+                "stream_url": "natural-crossfade",
+                "prebuffer_bytes": 1024,
+                "transition_mode": "crossfade"
+            }))
+            .await;
+        if station.status_code() != 201 {
+            return Err(failure(format!("station creation failed: {}", station.text())));
+        }
+        let station_id = station.json::<serde_json::Value>()["id"]
+            .as_str()
+            .ok_or_else(|| failure("station response has no id"))?
+            .to_owned();
+        let station_uuid = uuid::Uuid::parse_str(&station_id)?;
+        sqlx::query("UPDATE stations SET transition_mode='crossfade', default_fade_ms=500 WHERE id=$1")
+            .bind(station_uuid)
+            .execute(&db)
+            .await?;
+        let admin: (uuid::Uuid,) = sqlx::query_as("SELECT id FROM users WHERE username='admin'").fetch_one(&db).await?;
+
+        std::fs::create_dir(files.path().join("audio"))?;
+        let tones = [(330.0, "tone A"), (440.0, "tone B"), (550.0, "tone C"), (660.0, "tone D")];
+        let song_ids = tones
+            .iter()
+            .enumerate()
+            .map(|(index, (frequency, title))| {
+                let song_id = uuid::Uuid::new_v4();
+                std::fs::write(
+                    files.path().join("audio").join(format!("natural-{index}.wav")),
+                    wav_for(*frequency, 10),
+                )?;
+                Ok::<_, Box<dyn std::error::Error>>((song_id, title, format!("natural-{index}.wav")))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        for (song_id, title, file_path) in &song_ids {
+            sqlx::query(
+                "INSERT INTO songs (id,title,artist,file_path,file_size,mime_type,duration,uploaded_by) \
+                 VALUES ($1,$2,'test',$3,1,'audio/wav',10,$4)",
+            )
+            .bind(song_id)
+            .bind(title)
+            .bind(file_path)
+            .bind(admin.0)
+            .execute(&db)
+            .await?;
+            let assigned = server
+                .post(&format!("/api/songs/{song_id}/stations"))
+                .add_header("Authorization", &auth)
+                .json(&serde_json::json!({"station_ids":[station_id.clone()]}))
+                .await;
+            if assigned.status_code().as_u16() >= 300 {
+                return Err(failure(format!("song assignment failed: {}", assigned.text())));
+            }
+        }
+        let queue_ids = song_ids.iter().map(|(id, _, _)| *id).collect::<Vec<_>>();
+        let queued = server
+            .post(&format!("/api/stations/{station_id}/queue"))
+            .add_header("Authorization", &auth)
+            .json(&serde_json::json!({"song_ids": queue_ids}))
+            .await;
+        if queued.status_code().as_u16() >= 300 {
+            return Err(failure(format!("queue creation failed: {}", queued.text())));
+        }
+
+        let started = server
+            .post(&format!("/api/stations/{station_id}/stream/restart"))
+            .add_header("Authorization", &auth)
+            .await;
+        if started.status_code() != 200 {
+            return Err(failure(format!("stream start failed: {}", started.text())));
+        }
+        let client = reqwest::Client::builder().timeout(Duration::from_secs(5)).build()?;
+        let url = format!("http://127.0.0.1:{port}/natural-crossfade.mp3");
+        let response = open_mount(&client, &url).await?;
+        drop(response);
+
+        for (index, (_, title, _)) in song_ids.iter().enumerate() {
+            let status = wait_for_status(&server, &station_id, &auth, |status| {
+                status["title"].as_str() == Some(*title) && (status["playing"] == true || index + 1 == song_ids.len())
+            })
+            .await?;
+            if status["song_index"].as_u64() != Some(index as u64) {
+                return Err(failure(format!("natural transition selected wrong queue index: {status}")));
+            }
+            if index > 0 && status["elapsed"].as_u64() != Some(0) {
+                return Err(failure(format!("promoted track did not reset elapsed: {status}")));
+            }
+        }
+        let stopped = wait_for_status(&server, &station_id, &auth, |status| status["playing"] == false).await?;
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        let stable = wait_for_status(&server, &station_id, &auth, |status| status["playing"] == false).await?;
+        if stable["song_index"] != stopped["song_index"] || stable["title"] != stopped["title"] {
+            return Err(failure(format!("exhausted queue advanced or retried: {stopped} -> {stable}")));
         }
         Ok(())
     }

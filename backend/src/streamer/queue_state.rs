@@ -190,6 +190,27 @@ mod tests {
     }
 
     #[test]
+    fn handover_cursor_persists_the_promoted_item_and_only_prior_current() {
+        let a = song(Uuid::new_v4(), 0);
+        let b = song(Uuid::new_v4(), 1);
+        let c = song(Uuid::new_v4(), 2);
+        let mut state = QueueState::new(vec![a.clone(), b.clone(), c], 0);
+        let anchor = state.anchor_after_current();
+
+        state.commit_current(b.clone(), anchor);
+
+        assert_eq!(
+            state.persistence_cursor(),
+            QueueCursor {
+                current_queue_item_id: Some(b.queue_item_id),
+                consumed_queue_item_ids: vec![a.queue_item_id],
+                legacy_position: b.position,
+            }
+        );
+        assert_eq!(state.upcoming(), 1);
+    }
+
+    #[test]
     fn detached_current_survives_reload_until_handover() {
         let a = song(Uuid::new_v4(), 0);
         let b = song(Uuid::new_v4(), 1);
