@@ -272,6 +272,7 @@ pub async fn add_playlist_to_queue(
     }
 
     let song_ids = repository::find_playlist_song_ids(&db, playlist_id).await?;
+    queue_repo::trim_consumed_queue_items(&db, station_id).await?;
     let pos = queue_repo::queue_next_position(&db, station_id).await?;
     queue_repo::insert_queue_items_batch(&db, station_id, &song_ids, pos, Some(playlist_id)).await?;
 

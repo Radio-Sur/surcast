@@ -92,6 +92,7 @@ pub async fn add_songs_to_queue(
         }
     }
 
+    queue_repo::trim_consumed_queue_items(&db, station_id).await?;
     let start_position = queue_repo::queue_next_position(&db, station_id).await?;
     queue_repo::insert_queue_items_batch(&db, station_id, &req.song_ids, start_position, req.playlist_id).await?;
 

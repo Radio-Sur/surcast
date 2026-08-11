@@ -195,3 +195,105 @@ async fn test_delete_queue_by_playlist() {
     let items = queue_repo::find_queue_items_all(&db, station_id).await.expect("find failed");
     assert!(items.is_empty());
 }
+
+#[tokio::test]
+async fn test_trim_consumed_queue_items_removes_played_rows() {
+    let db = common::setup_db().await;
+    let user_id = make_user(&db).await;
+    let station_id = make_station(&db, user_id).await;
+    let stale_song = make_song(&db, user_id).await;
+    let current_song = make_song(&db, user_id).await;
+
+    // stale played rows at positions 0 and 1, current track at position 2
+    queue_repo::insert_queue_item(&db, station_id, stale_song, 0, None).await.unwrap();
+    queue_repo::insert_queue_item(&db, station_id, stale_song, 1, None).await.unwrap();
+    queue_repo::insert_queue_item(&db, station_id, current_song, 2, None).await.unwrap();
+
+    let stale_ids: Vec<Uuid> =
+        sqlx::query_scalar("SELECT id FROM station_queue WHERE station_id = $1 AND position < 2 ORDER BY position")
+            .bind(station_id)
+            .fetch_all(&db)
+            .await
+            .unwrap();
+    assert_eq!(stale_ids.len(), 2);
+    let current_item: Uuid =
+        sqlx::query_scalar("SELECT id FROM station_queue WHERE station_id = $1 AND position = 2")
+            .bind(station_id)
+            .fetch_one(&db)
+            .await
+            .unwrap();
+
+    // durable format-1 cursor: stale rows are tracked by identity
+    sqlx::query(
+        "UPDATE stations SET current_queue_item_id = $1, consumed_queue_item_ids = $2, \
+         current_song_index = 2, current_queue_cursor_format = 1 WHERE id = $3",
+    )
+    .bind(current_item)
+    .bind(&stale_ids)
+    .bind(station_id)
+    .execute(&db)
+    .await
+    .unwrap();
+
+    queue_repo::trim_consumed_queue_items(&db, station_id).await.unwrap();
+
+    let remaining: Vec<(Uuid, i32)> =
+        sqlx::query_as("SELECT id, position FROM station_queue WHERE station_id = $1 ORDER BY position")
+            .bind(station_id)
+            .fetch_all(&db)
+            .await
+            .unwrap();
+    assert_eq!(remaining.len(), 1);
+    assert_eq!(remaining[0].0, current_item);
+    assert_eq!(remaining[0].1, 2);
+}
+
+#[tokio::test]
+async fn test_trim_consumed_queue_items_legacy_position_cutoff() {
+    let db = common::setup_db().await;
+    let user_id = make_user(&db).await;
+    let station_id = make_station(&db, user_id).await;
+    let stale_song = make_song(&db, user_id).await;
+    let current_song = make_song(&db, user_id).await;
+
+    queue_repo::insert_queue_item(&db, station_id, stale_song, 0, None).await.unwrap();
+    queue_repo::insert_queue_item(&db, station_id, stale_song, 1, None).await.unwrap();
+    queue_repo::insert_queue_item(&db, station_id, current_song, 2, None).await.unwrap();
+
+    // legacy cursor: no consumed ids, only the position cutoff (format 0)
+    sqlx::query("UPDATE stations SET current_song_index = 2, current_queue_cursor_format = 0 WHERE id = $1")
+        .bind(station_id)
+        .execute(&db)
+        .await
+        .unwrap();
+
+    queue_repo::trim_consumed_queue_items(&db, station_id).await.unwrap();
+
+    let remaining: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM station_queue WHERE station_id = $1")
+        .bind(station_id)
+        .fetch_one(&db)
+        .await
+        .unwrap();
+    assert_eq!(remaining, 1);
+}
+
+#[tokio::test]
+async fn test_trim_consumed_queue_items_keeps_unplayed_rows() {
+    let db = common::setup_db().await;
+    let user_id = make_user(&db).await;
+    let station_id = make_station(&db, user_id).await;
+    let song = make_song(&db, user_id).await;
+
+    // nothing consumed: nothing may be deleted
+    queue_repo::insert_queue_item(&db, station_id, song, 0, None).await.unwrap();
+    queue_repo::insert_queue_item(&db, station_id, song, 1, None).await.unwrap();
+
+    queue_repo::trim_consumed_queue_items(&db, station_id).await.unwrap();
+
+    let remaining: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM station_queue WHERE station_id = $1")
+        .bind(station_id)
+        .fetch_one(&db)
+        .await
+        .unwrap();
+    assert_eq!(remaining, 2);
+}

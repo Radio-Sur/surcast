@@ -53,6 +53,34 @@ pub async fn insert_queue_items_batch(
     Ok(())
 }
 
+/// Remove rows that have already been played, so the queue table holds only the
+/// current track and upcoming ones. Stale played rows (e.g. from previous adds
+/// of the same playlist) would otherwise inflate the "Song X of Y" counters
+/// whenever new content is enqueued.
+///
+/// Matches both cursor formats: identity-based (`consumed_queue_item_ids`) for
+/// the durable format-1 cursor, position-based (`position < current_song_index`)
+/// for legacy cursors and stations that never persisted a cursor.
+pub async fn trim_consumed_queue_items(db: &PgPool, station_id: Uuid) -> Result<(), AppError> {
+    sqlx::query(
+        "DELETE FROM station_queue sq
+         WHERE sq.station_id = $1
+           AND EXISTS (
+             SELECT 1 FROM stations st
+             WHERE st.id = $1
+               AND (
+                 sq.id = ANY(st.consumed_queue_item_ids)
+                 OR sq.position < st.current_song_index
+               )
+           )",
+    )
+    .bind(station_id)
+    .execute(db)
+    .await
+    .db_error("failed to trim consumed queue items")?;
+    Ok(())
+}
+
 pub async fn find_queue_items_all(
     db: &PgPool,
     station_id: Uuid,
