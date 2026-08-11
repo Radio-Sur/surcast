@@ -254,7 +254,16 @@ impl StationController {
             queue_item_id: current.queue_item_id,
             song_id: current.song_id,
         };
-        let Some(next) = self.queue.successor_after(&current_key) else {
+        let mut next = self.queue.successor_after(&current_key);
+        if next.is_none() {
+            // The in-memory queue can lag behind the database: Auto DJ refills
+            // (triggered manually or by a schedule) insert rows without the
+            // live streamer reloading. Retry once against the DB before
+            // treating the queue as exhausted.
+            self.queue.reload_from_db().await;
+            next = self.queue.successor_after(&current_key);
+        }
+        let Some(next) = next else {
             return Ok(self.stop_after_current());
         };
         let next_key = TrackKey {

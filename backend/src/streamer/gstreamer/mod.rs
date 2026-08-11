@@ -48,6 +48,7 @@ struct ActivePlan {
     next: Option<TrackKey>,
     handover_at: Option<gst::ClockTime>,
     started_at: Option<gst::ClockTime>,
+    timeline_origin: gst::ClockTime,
     current_epoch: gst::ClockTime,
     last_elapsed: gst::ClockTime,
     handed_over: bool,
@@ -128,6 +129,148 @@ impl GStreamerPipeline {
         }
         Ok(())
     }
+    fn restore_state(&self, state: PipelineState) -> Result<(), PipelineError> {
+        self.set_state(state)
+    }
+    fn force_stopped(&self) {
+        let _ = self.pipeline.set_state(gst::State::Null);
+        {
+            let mut branches = self.branches.lock().unwrap_or_else(|error| error.into_inner());
+            branch::clear(&self.pipeline, &self.mixer, &mut branches);
+        }
+        *self.active.lock().unwrap_or_else(|error| error.into_inner()) = None;
+        let mut snapshot = self.snapshot.lock().unwrap_or_else(|error| error.into_inner());
+        snapshot.state = PipelineState::Stopped;
+        snapshot.elapsed = Duration::ZERO;
+    }
+
+    fn finish_paused_transaction(&self, previous_state: PipelineState, result: Result<(), PipelineError>) -> Result<(), PipelineError> {
+        match self.restore_state(previous_state) {
+            Ok(()) => result,
+            Err(error) => {
+                self.force_stopped();
+                Err(error)
+            }
+        }
+    }
+
+    fn replace_active(&self, plan: &PairPlan, cancellation: &ReplaceCancellation) -> Result<(), PipelineError> {
+        let previous_state = self.snapshot.lock().unwrap_or_else(|error| error.into_inner()).state;
+        let mut candidates = Vec::with_capacity(2);
+        candidates.push(branch::attach_paused(
+            &self.pipeline,
+            &self.mixer,
+            self.events.clone(),
+            &plan.current,
+            plan.generation,
+            1.0,
+        )?);
+        if let Some(next) = plan.next.as_ref() {
+            match branch::attach_paused(&self.pipeline, &self.mixer, self.events.clone(), &next.track, plan.generation, 0.0) {
+                Ok(candidate) => candidates.push(candidate),
+                Err(error) => {
+                    branch::clear(&self.pipeline, &self.mixer, &mut candidates);
+                    return Err(error);
+                }
+            }
+        }
+        if let Err(error) = self.set_state(PipelineState::Paused) {
+            branch::clear(&self.pipeline, &self.mixer, &mut candidates);
+            return Err(error);
+        }
+        if cancellation.is_cancelled() {
+            branch::clear(&self.pipeline, &self.mixer, &mut candidates);
+            self.restore_state(previous_state)?;
+            return Err(PipelineError::StalePlan);
+        }
+        let timeline_base = {
+            let active = self.active.lock().unwrap_or_else(|error| error.into_inner());
+            let Some(active) = active.as_ref() else {
+                branch::clear(&self.pipeline, &self.mixer, &mut candidates);
+                self.restore_state(previous_state)?;
+                return Err(PipelineError::StalePlan);
+            };
+            Duration::from_nanos(
+                active
+                    .started_at
+                    .unwrap_or(gst::ClockTime::ZERO)
+                    .saturating_add(active.last_elapsed)
+                    .nseconds(),
+            )
+        };
+
+        let current_duration = branch::duration(&candidates[0]);
+        if current_duration.is_none() {
+            branch::truncate(&self.pipeline, &self.mixer, &mut candidates, 1);
+        }
+        for candidate in &mut candidates {
+            if let Err(error) = branch::prepare_paused(candidate) {
+                branch::clear(&self.pipeline, &self.mixer, &mut candidates);
+                self.restore_state(previous_state)?;
+                return Err(error);
+            }
+        }
+        let scheduled_next = plan
+            .next
+            .as_ref()
+            .filter(|_| candidates.len() > 1)
+            .map(|next| next.track.key.clone());
+        let transition_plan = plan
+            .next
+            .as_ref()
+            .filter(|_| candidates.len() > 1)
+            .map_or(TransitionPlan::Cut, |next| next.transition);
+        let next_duration = candidates.get(1).and_then(branch::duration);
+        let transition = resolve_transition(
+            transition_plan,
+            current_duration,
+            next_duration,
+            branch::seekable(&candidates[0]),
+            candidates.get(1).is_some_and(branch::seekable),
+        );
+        let handover_at = match transition::apply_replacement(transition, &candidates, current_duration, timeline_base) {
+            Ok(schedule) => schedule.handover,
+            Err(error) => {
+                branch::clear(&self.pipeline, &self.mixer, &mut candidates);
+                self.restore_state(previous_state)?;
+                return Err(error);
+            }
+        };
+        if cancellation.is_cancelled() {
+            branch::clear(&self.pipeline, &self.mixer, &mut candidates);
+            self.restore_state(previous_state)?;
+            return Err(PipelineError::StalePlan);
+        }
+
+        {
+            let mut live = self.branches.lock().unwrap_or_else(|error| error.into_inner());
+            branch::clear(&self.pipeline, &self.mixer, &mut live);
+            live.extend(candidates);
+        }
+        *self.active.lock().unwrap_or_else(|error| error.into_inner()) = Some(ActivePlan {
+            generation: plan.generation,
+            output_epoch: plan.output_epoch,
+            current: plan.current.key.clone(),
+            next: scheduled_next,
+            handover_at,
+            handed_over: false,
+            timeline_origin: gst::ClockTime::from_nseconds(timeline_base.as_nanos().min(u64::MAX as u128) as u64),
+            started_at: None,
+            current_epoch: gst::ClockTime::ZERO,
+            last_elapsed: gst::ClockTime::ZERO,
+        });
+        {
+            let mut live = self.branches.lock().unwrap_or_else(|error| error.into_inner());
+            for candidate in live.iter_mut() {
+                branch::release_paused(candidate);
+            }
+        }
+        if let Err(error) = self.restore_state(previous_state) {
+            self.force_stopped();
+            return Err(error);
+        }
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -152,118 +295,40 @@ impl PlaybackPipeline for GStreamerPipeline {
                 _ => return Err(PipelineError::StalePlan),
             }
         }
-        let replacing = match &plan.mode {
-            ReplaceMode::ActiveReplace {
-                expected_generation,
-                expected_current,
-            } => {
-                let replacing = ReplaceCancellation {
-                    expected_generation: *expected_generation,
-                    expected_current: expected_current.clone(),
-                    cancelled: Arc::new(AtomicBool::new(false)),
-                };
-                *self.replacing.lock().unwrap_or_else(|error| error.into_inner()) = Some(replacing.clone());
-                Some(replacing)
-            }
-            ReplaceMode::InitialReplaceFromStopped => None,
-        };
-        let _replacement_cleanup = replacing.as_ref().map(|_| ReplacementCleanup(self.replacing.clone()));
-        let mut staged_current = if matches!(plan.mode, ReplaceMode::ActiveReplace { .. }) {
-            Some(branch::attach_staged(
-                &self.pipeline,
-                self.events.clone(),
-                &plan.current,
-                plan.generation,
-                1.0,
-            )?)
-        } else {
-            None
-        };
-        let mut staged_next = if staged_current.is_some() {
-            match plan.next.as_ref() {
-                Some(next) => match branch::attach_staged(&self.pipeline, self.events.clone(), &next.track, plan.generation, 0.0) {
-                    Ok(staged_next) => Some(staged_next),
-                    Err(error) => {
-                        branch::discard(
-                            &self.pipeline,
-                            &self.mixer,
-                            staged_current.take().expect("active replacement stages its current branch"),
-                        );
-                        return Err(error);
-                    }
-                },
-                None => None,
-            }
-        } else {
-            None
-        };
-        let previous_state = self.snapshot.lock().unwrap_or_else(|error| error.into_inner()).state;
-        if previous_state != PipelineState::Stopped {
-            if let Err(error) = self.set_state(PipelineState::Paused) {
-                if let Some(staged_current) = staged_current.take() {
-                    branch::discard(&self.pipeline, &self.mixer, staged_current);
-                }
-                if let Some(staged_next) = staged_next.take() {
-                    branch::discard(&self.pipeline, &self.mixer, staged_next);
-                }
-                *self.replacing.lock().unwrap_or_else(|error| error.into_inner()) = None;
-                return Err(error);
-            }
+        if let ReplaceMode::ActiveReplace {
+            expected_generation,
+            expected_current,
+        } = &plan.mode
+        {
+            let cancellation = ReplaceCancellation {
+                expected_generation: *expected_generation,
+                expected_current: expected_current.clone(),
+                cancelled: Arc::new(AtomicBool::new(false)),
+            };
+            *self.replacing.lock().unwrap_or_else(|error| error.into_inner()) = Some(cancellation.clone());
+            let _cleanup = ReplacementCleanup(self.replacing.clone());
+            return self.replace_active(&plan, &cancellation);
         }
-        if replacing.as_ref().is_some_and(ReplaceCancellation::is_cancelled) {
-            if let Some(staged_current) = staged_current.take() {
-                branch::discard(&self.pipeline, &self.mixer, staged_current);
-            }
-            if let Some(staged_next) = staged_next.take() {
-                branch::discard(&self.pipeline, &self.mixer, staged_next);
-            }
-            *self.replacing.lock().unwrap_or_else(|error| error.into_inner()) = None;
-            if previous_state == PipelineState::Playing {
-                self.set_state(PipelineState::Playing)?;
-            }
-            return Err(PipelineError::StalePlan);
-        }
+
         {
             let mut branches = self.branches.lock().unwrap_or_else(|error| error.into_inner());
             branch::clear(&self.pipeline, &self.mixer, &mut branches);
         }
-        if staged_current.is_some() {
-            self.pipeline
-                .set_state(gst::State::Ready)
-                .map_err(|error| PipelineError::Pipeline(error.to_string()))?;
-        }
-
-        let current = if let Some(mut staged_current) = staged_current {
-            if let Err(error) = branch::activate(&self.pipeline, &self.mixer, &mut staged_current) {
-                branch::discard(&self.pipeline, &self.mixer, staged_current);
-                return Err(error);
-            }
-            staged_current
-        } else {
-            branch::attach(
-                &self.pipeline,
-                &self.mixer,
-                self.events.clone(),
-                &plan.current,
-                plan.generation,
-                1.0,
-            )?
-        };
+        let current = branch::attach(
+            &self.pipeline,
+            &self.mixer,
+            self.events.clone(),
+            &plan.current,
+            plan.generation,
+            1.0,
+        )?;
         self.branches.lock().unwrap_or_else(|error| error.into_inner()).push(current);
         self.set_state(PipelineState::Paused)?;
         let current_duration = branch::wait_duration(&self.branches, 0).await;
         let mut scheduled_next = None;
         let mut transition_plan = TransitionPlan::Cut;
         if let (Some(next), Some(_)) = (plan.next.as_ref(), current_duration) {
-            let next_branch = if let Some(mut staged_next) = staged_next.take() {
-                if let Err(error) = branch::activate(&self.pipeline, &self.mixer, &mut staged_next) {
-                    branch::discard(&self.pipeline, &self.mixer, staged_next);
-                    return Err(error);
-                }
-                staged_next
-            } else {
-                branch::attach(&self.pipeline, &self.mixer, self.events.clone(), &next.track, plan.generation, 0.0)?
-            };
+            let next_branch = branch::attach_paused(&self.pipeline, &self.mixer, self.events.clone(), &next.track, plan.generation, 0.0)?;
             next_branch
                 .source
                 .state(gst::ClockTime::from_seconds(5))
@@ -272,9 +337,6 @@ impl PlaybackPipeline for GStreamerPipeline {
             self.branches.lock().unwrap_or_else(|error| error.into_inner()).push(next_branch);
             scheduled_next = Some(next.track.key.clone());
             transition_plan = next.transition;
-        }
-        if let Some(staged_next) = staged_next {
-            branch::discard(&self.pipeline, &self.mixer, staged_next);
         }
         let next_duration = if scheduled_next.is_some() {
             branch::wait_duration(&self.branches, 1).await
@@ -286,12 +348,14 @@ impl PlaybackPipeline for GStreamerPipeline {
             (branch::seekable(&branches[0]), branches.get(1).is_some_and(branch::seekable))
         };
         let transition = resolve_transition(transition_plan, current_duration, next_duration, current_seekable, next_seekable);
-
         let handover_at = {
-            let branches = self.branches.lock().unwrap_or_else(|error| error.into_inner());
-            transition::apply_initial(transition, &branches, current_duration)?.handover
+            let mut branches = self.branches.lock().unwrap_or_else(|error| error.into_inner());
+            let handover = transition::apply_initial(transition, &branches, current_duration)?.handover;
+            if branches.len() > 1 {
+                branch::activate_paused(&mut branches[1])?;
+            }
+            handover
         };
-
         *self.active.lock().unwrap_or_else(|error| error.into_inner()) = Some(ActivePlan {
             generation: plan.generation,
             output_epoch: plan.output_epoch,
@@ -299,70 +363,164 @@ impl PlaybackPipeline for GStreamerPipeline {
             next: scheduled_next,
             handover_at,
             handed_over: false,
+            timeline_origin: gst::ClockTime::ZERO,
             started_at: None,
             current_epoch: gst::ClockTime::ZERO,
             last_elapsed: gst::ClockTime::ZERO,
         });
-        *self.replacing.lock().unwrap_or_else(|error| error.into_inner()) = None;
         self.set_state(PipelineState::Playing)
     }
 
     async fn roll(&self, plan: RollingPlan) -> Result<(), PipelineError> {
-        let (attaching, expected_next, replacement) = match plan.change {
-            RollingChange::Attach(next) => (true, None, Some(next)),
+        let (expected_next, replacement) = match plan.change {
+            RollingChange::Attach(next) => (None, Some(next)),
             RollingChange::ReplaceNext {
                 expected_next,
                 replacement,
-            } => (false, Some(expected_next), replacement),
+            } => (Some(expected_next), replacement),
+        };
+        let matches_plan = |active: &ActivePlan| {
+            active.generation == plan.generation
+                && active.current == plan.current
+                && !expected_next.as_ref().is_some_and(|key| active.next.as_ref() != Some(key))
+                && !(expected_next.is_none() && active.next.is_some())
         };
         {
             let active = self.active.lock().unwrap_or_else(|error| error.into_inner());
-            let Some(active) = active.as_ref() else {
-                return Err(PipelineError::StalePlan);
-            };
-            if active.generation != plan.generation
-                || active.current != plan.current
-                || expected_next.as_ref().is_some_and(|key| active.next.as_ref() != Some(key))
-                || expected_next.is_none() && active.next.is_some()
-            {
+            if !active.as_ref().is_some_and(&matches_plan) {
                 return Err(PipelineError::StalePlan);
             }
         }
 
+        let (current_index, obsolete_index, candidate_index) = {
+            let branches = self.branches.lock().unwrap_or_else(|error| error.into_inner());
+            let current_index = branches
+                .iter()
+                .position(|branch| branch.key == plan.current)
+                .ok_or(PipelineError::StalePlan)?;
+            let obsolete_index = if let Some(expected) = expected_next.as_ref() {
+                Some(
+                    branches
+                        .iter()
+                        .position(|branch| branch.key == *expected)
+                        .ok_or(PipelineError::StalePlan)?,
+                )
+            } else {
+                branches
+                    .iter()
+                    .enumerate()
+                    .find_map(|(index, _)| (index != current_index).then_some(index))
+            };
+            (current_index, obsolete_index, branches.len())
+        };
+
+        let Some(next) = replacement else {
+            let previous_state = self.snapshot.lock().unwrap_or_else(|error| error.into_inner()).state;
+            self.set_state(PipelineState::Paused)?;
+            let commit_result = (|| {
+                {
+                    let active = self.active.lock().unwrap_or_else(|error| error.into_inner());
+                    active
+                        .as_ref()
+                        .filter(|active| matches_plan(active))
+                        .ok_or(PipelineError::StalePlan)?;
+                }
+                {
+                    let mut branches = self.branches.lock().unwrap_or_else(|error| error.into_inner());
+                    if let Some(obsolete_index) = obsolete_index {
+                        branch::remove_at(&self.pipeline, &self.mixer, &mut branches, obsolete_index);
+                    }
+                }
+                let mut active = self.active.lock().unwrap_or_else(|error| error.into_inner());
+                let active = active
+                    .as_mut()
+                    .filter(|active| matches_plan(active))
+                    .ok_or(PipelineError::StalePlan)?;
+                active.next = None;
+                active.handover_at = None;
+                active.handed_over = false;
+                Ok(())
+            })();
+            return self.finish_paused_transaction(previous_state, commit_result);
+        };
+
+        let candidate = branch::attach_paused(&self.pipeline, &self.mixer, self.events.clone(), &next.track, plan.generation, 0.0)?;
+        self.branches.lock().unwrap_or_else(|error| error.into_inner()).push(candidate);
+        let current_duration = branch::wait_duration(&self.branches, current_index).await;
+        let next_duration = branch::wait_duration(&self.branches, candidate_index).await;
+
+        let previous_state = self.snapshot.lock().unwrap_or_else(|error| error.into_inner()).state;
+        if let Err(error) = self.set_state(PipelineState::Paused) {
+            let mut branches = self.branches.lock().unwrap_or_else(|error| error.into_inner());
+            branch::remove_at(&self.pipeline, &self.mixer, &mut branches, candidate_index);
+            return Err(error);
+        }
         {
             let mut branches = self.branches.lock().unwrap_or_else(|error| error.into_inner());
-            if attaching {
-                branch::remove_first(&self.pipeline, &self.mixer, &mut branches);
-            } else if expected_next.is_some() {
-                branch::truncate(&self.pipeline, &self.mixer, &mut branches, 1);
+            if candidate_index >= branches.len() {
+                drop(branches);
+                self.restore_state(previous_state)?;
+                return Err(PipelineError::StalePlan);
+            }
+            let candidate = &mut branches[candidate_index];
+            if let Err(error) = branch::prepare_paused(candidate) {
+                branch::remove_at(&self.pipeline, &self.mixer, &mut branches, candidate_index);
+                drop(branches);
+                self.restore_state(previous_state)?;
+                return Err(error);
             }
         }
-        let (next_key, handover_at) = if let Some(next) = replacement {
-            let branch = branch::attach(&self.pipeline, &self.mixer, self.events.clone(), &next.track, plan.generation, 0.0)?;
-            self.branches.lock().unwrap_or_else(|error| error.into_inner()).push(branch);
-            let current_duration = branch::wait_duration(&self.branches, 0).await;
-            let next_duration = branch::wait_duration(&self.branches, 1).await;
-            let branches = self.branches.lock().unwrap_or_else(|error| error.into_inner());
-            let transition = resolve_transition(
-                next.transition,
-                current_duration,
-                next_duration,
-                branch::seekable(&branches[0]),
-                branch::seekable(&branches[1]),
-            );
-            let handover_at = transition::apply_rolling(transition, &branches, current_duration)?.handover;
-            (Some(next.track.key), handover_at)
-        } else {
-            (None, None)
-        };
-        let mut active = self.active.lock().unwrap_or_else(|error| error.into_inner());
-        let Some(active) = active.as_mut() else {
-            return Err(PipelineError::StalePlan);
-        };
-        active.next = next_key;
-        active.handover_at = handover_at;
-        active.handed_over = false;
-        Ok(())
+        let commit_result = (|| {
+            let (timeline_origin, current_elapsed) = {
+                let active = self.active.lock().unwrap_or_else(|error| error.into_inner());
+                let active = active
+                    .as_ref()
+                    .filter(|active| matches_plan(active))
+                    .ok_or(PipelineError::StalePlan)?;
+                (
+                    Duration::from_nanos(active.timeline_origin.nseconds()),
+                    Duration::from_nanos(active.last_elapsed.nseconds()),
+                )
+            };
+            let handover_at = {
+                let mut branches = self.branches.lock().unwrap_or_else(|error| error.into_inner());
+                let current = branches.get(current_index).ok_or(PipelineError::StalePlan)?;
+                let candidate = branches.get(candidate_index).ok_or(PipelineError::StalePlan)?;
+                let transition = resolve_transition(
+                    next.transition,
+                    current_duration,
+                    next_duration,
+                    branch::seekable(current),
+                    branch::seekable(candidate),
+                );
+                let handover_at =
+                    transition::apply_rolling(transition, current, candidate, current_duration, timeline_origin, current_elapsed)?.handover;
+                if let Some(obsolete_index) = obsolete_index {
+                    branch::remove_at(&self.pipeline, &self.mixer, &mut branches, obsolete_index);
+                }
+                handover_at
+            };
+            {
+                let mut active = self.active.lock().unwrap_or_else(|error| error.into_inner());
+                let active = active
+                    .as_mut()
+                    .filter(|active| matches_plan(active))
+                    .ok_or(PipelineError::StalePlan)?;
+                active.next = Some(next.track.key);
+                active.handover_at = handover_at;
+                active.handed_over = false;
+            }
+            let mut branches = self.branches.lock().unwrap_or_else(|error| error.into_inner());
+            if let Some(candidate) = branches.last_mut() {
+                branch::release_paused(candidate);
+            }
+            Ok(())
+        })();
+        if commit_result.is_err() {
+            let mut branches = self.branches.lock().unwrap_or_else(|error| error.into_inner());
+            branch::remove_at(&self.pipeline, &self.mixer, &mut branches, candidate_index);
+        }
+        self.finish_paused_transaction(previous_state, commit_result)
     }
 
     async fn set_playing(&self, playing: bool) -> Result<(), PipelineError> {
@@ -513,7 +671,7 @@ mod tests {
         PipelineConfig {
             target: IcecastTarget::parse("localhost:8000", "secret".into(), "test", "test".into()).unwrap(),
             output: OutputConfig {
-                prebuffer_bytes: 16_384,
+                prebuffer_bytes: 1024,
                 sample_rate: 44_100,
                 channels: 2,
                 bitrate_kbps: 128,
@@ -592,20 +750,6 @@ mod tests {
         instance.pipeline.set_playing(false).await.unwrap();
         assert_eq!(instance.pipeline.snapshot().await.unwrap().state, PipelineState::Paused);
         instance.pipeline.stop().await.unwrap();
-    }
-
-    #[test]
-    fn staged_branch_has_no_mixer_request_pad() {
-        let graph::Backbone { pipeline, mixer, .. } = graph::build_backbone(&config(), "fakesink").unwrap();
-        let (events, _) = mpsc::unbounded_channel();
-        let file = tempfile::NamedTempFile::new().unwrap();
-        write_wav(file.path(), Duration::from_secs(1), 0);
-
-        let staged = branch::attach_staged(&pipeline, events, &track(file.path(), 0), 1, 0.0).unwrap();
-
-        assert!(staged.mixer_pad.is_none());
-        assert!(mixer.pads().iter().all(|pad| !pad.name().starts_with("sink_")));
-        branch::discard(&pipeline, &mixer, staged);
     }
 
     #[tokio::test]
@@ -726,13 +870,17 @@ mod tests {
         let first_file = tempfile::NamedTempFile::new().unwrap();
         let second_file = tempfile::NamedTempFile::new().unwrap();
         let third_file = tempfile::NamedTempFile::new().unwrap();
+        let fourth_file = tempfile::NamedTempFile::new().unwrap();
         write_wav(first_file.path(), Duration::from_secs(1), 8_000);
         write_wav(second_file.path(), Duration::from_secs(1), -8_000);
         write_wav(third_file.path(), Duration::from_secs(1), 4_000);
+        write_wav(fourth_file.path(), Duration::from_secs(1), -4_000);
         let first = track(first_file.path(), 0);
         let second = track(second_file.path(), 1);
         let third = track(third_file.path(), 2);
+        let fourth = track(fourth_file.path(), 3);
         let third_key = third.key.clone();
+        let fourth_key = fourth.key.clone();
         let PipelineInstance { pipeline, mut events } = GStreamerPipelineFactory::with_test_sink().create(config()).await.unwrap();
         let plan = |generation, mode, current, next| PairPlan {
             mode,
@@ -783,6 +931,32 @@ mod tests {
         .unwrap();
         assert!(pipeline.snapshot().await.unwrap().elapsed < Duration::from_millis(250));
         assert!(started.elapsed() >= Duration::from_millis(500));
+        let rolling_started = std::time::Instant::now();
+        pipeline
+            .roll(RollingPlan {
+                generation: 2,
+                current: third_key,
+                change: RollingChange::Attach(PlannedNext {
+                    track: fourth,
+                    transition: TransitionPlan::NaiveCrossfade {
+                        requested_fade: Duration::from_millis(400),
+                    },
+                }),
+            })
+            .await
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(3), async {
+            while !matches!(
+                events.recv().await,
+                Some(PipelineEvent::Handover {
+                    generation: 2,
+                    ref current,
+                }) if current == &fourth_key
+            ) {}
+        })
+        .await
+        .unwrap();
+        assert!(rolling_started.elapsed() >= Duration::from_millis(500));
         pipeline.stop().await.unwrap();
     }
 
@@ -855,6 +1029,7 @@ mod tests {
         })
         .await
         .unwrap();
+        let second_started = std::time::Instant::now();
 
         pipeline
             .roll(RollingPlan {
@@ -871,6 +1046,46 @@ mod tests {
             .unwrap();
         tokio::time::timeout(Duration::from_secs(3), async {
             while !matches!(events.recv().await, Some(PipelineEvent::Handover { generation: 1, ref current }) if current == &third_key) {}
+        })
+        .await
+        .unwrap();
+        let second_elapsed = second_started.elapsed();
+        assert!(
+            second_elapsed >= Duration::from_millis(500),
+            "rolling handover fired after {second_elapsed:?}, before the promoted track reached its fade window"
+        );
+        pipeline.stop().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn rolling_attach_accepts_a_single_current_branch() {
+        let current_file = tempfile::NamedTempFile::new().unwrap();
+        let next_file = tempfile::NamedTempFile::new().unwrap();
+        write_wav(current_file.path(), Duration::from_secs(1), 8_000);
+        write_wav(next_file.path(), Duration::from_secs(1), -8_000);
+        let current = track(current_file.path(), 0);
+        let current_key = current.key.clone();
+        let next = track(next_file.path(), 1);
+        let next_key = next.key.clone();
+        let PipelineInstance { pipeline, mut events } = GStreamerPipelineFactory::with_test_sink().create(config()).await.unwrap();
+
+        pipeline.replace(initial_plan(1, current, None, TransitionPlan::Cut)).await.unwrap();
+        pipeline
+            .roll(RollingPlan {
+                generation: 1,
+                current: current_key,
+                change: RollingChange::Attach(PlannedNext {
+                    track: next,
+                    transition: TransitionPlan::NaiveCrossfade {
+                        requested_fade: Duration::from_millis(400),
+                    },
+                }),
+            })
+            .await
+            .unwrap();
+
+        tokio::time::timeout(Duration::from_secs(3), async {
+            while !matches!(events.recv().await, Some(PipelineEvent::Handover { generation: 1, ref current }) if current == &next_key) {}
         })
         .await
         .unwrap();

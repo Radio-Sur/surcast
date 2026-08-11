@@ -531,3 +531,180 @@ async fn crossfade_naturally_promotes_each_queued_track_once() {
     }
     icecast_result.unwrap();
 }
+
+#[tokio::test]
+#[serial]
+async fn manual_auto_dj_trigger_keeps_an_exhausted_memory_queue_playing() {
+    let _ = tracing_subscriber::fmt().with_test_writer().try_init();
+    let db = common::setup_db().await;
+    let files = TempDir::new().unwrap();
+    let icecast_dir = TempDir::new().unwrap();
+    let port = free_port();
+    let icecast = IcecastManager::new(icecast_dir.path().into());
+    icecast.start(port.into(), "surcast", "admin", "surcast").await.unwrap();
+    let mut config = api_common::test_config();
+    config.upload_dir = files.path().display().to_string();
+    let streamers: StreamersMap = Arc::new(Mutex::new(HashMap::new()));
+
+    let result: Result<(), Box<dyn std::error::Error>> = async {
+        let server = TestServer::new(router::create_router(
+            db.clone(),
+            config,
+            streamers.clone(),
+            icecast.clone(),
+            ListenersState::new(),
+        ))?;
+        server
+            .post("/api/setup/init")
+            .json(&serde_json::json!({"username":"admin","password":"admin123","name":"Admin"}))
+            .await;
+        let login = server
+            .post("/api/auth/login")
+            .json(&serde_json::json!({"username":"admin","password":"admin123"}))
+            .await;
+        let auth = format!(
+            "Bearer {}",
+            login.json::<serde_json::Value>()["access_token"]
+                .as_str()
+                .ok_or_else(|| failure("login response has no access token"))?
+        );
+        sqlx::query(
+            "UPDATE icecast_settings SET enabled=true, mode='managed', port=$1, \
+             source_password='surcast', admin_user='admin', admin_password='surcast'",
+        )
+        .bind(port as i32)
+        .execute(&db)
+        .await?;
+        let station = server
+            .post("/api/stations")
+            .add_header("Authorization", &auth)
+            .json(&serde_json::json!({
+                "name": "Auto DJ trigger",
+                "stream_url": "auto-dj-trigger",
+                "prebuffer_bytes": 1024,
+                "transition_mode": "off"
+            }))
+            .await;
+        if station.status_code() != 201 {
+            return Err(failure(format!("station creation failed: {}", station.text())));
+        }
+        let station_id = station.json::<serde_json::Value>()["id"]
+            .as_str()
+            .ok_or_else(|| failure("station response has no id"))?
+            .to_owned();
+        let admin: (uuid::Uuid,) = sqlx::query_as("SELECT id FROM users WHERE username='admin'").fetch_one(&db).await?;
+
+        std::fs::create_dir(files.path().join("audio"))?;
+        let tones = [(330.0, "tone A"), (440.0, "tone B"), (550.0, "tone C")];
+        let song_ids = tones
+            .iter()
+            .enumerate()
+            .map(|(index, (frequency, title))| {
+                let song_id = uuid::Uuid::new_v4();
+                std::fs::write(files.path().join("audio").join(format!("dj-{index}.wav")), wav_for(*frequency, 10))?;
+                Ok::<_, Box<dyn std::error::Error>>((song_id, title))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        for (index, (song_id, title)) in song_ids.iter().enumerate() {
+            sqlx::query(
+                "INSERT INTO songs (id,title,artist,file_path,file_size,mime_type,duration,uploaded_by) \
+                 VALUES ($1,$2,'test',$3,1,'audio/wav',10,$4)",
+            )
+            .bind(song_id)
+            .bind(title)
+            .bind(format!("dj-{index}.wav"))
+            .bind(admin.0)
+            .execute(&db)
+            .await?;
+            let assigned = server
+                .post(&format!("/api/songs/{song_id}/stations"))
+                .add_header("Authorization", &auth)
+                .json(&serde_json::json!({"station_ids":[station_id.clone()]}))
+                .await;
+            if assigned.status_code().as_u16() >= 300 {
+                return Err(failure(format!("song assignment failed: {}", assigned.text())));
+            }
+        }
+
+        // Queue only the first track; the other two stay in the station library
+        // as Auto DJ picks.
+        let queued = server
+            .post(&format!("/api/stations/{station_id}/queue"))
+            .add_header("Authorization", &auth)
+            .json(&serde_json::json!({"song_ids": [song_ids[0].0]}))
+            .await;
+        if queued.status_code().as_u16() >= 300 {
+            return Err(failure(format!("queue creation failed: {}", queued.text())));
+        }
+
+        let started = server
+            .post(&format!("/api/stations/{station_id}/stream/restart"))
+            .add_header("Authorization", &auth)
+            .await;
+        if started.status_code() != 200 {
+            return Err(failure(format!("stream start failed: {}", started.text())));
+        }
+        let client = reqwest::Client::builder().timeout(Duration::from_secs(5)).build()?;
+        let url = format!("http://127.0.0.1:{port}/auto-dj-trigger.mp3");
+        let response = open_mount(&client, &url).await?;
+        drop(response);
+
+        wait_for_status(&server, &station_id, &auth, |status| {
+            status["title"].as_str() == Some("tone A") && status["playing"] == true
+        })
+        .await?;
+
+        // Enable Auto DJ and fill the queue manually. The trigger must refresh
+        // the live streamer's in-memory queue, not just the DB.
+        let configured = server
+            .put(&format!("/api/stations/{station_id}/auto-fill"))
+            .add_header("Authorization", &auth)
+            .json(&serde_json::json!({
+                "enabled": true,
+                "mode": "random",
+                "source_type": "station_library",
+                "avoid_artist_repeat": false,
+                "songs_ahead": 2,
+            }))
+            .await;
+        if configured.status_code() != 200 {
+            return Err(failure(format!("auto-fill config failed: {}", configured.text())));
+        }
+        let triggered = server
+            .post(&format!("/api/stations/{station_id}/auto-fill/trigger"))
+            .add_header("Authorization", &auth)
+            .await;
+        if triggered.status_code() != 200 {
+            return Err(failure(format!("auto-fill trigger failed: {}", triggered.text())));
+        }
+
+        // The streamer must now see 3 tracks (1 queued + 2 Auto DJ picks).
+        let synced = wait_for_status(&server, &station_id, &auth, |status| {
+            status["total"].as_u64() == Some(3)
+        })
+        .await?;
+        if synced["song_index"].as_u64() != Some(0) {
+            return Err(failure(format!("auto-fill sync moved the cursor: {synced}")));
+        }
+
+        // The queued track ends: the controller must reload the queue from the
+        // DB and keep playing an Auto DJ pick instead of stopping the radio.
+        let advanced = wait_for_status(&server, &station_id, &auth, |status| {
+            status["playing"] == true && status["title"].as_str() != Some("tone A")
+        })
+        .await?;
+        if advanced["song_index"].as_u64() != Some(1) {
+            return Err(failure(format!("auto-fill pick played at the wrong index: {advanced}")));
+        }
+        Ok(())
+    }
+    .await;
+
+    let active = { streamers.lock().unwrap().values().cloned().collect::<Vec<_>>() };
+    futures::future::join_all(active.into_iter().map(|streamer| async move { streamer.shutdown().await })).await;
+    let icecast_result = icecast.stop().await;
+    if let Err(error) = result {
+        panic!("{error}");
+    }
+    icecast_result.unwrap();
+}

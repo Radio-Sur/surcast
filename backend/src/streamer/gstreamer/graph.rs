@@ -109,9 +109,10 @@ pub(super) fn build_backbone(config: &PipelineConfig, sink_factory: &'static str
 }
 
 pub(super) fn configure_output(queue: &gst::Element, capsfilter: &gst::Element, encoder: &gst::Element, output: OutputConfig) {
-    let threshold_ns = (output.prebuffer_bytes.max(1024) as u64).saturating_mul(1_000_000_000) / 16_000;
+    let bytes_per_second = u64::from(output.bitrate_kbps).saturating_mul(1_000) / 8;
+    let threshold_ns = (output.prebuffer_bytes.max(1024) as u64).saturating_mul(1_000_000_000) / bytes_per_second.max(1);
     queue.set_property("min-threshold-time", threshold_ns);
-    queue.set_property("max-size-time", threshold_ns.saturating_mul(2).max(5_000_000_000));
+    queue.set_property("max-size-time", threshold_ns.saturating_mul(2).max(1));
     queue.set_property("max-size-bytes", 0u32);
     queue.set_property("max-size-buffers", 0u32);
     capsfilter.set_property(

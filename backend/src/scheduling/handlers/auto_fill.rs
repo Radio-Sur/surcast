@@ -7,6 +7,7 @@ use serde_json::{json, Value};
 use sqlx::PgPool;
 use uuid::Uuid;
 
+use crate::api::StreamersMap;
 use crate::auth::middleware::AuthUser;
 use crate::config::Config;
 use crate::errors::AppError;
@@ -191,11 +192,16 @@ pub async fn delete_auto_fill_playlist(
 pub async fn trigger_auto_fill(
     Extension(_user): Extension<AuthUser>,
     State(db): State<PgPool>,
+    State(streamers): State<StreamersMap>,
     State(config): State<Config>,
     Path(station_id): Path<String>,
 ) -> Result<Json<Value>, AppError> {
     let sid: Uuid = station_id.parse().map_err(|_| AppError::BadRequest("Invalid station ID".into()))?;
     fill_queue_from_schedule(&db, sid, None, &config.upload_dir).await?;
+    // The refill above writes rows straight into the DB; a live streamer keeps
+    // its own in-memory queue copy, so reload it or the new tracks are never
+    // picked up by the running pipeline.
+    crate::stations::handlers::sync_streamer_songs(&db, &streamers, &config.upload_dir, sid).await?;
     Ok(Json(json!({ "status": "ok" })))
 }
 #[cfg(test)]
