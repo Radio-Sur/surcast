@@ -86,6 +86,21 @@ async fn open_mount(client: &reqwest::Client, url: &str) -> Result<reqwest::Resp
     }
 }
 
+fn queue_titles(items: &serde_json::Value) -> Vec<String> {
+    items
+        .as_array()
+        .map(|items| items.iter().map(|item| item["title"].as_str().unwrap_or("").to_string()).collect())
+        .unwrap_or_default()
+}
+
+async fn fetch_queue(server: &TestServer, station_id: &str, auth: &str) -> serde_json::Value {
+    server
+        .get(&format!("/api/stations/{station_id}/queue"))
+        .add_header("Authorization", auth)
+        .await
+        .json::<serde_json::Value>()
+}
+
 #[tokio::test]
 #[serial]
 async fn managed_icecast_serves_gstreamer_encoded_mp3() {
@@ -1227,6 +1242,472 @@ async fn play_starts_with_the_queue_loaded_from_the_database() {
     futures::future::join_all(active.into_iter().map(|streamer| async move { streamer.shutdown().await })).await;
     let icecast_result = icecast.stop().await;
     if let Err(error) = result {
+        panic!("{error}");
+    }
+    icecast_result.unwrap();
+}
+
+type TestWs = tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
+
+async fn ws_recv_text(socket: &mut TestWs, timeout_secs: u64) -> Result<String, Box<dyn std::error::Error>> {
+    use futures::StreamExt;
+    loop {
+        match tokio::time::timeout(Duration::from_secs(timeout_secs), socket.next()).await {
+            Ok(Some(Ok(tokio_tungstenite::tungstenite::Message::Text(text)))) => return Ok(text.to_string()),
+            Ok(Some(Ok(_))) => continue,
+            Ok(Some(Err(error))) => return Err(failure(format!("ws error: {error}"))),
+            Ok(None) => return Err(failure("ws closed")),
+            Err(_) => return Err(failure("ws receive timeout")),
+        }
+    }
+}
+
+#[tokio::test]
+#[serial]
+async fn repro_ws_queue_feed_survives_radio_restart() {
+    // The UI Restart button replaces the streamer. The WS forward task
+    // subscribes once to the (old) streamer's channels; when the old streamer
+    // is stopped those channels close and the station feed dies while the
+    // socket stays open — the frontend freezes on the last broadcast and the
+    // user keeps seeing the queue from before the restart.
+    let _ = tracing_subscriber::fmt().with_test_writer().try_init();
+    let db = common::setup_db().await;
+    let files = TempDir::new().unwrap();
+    let icecast_dir = TempDir::new().unwrap();
+    let port = free_port();
+    let icecast = IcecastManager::new(icecast_dir.path().into());
+    icecast.start(port.into(), "surcast", "admin", "surcast").await.unwrap();
+    let mut config = api_common::test_config();
+    config.upload_dir = files.path().display().to_string();
+
+    let result: Result<StreamersMap, Box<dyn std::error::Error>> = async {
+        let streamers: StreamersMap = Arc::new(Mutex::new(HashMap::new()));
+        let server = TestServer::builder()
+            .http_transport()
+            .build(router::create_router(
+                db.clone(),
+                config.clone(),
+                streamers.clone(),
+                icecast.clone(),
+                ListenersState::new(),
+            ))?;
+        server
+            .post("/api/setup/init")
+            .json(&serde_json::json!({"username":"admin","password":"admin123","name":"Admin"}))
+            .await;
+        let login = server
+            .post("/api/auth/login")
+            .json(&serde_json::json!({"username":"admin","password":"admin123"}))
+            .await;
+        let auth = format!(
+            "Bearer {}",
+            login.json::<serde_json::Value>()["access_token"]
+                .as_str()
+                .ok_or_else(|| failure("login response has no access token"))?
+        );
+        let token = auth.trim_start_matches("Bearer ").to_owned();
+        sqlx::query(
+            "UPDATE icecast_settings SET enabled=true, mode='managed', port=$1, \
+             source_password='surcast', admin_user='admin', admin_password='surcast'",
+        )
+        .bind(port as i32)
+        .execute(&db)
+        .await?;
+        let station = server
+            .post("/api/stations")
+            .add_header("Authorization", &auth)
+            .json(&serde_json::json!({
+                "name": "WS feed repro",
+                "stream_url": "ws-feed-repro",
+                "prebuffer_bytes": 1024,
+                "transition_mode": "autocue",
+                "autocue_fade_max_ms": 5000
+            }))
+            .await;
+        if station.status_code() != 201 {
+            return Err(failure(format!("station creation failed: {}", station.text())));
+        }
+        let station_id = station.json::<serde_json::Value>()["id"]
+            .as_str()
+            .ok_or_else(|| failure("station response has no id"))?
+            .to_owned();
+        let admin: (uuid::Uuid,) = sqlx::query_as("SELECT id FROM users WHERE username='admin'").fetch_one(&db).await?;
+
+        let mp3_dir = std::env::temp_dir().join(format!("surcast-wsfeed-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&mp3_dir)?;
+        let mp3_path = mp3_dir.join("wsfeed.mp3");
+        let status = std::process::Command::new("gst-launch-1.0")
+            .args([
+                "-q", "audiotestsrc", "freq=440", "wave=sine",
+                "samplesperbuffer=44100", "num-buffers=10",
+                "!", "audioconvert", "!", "lamemp3enc", "cbr=true", "target=bitrate", "bitrate=128",
+                "!", "filesink",
+            ])
+            .arg(format!("location={}", mp3_path.display()))
+            .status()?;
+        if !status.success() {
+            return Err(failure("gst-launch mp3 generation failed"));
+        }
+        let mp3_bytes = std::fs::read(&mp3_path)?;
+        std::fs::create_dir(files.path().join("audio"))?;
+        let titles = ["tone A", "tone B", "tone C", "tone D"];
+        let mut song_ids = Vec::new();
+        for (index, title) in titles.iter().enumerate() {
+            let song_id = uuid::Uuid::new_v4();
+            let file_name = format!("wsfeed-{index}.mp3");
+            std::fs::write(files.path().join("audio").join(&file_name), &mp3_bytes)?;
+            sqlx::query(
+                "INSERT INTO songs (id,title,artist,file_path,file_size,mime_type,duration, \
+                 uploaded_by,cue_in,cue_out,cross_start_next,analyzed_at) \
+                 VALUES ($1,$2,'test',$3,$4,'audio/mpeg',10,$5,0.5,9.5,7.5,NOW())",
+            )
+            .bind(song_id)
+            .bind(title)
+            .bind(file_name)
+            .bind(mp3_bytes.len() as i32)
+            .bind(admin.0)
+            .execute(&db)
+            .await?;
+            let _assigned = server
+                .post(&format!("/api/songs/{song_id}/stations"))
+                .add_header("Authorization", &auth)
+                .json(&serde_json::json!({"station_ids":[station_id.clone()]}))
+                .await;
+            song_ids.push((song_id, title.to_string()));
+        }
+
+        let queued = server
+            .post(&format!("/api/stations/{station_id}/queue"))
+            .add_header("Authorization", &auth)
+            .json(&serde_json::json!({"song_ids": song_ids.iter().map(|(id, _)| *id).collect::<Vec<_>>()}))
+            .await;
+        if queued.status_code().as_u16() >= 300 {
+            return Err(failure(format!("queue creation failed: {}", queued.text())));
+        }
+        let started = server
+            .post(&format!("/api/stations/{station_id}/stream/play"))
+            .add_header("Authorization", &auth)
+            .await;
+        if started.status_code() != 200 {
+            return Err(failure(format!("stream start failed: {}", started.text())));
+        }
+        wait_for_status(&server, &station_id, &auth, |status| {
+            status["title"].as_str() == Some("tone A") && status["playing"] == true
+        })
+        .await?;
+
+        // Real browser-like WS session: auth, subscribe, then live updates.
+        let mut address = server.server_address().ok_or_else(|| failure("no server address"))?;
+        address.set_scheme("ws").map_err(|_| failure("bad address"))?;
+        let ws_url = address.join("/api/ws").map_err(|_| failure("bad ws url"))?;
+        let (mut socket, _) = tokio_tungstenite::connect_async(ws_url.to_string()).await?;
+        use futures::SinkExt;
+        use tokio_tungstenite::tungstenite::Message as WsMessage;
+        socket
+            .send(WsMessage::Text(serde_json::json!({"type": "auth", "token": token}).to_string().into()))
+            .await?;
+        socket
+            .send(WsMessage::Text(
+                serde_json::json!({"type": "subscribe", "station_id": station_id}).to_string().into(),
+            ))
+            .await?;
+        let _auth_ok = ws_recv_text(&mut socket, 10).await?;
+        // The subscribe reply is a status followed by a queue_update; drain
+        // until the initial queue snapshot arrives.
+        let initial_snapshot = loop {
+            let text = ws_recv_text(&mut socket, 10).await?;
+            let msg: serde_json::Value = serde_json::from_str(&text).map_err(|_| failure("bad ws json"))?;
+            if msg["type"] == "queue_update"
+                && msg["data"].as_array().map(|a| a.len()) == Some(4)
+            {
+                break msg;
+            }
+        };
+
+        let first_items = fetch_queue(&server, &station_id, &auth).await;
+        let id_of = |title: &str| -> String {
+            first_items.as_array().unwrap().iter().find(|item| item["title"] == title).unwrap()["id"]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        };
+
+        // Edit while playing: the WS feed must broadcast the updated queue.
+        let removed = server
+            .delete(&format!("/api/stations/{station_id}/queue/{}", id_of("tone B")))
+            .add_header("Authorization", &auth)
+            .await;
+        if removed.status_code() != 204 {
+            return Err(failure(format!("queue removal failed: {}", removed.status_code())));
+        }
+        let live_update = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let text = ws_recv_text(&mut socket, 5).await?;
+                let msg: serde_json::Value = serde_json::from_str(&text).map_err(|_| failure("bad ws json"))?;
+                if msg["type"] == "queue_update"
+                    && msg["data"].as_array().map(|a| a.len()) == Some(3)
+                {
+                    return Ok::<serde_json::Value, Box<dyn std::error::Error>>(msg);
+                }
+            }
+        })
+        .await
+        .map_err(|_| failure("no queue_update after edit (feed already dead)"))??;
+
+        // Radio restart: streamer replaced. Queue edits made after the restart
+        // MUST still reach the subscribed client.
+        let restarted = server
+            .post(&format!("/api/stations/{station_id}/stream/restart"))
+            .add_header("Authorization", &auth)
+            .await;
+        if restarted.status_code() != 200 {
+            return Err(failure(format!("radio restart failed: {}", restarted.text())));
+        }
+        let after_edit = fetch_queue(&server, &station_id, &auth).await;
+        let removed_c = server
+            .delete(&format!("/api/stations/{station_id}/queue/{}", id_of("tone C")))
+            .add_header("Authorization", &auth)
+            .await;
+        if removed_c.status_code() != 204 {
+            return Err(failure(format!("second queue removal failed: {}", removed_c.status_code())));
+        }
+        let post_restart = tokio::time::timeout(Duration::from_secs(8), async {
+            loop {
+                let text = ws_recv_text(&mut socket, 8)
+                    .await
+                    .map_err(|_| failure("station WS feed died after radio restart; UI freezes on the stale queue"))?;
+                let msg: serde_json::Value = serde_json::from_str(&text).map_err(|_| failure("bad ws json"))?;
+                if msg["type"] == "queue_update"
+                    && msg["data"].as_array().map(|a| a.len()) == Some(2)
+                {
+                    return Ok::<serde_json::Value, Box<dyn std::error::Error>>(msg);
+                }
+            }
+        })
+        .await;
+        let msg = match post_restart {
+            Ok(Ok(msg)) => msg,
+            Ok(Err(error)) => return Err(error),
+            Err(_) => {
+                return Err(failure(format!(
+                    "station WS feed died after radio restart; UI freezes on the stale queue (db now: {})",
+                    after_edit
+                )));
+            }
+        };
+        if msg["data"].as_array().map(|a| a.len()) != Some(2) {
+            return Err(failure(format!("unexpected post-restart queue: {}", msg)));
+        }
+        Ok(streamers)
+    }
+    .await;
+
+    let icecast_result = icecast.stop().await;
+    if let Ok(streamers) = result {
+        let active = { streamers.lock().unwrap().values().cloned().collect::<Vec<_>>() };
+        futures::future::join_all(active.into_iter().map(|streamer| async move { streamer.shutdown().await })).await;
+    } else if let Err(error) = result {
+        panic!("{error}");
+    }
+    icecast_result.unwrap();
+}
+
+#[tokio::test]
+#[serial]
+async fn repro_queue_modifications_persist_across_radio_restart() {
+    // The user's exact claim: after modifying the queue (remove + reorder)
+    // while the radio runs, a backend restart must read the MODIFIED queue
+    // back from the database — not the old queue from before the radio start.
+    let _ = tracing_subscriber::fmt().with_test_writer().try_init();
+    let db = common::setup_db().await;
+    let files = TempDir::new().unwrap();
+    let icecast_dir = TempDir::new().unwrap();
+    let port = free_port();
+    let icecast = IcecastManager::new(icecast_dir.path().into());
+    icecast.start(port.into(), "surcast", "admin", "surcast").await.unwrap();
+    let mut config = api_common::test_config();
+    config.upload_dir = files.path().display().to_string();
+
+    let result: Result<StreamersMap, Box<dyn std::error::Error>> = async {
+        let streamers: StreamersMap = Arc::new(Mutex::new(HashMap::new()));
+        let server = TestServer::new(router::create_router(
+            db.clone(),
+            config.clone(),
+            streamers.clone(),
+            icecast.clone(),
+            ListenersState::new(),
+        ))?;
+        server
+            .post("/api/setup/init")
+            .json(&serde_json::json!({"username":"admin","password":"admin123","name":"Admin"}))
+            .await;
+        let login = server
+            .post("/api/auth/login")
+            .json(&serde_json::json!({"username":"admin","password":"admin123"}))
+            .await;
+        let auth = format!(
+            "Bearer {}",
+            login.json::<serde_json::Value>()["access_token"]
+                .as_str()
+                .ok_or_else(|| failure("login response has no access token"))?
+        );
+        sqlx::query(
+            "UPDATE icecast_settings SET enabled=true, mode='managed', port=$1, \
+             source_password='surcast', admin_user='admin', admin_password='surcast'",
+        )
+        .bind(port as i32)
+        .execute(&db)
+        .await?;
+        let station = server
+            .post("/api/stations")
+            .add_header("Authorization", &auth)
+            .json(&serde_json::json!({
+                "name": "Queue persist repro",
+                "stream_url": "queue-persist-repro",
+                "prebuffer_bytes": 1024,
+                "transition_mode": "autocue",
+                "autocue_fade_max_ms": 5000
+            }))
+            .await;
+        if station.status_code() != 201 {
+            return Err(failure(format!("station creation failed: {}", station.text())));
+        }
+        let station_id = station.json::<serde_json::Value>()["id"]
+            .as_str()
+            .ok_or_else(|| failure("station response has no id"))?
+            .to_owned();
+        let admin: (uuid::Uuid,) = sqlx::query_as("SELECT id FROM users WHERE username='admin'").fetch_one(&db).await?;
+
+        let mp3_dir = std::env::temp_dir().join(format!("surcast-qpersist-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&mp3_dir)?;
+        let mp3_path = mp3_dir.join("qpersist.mp3");
+        let status = std::process::Command::new("gst-launch-1.0")
+            .args([
+                "-q", "audiotestsrc", "freq=440", "wave=sine",
+                "samplesperbuffer=44100", "num-buffers=10",
+                "!", "audioconvert", "!", "lamemp3enc", "cbr=true", "target=bitrate", "bitrate=128",
+                "!", "filesink",
+            ])
+            .arg(format!("location={}", mp3_path.display()))
+            .status()?;
+        if !status.success() {
+            return Err(failure("gst-launch mp3 generation failed"));
+        }
+        let mp3_bytes = std::fs::read(&mp3_path)?;
+        std::fs::create_dir(files.path().join("audio"))?;
+        let titles = ["tone A", "tone B", "tone C", "tone D"];
+        let mut song_ids = Vec::new();
+        for (index, title) in titles.iter().enumerate() {
+            let song_id = uuid::Uuid::new_v4();
+            let file_name = format!("qpersist-{index}.mp3");
+            std::fs::write(files.path().join("audio").join(&file_name), &mp3_bytes)?;
+            sqlx::query(
+                "INSERT INTO songs (id,title,artist,file_path,file_size,mime_type,duration, \
+                 uploaded_by,cue_in,cue_out,cross_start_next,analyzed_at) \
+                 VALUES ($1,$2,'test',$3,$4,'audio/mpeg',10,$5,0.5,9.5,7.5,NOW())",
+            )
+            .bind(song_id)
+            .bind(title)
+            .bind(file_name)
+            .bind(mp3_bytes.len() as i32)
+            .bind(admin.0)
+            .execute(&db)
+            .await?;
+            let _assigned = server
+                .post(&format!("/api/songs/{song_id}/stations"))
+                .add_header("Authorization", &auth)
+                .json(&serde_json::json!({"station_ids":[station_id.clone()]}))
+                .await;
+            song_ids.push((song_id, title.to_string()));
+        }
+
+        let queued = server
+            .post(&format!("/api/stations/{station_id}/queue"))
+            .add_header("Authorization", &auth)
+            .json(&serde_json::json!({"song_ids": song_ids.iter().map(|(id, _)| *id).collect::<Vec<_>>()}))
+            .await;
+        if queued.status_code().as_u16() >= 300 {
+            return Err(failure(format!("queue creation failed: {}", queued.text())));
+        }
+
+        // First session: start the radio, wait until tone A is actually
+        // playing, then modify the queue — remove tone B, move tone D to top.
+        let started = server
+            .post(&format!("/api/stations/{station_id}/stream/play"))
+            .add_header("Authorization", &auth)
+            .await;
+        if started.status_code() != 200 {
+            return Err(failure(format!("first stream start failed: {}", started.text())));
+        }
+        wait_for_status(&server, &station_id, &auth, |status| {
+            status["title"].as_str() == Some("tone A") && status["playing"] == true
+        })
+        .await?;
+
+        let first_items = fetch_queue(&server, &station_id, &auth).await;
+        if queue_titles(&first_items) != ["tone A", "tone B", "tone C", "tone D"] {
+            return Err(failure(format!("queue before edits: {}", first_items)));
+        }
+        let id_of = |title: &str| -> String {
+            first_items.as_array().unwrap().iter().find(|item| item["title"] == title).unwrap()["id"]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        };
+        let removed = server
+            .delete(&format!("/api/stations/{station_id}/queue/{}", id_of("tone B")))
+            .add_header("Authorization", &auth)
+            .await;
+        if removed.status_code() != 204 {
+            return Err(failure(format!("queue removal failed: {}", removed.status_code())));
+        }
+        // UI-faithful reorder payload: every displayed row (including the
+        // now-playing row) renumbered in the new order.
+        let reordered = server
+            .put(&format!("/api/stations/{station_id}/queue/reorder"))
+            .add_header("Authorization", &auth)
+            .json(&serde_json::json!({
+                "queue_item_ids": [id_of("tone D"), id_of("tone A"), id_of("tone C")]
+            }))
+            .await;
+        if reordered.status_code().as_u16() >= 300 {
+            return Err(failure(format!("queue reorder failed: {}", reordered.text())));
+        }
+        let after_edits = fetch_queue(&server, &station_id, &auth).await;
+        if queue_titles(&after_edits) != ["tone D", "tone A", "tone C"] {
+            return Err(failure(format!("queue after edits: {}", after_edits)));
+        }
+
+        // Radio restart: the UI Restart button kills the streamer and spawns a
+        // fresh one from the database — the backend stays alive.
+        let restarted = server
+            .post(&format!("/api/stations/{station_id}/stream/restart"))
+            .add_header("Authorization", &auth)
+            .await;
+        if restarted.status_code() != 200 {
+            return Err(failure(format!("radio restart failed: {}", restarted.text())));
+        }
+        let reloaded = fetch_queue(&server, &station_id, &auth).await;
+        if queue_titles(&reloaded) != ["tone D", "tone A", "tone C"] {
+            return Err(failure(format!(
+                "restart read the OLD queue: {} (expected tone D, tone A, tone C)",
+                reloaded
+            )));
+        }
+        // The restarted streamer must also play from the modified queue.
+        wait_for_status(&server, &station_id, &auth, |status| {
+            status["playing"] == true && status["title"].as_str().is_some_and(|t| t.starts_with("tone"))
+        })
+        .await?;
+        Ok(streamers)
+    }
+    .await;
+
+    let icecast_result = icecast.stop().await;
+    if let Ok(streamers) = result {
+        let active = { streamers.lock().unwrap().values().cloned().collect::<Vec<_>>() };
+        futures::future::join_all(active.into_iter().map(|streamer| async move { streamer.shutdown().await })).await;
+    } else if let Err(error) = result {
         panic!("{error}");
     }
     icecast_result.unwrap();

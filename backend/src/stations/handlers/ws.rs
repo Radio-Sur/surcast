@@ -267,7 +267,7 @@ async fn ws_recv_task(
                         continue;
                     }
                 };
-                let handle = tokio::spawn(forward_station(streamer.clone(), station_id, out_tx.clone()));
+                let handle = tokio::spawn(forward_station(streamers.clone(), station_id, out_tx.clone()));
                 subs.insert(station_id, handle);
                 let _ = out_tx.send(Outbound::Status {
                     station_id,
@@ -312,31 +312,60 @@ async fn ws_recv_task(
 }
 
 /// Forwards a single station's status + queue broadcasts to the connection.
-async fn forward_station(streamer: Arc<StationStreamer>, station_id: Uuid, out_tx: mpsc::UnboundedSender<Outbound>) {
-    let mut status_rx = streamer.subscribe_status();
-    let mut queue_rx = streamer.subscribe_queue();
-
+///
+/// The streamer is re-resolved from the map: a radio restart (or stop/start)
+/// replaces the streamer, and the old broadcast channels stay open (they live
+/// on the `StationStreamer` struct) without ever broadcasting again — the
+/// station's live feed would silently die and the UI would freeze on the last
+/// broadcast. A periodic map recheck re-attaches to the current streamer and
+/// pushes a fresh snapshot.
+async fn forward_station(streamers: StreamersMap, station_id: Uuid, out_tx: mpsc::UnboundedSender<Outbound>) {
     loop {
-        tokio::select! {
-            event = status_rx.recv() => match event {
-                Ok(event) => {
-                    if out_tx.send(Outbound::Status { station_id, data: event }).is_err() {
-                        return;
+        let Some(streamer) = get_streamer(&streamers, &station_id) else {
+            // Station is stopped; wait for a streamer to appear again.
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            continue;
+        };
+        let mut status_rx = streamer.subscribe_status();
+        let mut queue_rx = streamer.subscribe_queue();
+        // Fresh snapshot so the client re-syncs after a streamer replacement.
+        let _ = out_tx.send(Outbound::Status {
+            station_id,
+            data: streamer.status().await,
+        });
+        streamer.push_queue_update().await;
+
+        let mut recheck = tokio::time::interval(Duration::from_millis(250));
+        let mut detach = false;
+        while !detach {
+            tokio::select! {
+                event = status_rx.recv() => match event {
+                    Ok(event) => {
+                        if out_tx.send(Outbound::Status { station_id, data: event }).is_err() {
+                            return;
+                        }
+                    }
+                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(broadcast::error::RecvError::Closed) => detach = true,
+                },
+                msg = queue_rx.recv() => match msg {
+                    Ok(raw) => {
+                        let data = serde_json::from_str(&raw).unwrap_or(serde_json::Value::Null);
+                        if out_tx.send(Outbound::QueueUpdate { station_id, data }).is_err() {
+                            return;
+                        }
+                    }
+                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(broadcast::error::RecvError::Closed) => detach = true,
+                },
+                _ = recheck.tick() => {
+                    // The streamer was replaced or the station stopped:
+                    // re-resolve on the next loop iteration.
+                    if !matches!(get_streamer(&streamers, &station_id), Some(current) if Arc::ptr_eq(&current, &streamer)) {
+                        detach = true;
                     }
                 }
-                Err(broadcast::error::RecvError::Lagged(_)) => continue,
-                Err(broadcast::error::RecvError::Closed) => return,
-            },
-            msg = queue_rx.recv() => match msg {
-                Ok(raw) => {
-                    let data = serde_json::from_str(&raw).unwrap_or(serde_json::Value::Null);
-                    if out_tx.send(Outbound::QueueUpdate { station_id, data }).is_err() {
-                        return;
-                    }
-                }
-                Err(broadcast::error::RecvError::Lagged(_)) => continue,
-                Err(broadcast::error::RecvError::Closed) => return,
-            },
+            }
         }
     }
 }
