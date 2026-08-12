@@ -144,23 +144,11 @@ impl StationStreamer {
     pub async fn shutdown(&self) {
         let _ = self.runtime.shutdown().await;
     }
-    pub(crate) async fn status(&self) -> StatusEvent {
-        self.runtime.status().await.unwrap_or_else(|_| {
-            let song_index = self.queue.current_song_index();
-            let song = self.queue.current_song_info();
-            StatusEvent::State {
-                playing: false,
-                song_index,
-                total: self.queue.song_count(),
-                elapsed: 0,
-                title: song.as_ref().map_or_else(String::new, |song| song.title.clone()),
-                artist: song.as_ref().map_or_else(String::new, |song| song.artist.clone()),
-                duration: song.map_or(0, |song| song.duration),
-            }
-        })
+    pub(crate) async fn status(&self) -> Result<StatusEvent, PipelineError> {
+        self.runtime.status().await
     }
-    pub(crate) async fn status_json(&self) -> serde_json::Value {
-        match self.status().await {
+    pub(crate) async fn status_json(&self) -> Result<serde_json::Value, PipelineError> {
+        match self.status().await? {
             StatusEvent::State {
                 playing,
                 song_index,
@@ -169,10 +157,10 @@ impl StationStreamer {
                 title,
                 artist,
                 duration,
-            } => serde_json::json!({
+            } => Ok(serde_json::json!({
                 "playing": playing, "song_index": song_index, "total": total, "elapsed": elapsed,
                 "title": title, "artist": artist, "duration": duration,
-            }),
+            })),
             StatusEvent::SongChange { .. } => unreachable!(),
         }
     }
@@ -185,11 +173,11 @@ impl StationStreamer {
     pub(crate) fn subscribe_queue(&self) -> broadcast::Receiver<String> {
         self.queue_tx.subscribe()
     }
-    pub(crate) async fn push_queue_update(&self) {
-        self.runtime.push_queue_update().await;
+    pub(crate) async fn push_queue_update(&self) -> Result<(), PipelineError> {
+        self.runtime.push_queue_update().await
     }
-    pub(crate) async fn trim_played_items(&self) {
-        self.runtime.trim_played_items().await;
+    pub(crate) async fn trim_played_items(&self) -> Result<(), PipelineError> {
+        self.runtime.trim_played_items().await
     }
     pub(crate) async fn reload_songs(&self, songs: Vec<SongInfo>, align_next: bool) -> Result<(), PipelineError> {
         self.runtime.reload(songs, align_next).await

@@ -162,6 +162,20 @@ fn error_msg(data: &str) -> Message {
     Message::Text(serde_json::json!({"type":"error","data":data}).to_string().into())
 }
 
+/// Live-feed fallback: when a streamer's runtime is gone the feed must still
+/// report a coherent stopped state instead of dropping the subscription.
+fn stopped_status() -> crate::streamer::StatusEvent {
+    crate::streamer::StatusEvent::State {
+        playing: false,
+        song_index: 0,
+        total: 0,
+        elapsed: 0,
+        title: String::new(),
+        artist: String::new(),
+        duration: 0,
+    }
+}
+
 /// Drains the per-connection outbound queue and forwards it to the socket,
 /// interleaving heartbeat pings.
 async fn ws_send_task(mut sender: SplitSink<WebSocket, Message>, mut out_rx: mpsc::UnboundedReceiver<Outbound>) {
@@ -271,9 +285,9 @@ async fn ws_recv_task(
                 subs.insert(station_id, handle);
                 let _ = out_tx.send(Outbound::Status {
                     station_id,
-                    data: streamer.status().await,
+                    data: streamer.status().await.unwrap_or_else(|_| stopped_status()),
                 });
-                streamer.push_queue_update().await;
+                let _ = streamer.push_queue_update().await;
             }
             Inbound::Unsubscribe { station_id } => {
                 if let Ok(id) = resolve_station_id(&db, &station_id).await {
@@ -285,21 +299,33 @@ async fn ws_recv_task(
             Inbound::Skip { station_id } => {
                 if let Ok(id) = resolve_station_id(&db, &station_id).await {
                     if let Some(s) = get_streamer(&streamers, &id) {
-                        let _ = s.skip().await;
+                        if let Err(error) = s.skip().await {
+                            let _ = out_tx.send(Outbound::Error {
+                                data: format!("skip failed: {error}"),
+                            });
+                        }
                     }
                 }
             }
             Inbound::Play { station_id } => {
                 if let Ok(id) = resolve_station_id(&db, &station_id).await {
                     if let Some(s) = get_streamer(&streamers, &id) {
-                        let _ = s.play().await;
+                        if let Err(error) = s.play().await {
+                            let _ = out_tx.send(Outbound::Error {
+                                data: format!("play failed: {error}"),
+                            });
+                        }
                     }
                 }
             }
             Inbound::Pause { station_id } => {
                 if let Ok(id) = resolve_station_id(&db, &station_id).await {
                     if let Some(s) = get_streamer(&streamers, &id) {
-                        let _ = s.pause().await;
+                        if let Err(error) = s.pause().await {
+                            let _ = out_tx.send(Outbound::Error {
+                                data: format!("pause failed: {error}"),
+                            });
+                        }
                     }
                 }
             }
@@ -331,9 +357,9 @@ async fn forward_station(streamers: StreamersMap, station_id: Uuid, out_tx: mpsc
         // Fresh snapshot so the client re-syncs after a streamer replacement.
         let _ = out_tx.send(Outbound::Status {
             station_id,
-            data: streamer.status().await,
+            data: streamer.status().await.unwrap_or_else(|_| stopped_status()),
         });
-        streamer.push_queue_update().await;
+        let _ = streamer.push_queue_update().await;
 
         let mut recheck = tokio::time::interval(Duration::from_millis(250));
         let mut detach = false;

@@ -210,18 +210,26 @@ impl StationRuntime {
             .map_err(|_| PipelineError::Pipeline("station runtime stopped".to_owned()))?
     }
 
-    pub(crate) async fn push_queue_update(&self) {
+    pub(crate) async fn push_queue_update(&self) -> Result<(), PipelineError> {
         let (response, receiver) = oneshot::channel();
-        if self.commands.send(StationCommand::PushQueueUpdate(response)).await.is_ok() {
-            let _ = receiver.await;
-        }
+        self.commands
+            .send(StationCommand::PushQueueUpdate(response))
+            .await
+            .map_err(|_| PipelineError::Pipeline("station runtime stopped".to_owned()))?;
+        receiver
+            .await
+            .map_err(|_| PipelineError::Pipeline("station runtime stopped".to_owned()))
     }
 
-    pub(crate) async fn trim_played_items(&self) {
+    pub(crate) async fn trim_played_items(&self) -> Result<(), PipelineError> {
         let (response, receiver) = oneshot::channel();
-        if self.commands.send(StationCommand::TrimPlayedItems(response)).await.is_ok() {
-            let _ = receiver.await;
-        }
+        self.commands
+            .send(StationCommand::TrimPlayedItems(response))
+            .await
+            .map_err(|_| PipelineError::Pipeline("station runtime stopped".to_owned()))?;
+        receiver
+            .await
+            .map_err(|_| PipelineError::Pipeline("station runtime stopped".to_owned()))
     }
 
     pub(crate) async fn status(&self) -> Result<StatusEvent, PipelineError> {

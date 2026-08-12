@@ -118,8 +118,14 @@ pub(crate) async fn sync_streamer_songs(
         let map = streamers.lock().unwrap_or_else(|e| e.into_inner());
         map.get(&station_id).cloned()
     } {
-        streamer.trim_played_items().await;
-        streamer.push_queue_update().await;
+        streamer.trim_played_items().await.map_err(|error| {
+            tracing::error!(station_id = %station_id, %error, "stream queue trim failed");
+            AppError::Internal("Stream queue sync failed".into())
+        })?;
+        streamer.push_queue_update().await.map_err(|error| {
+            tracing::error!(station_id = %station_id, %error, "stream queue push failed");
+            AppError::Internal("Stream queue sync failed".into())
+        })?;
     }
     Ok(())
 }
@@ -301,7 +307,11 @@ pub async fn stream_status(
         map.get(&station_id).cloned()
     };
     if let Some(streamer) = streamer {
-        Ok(Json(streamer.status_json().await))
+        let status = streamer.status_json().await.map_err(|error| {
+            tracing::error!(station_id = %station_id, %error, "stream status failed");
+            AppError::Internal("Stream status failed".into())
+        })?;
+        Ok(Json(status))
     } else {
         Ok(Json(serde_json::json!({
             "playing": false, "song_index": 0, "total": 0, "elapsed": 0, "title": "", "artist": "", "duration": 0,
