@@ -33,6 +33,14 @@ async fn get_or_create_streamer(
         let map = streamers.lock().unwrap_or_else(|e| e.into_inner());
         map.get(&station_id).cloned()
     } {
+        if !songs.is_empty() {
+            // A station that was idle (or restarted) keeps the queue stored in
+            // the database; reload it so playback resumes with the current rows.
+            existing.reload_songs(songs, false).await.map_err(|error| {
+                tracing::error!(station_id = %station_id, %error, "stream queue reload failed");
+                AppError::Internal("Stream queue reload failed".into())
+            })?;
+        }
         existing.play().await.map_err(|error| {
             tracing::error!(station_id = %station_id, %error, "stream playback failed");
             AppError::Internal("Stream playback failed".into())
@@ -147,13 +155,6 @@ pub(crate) async fn get_or_create_streamer_for_station(
     upload_dir: &str,
     station_id: Uuid,
 ) -> Result<Arc<StationStreamer>, AppError> {
-    {
-        let map = streamers.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(s) = map.get(&station_id) {
-            return Ok(s.clone());
-        }
-    }
-
     let station = repository::find_station_by_id(db, station_id)
         .await?
         .ok_or_else(|| AppError::NotFound("Station not found".into()))?;
@@ -175,6 +176,21 @@ pub(crate) async fn get_or_create_streamer_for_station(
             analyzed: r.10,
         })
         .collect();
+
+    if let Some(existing) = {
+        let map = streamers.lock().unwrap_or_else(|e| e.into_inner());
+        map.get(&station_id).cloned()
+    } {
+        if !songs.is_empty() {
+            // Starting a station must resume from the queue stored in the
+            // database even when an (idle) streamer already exists.
+            existing.reload_songs(songs, false).await.map_err(|error| {
+                tracing::error!(station_id = %station_id, %error, "stream queue reload failed");
+                AppError::Internal("Stream queue reload failed".into())
+            })?;
+        }
+        return Ok(existing);
+    }
 
     if songs.is_empty() {
         tracing::info!("Station queue is empty, creating idle streamer for {station_id}");
@@ -205,22 +221,16 @@ pub async fn stream_skip(
 pub async fn stream_play(
     State(db): State<PgPool>,
     State(streamers): State<StreamersMap>,
+    State(config): State<Config>,
     Path(station_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let station_id = resolve_station_id(&db, &station_id).await?;
-    let streamer = {
-        let map = streamers.lock().unwrap_or_else(|e| e.into_inner());
-        map.get(&station_id).cloned()
-    };
-    if let Some(streamer) = streamer {
-        streamer
-            .play()
-            .await
-            .map_err(|_| AppError::Internal("Stream playback failed".into()))?;
-        Ok(Json(serde_json::json!({ "ok": true })))
-    } else {
-        Err(AppError::BadRequest("No active stream".into()))
-    }
+    let streamer = get_or_create_streamer_for_station(&db, &streamers, &config.upload_dir, station_id).await?;
+    streamer
+        .play()
+        .await
+        .map_err(|_| AppError::Internal("Stream playback failed".into()))?;
+    Ok(Json(serde_json::json!({ "ok": true })))
 }
 
 pub async fn stream_pause(

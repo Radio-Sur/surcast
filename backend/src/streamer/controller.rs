@@ -290,8 +290,20 @@ impl StationController {
     }
 
     pub(crate) async fn reload(&mut self, songs: Vec<SongInfo>, align_next: bool) -> Result<Option<PipelineOperation>, PipelineError> {
-        let retain_missing_current = matches!(self.state, PipelineState::Playing | PipelineState::Paused);
+        let was_stopped = matches!(self.state, PipelineState::Stopped);
+        let retain_missing_current = !was_stopped;
         self.queue.reload_songs(songs, retain_missing_current);
+        if was_stopped {
+            // The station was started while its database queue was still
+            // empty, leaving an idle streamer behind. Once songs arrive
+            // (manual add, Auto DJ refill, schedule) playback must begin;
+            // play() stays a no-op while the queue remains empty.
+            return Ok(if self.queue.current_song_info().is_some() {
+                Some(self.play())
+            } else {
+                None
+            });
+        }
         if !align_next || !matches!(self.state, PipelineState::Playing | PipelineState::Paused) {
             return Ok(None);
         }
@@ -847,6 +859,83 @@ mod tests {
         assert!(matches!(controller.play(), PipelineOperation::Replace(_)));
         assert_eq!(controller.state, PipelineState::Playing);
         (controller, pipeline)
+    }
+
+    #[tokio::test]
+    async fn reload_into_a_stopped_controller_starts_playback_once_songs_arrive() {
+        // Start was pressed with an empty queue: the controller sits Stopped
+        // with nothing to play. The first reload that brings songs must kick
+        // off an InitialReplaceFromStopped, not stay idle.
+        let a = song_at(0, "A");
+        let (mut controller, pipeline) = {
+            let (status_tx, _) = broadcast::channel(1);
+            let (queue_tx, _) = broadcast::channel(1);
+            let db = sqlx::postgres::PgPoolOptions::new()
+                .connect_lazy("postgres://surcast:surcast@localhost:5433/surcast")
+                .unwrap();
+            let pipeline = Arc::new(FakePipeline {
+                replacements: AtomicUsize::new(0),
+                state_changes: AtomicUsize::new(0),
+                stops: AtomicUsize::new(0),
+            });
+            let mut controller = StationController {
+                queue: Arc::new(QueueManager::new(db, Uuid::new_v4(), String::new(), Vec::new(), 0)),
+                station_id: Uuid::new_v4(),
+                playback: StationPlaybackConfig::from_persisted("off", 0, 0, 0).unwrap(),
+                driver: PipelineDriver::spawn(pipeline.clone()),
+                target: IcecastTarget::parse("localhost:8000", "secret".into(), "test", "test".into()).unwrap(),
+                state: PipelineState::Stopped,
+                status_tx,
+                queue_tx,
+                generation: 0,
+                output_epoch: 0,
+                planned_next: None,
+            };
+            // Play with an empty queue is a no-op that leaves the controller stopped.
+            assert!(matches!(controller.play(), PipelineOperation::Stop));
+            assert_eq!(controller.state, PipelineState::Stopped);
+            (controller, pipeline)
+        };
+
+        let operation = controller.reload(vec![a], false).await.unwrap();
+        let Some(PipelineOperation::Replace(plan)) = operation else {
+            panic!("reload into a stopped controller with songs must issue a replace");
+        };
+        assert!(matches!(plan.mode, ReplaceMode::InitialReplaceFromStopped));
+        assert_eq!(controller.state, PipelineState::Playing);
+        assert_eq!(pipeline.replacements.load(Ordering::Acquire), 0, "replace is executed by the runtime, not the controller");
+
+        // A reload that still arrives empty must keep the controller stopped.
+        let (mut controller, _) = {
+            let (status_tx, _) = broadcast::channel(1);
+            let (queue_tx, _) = broadcast::channel(1);
+            let db = sqlx::postgres::PgPoolOptions::new()
+                .connect_lazy("postgres://surcast:surcast@localhost:5433/surcast")
+                .unwrap();
+            let pipeline = Arc::new(FakePipeline {
+                replacements: AtomicUsize::new(0),
+                state_changes: AtomicUsize::new(0),
+                stops: AtomicUsize::new(0),
+            });
+            let mut controller = StationController {
+                queue: Arc::new(QueueManager::new(db, Uuid::new_v4(), String::new(), Vec::new(), 0)),
+                station_id: Uuid::new_v4(),
+                playback: StationPlaybackConfig::from_persisted("off", 0, 0, 0).unwrap(),
+                driver: PipelineDriver::spawn(pipeline.clone()),
+                target: IcecastTarget::parse("localhost:8000", "secret".into(), "test", "test".into()).unwrap(),
+                state: PipelineState::Stopped,
+                status_tx,
+                queue_tx,
+                generation: 0,
+                output_epoch: 0,
+                planned_next: None,
+            };
+            assert!(matches!(controller.play(), PipelineOperation::Stop));
+            (controller, pipeline)
+        };
+        let operation = controller.reload(vec![], false).await.unwrap();
+        assert!(operation.is_none(), "an empty reload must not start anything");
+        assert_eq!(controller.state, PipelineState::Stopped);
     }
 
     #[tokio::test]
