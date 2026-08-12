@@ -117,7 +117,7 @@ pub async fn remove_song_from_queue(
     let station_id = resolve_station_id(&db, &station_id).await?;
     queue_repo::delete_queue_by_id(&db, item_id, station_id).await?;
 
-    sync_streamer_songs(&db, &streamers, &config.upload_dir, station_id, false).await?;
+    sync_streamer_songs(&db, &streamers, &config.upload_dir, station_id, true).await?;
 
     Ok(StatusCode::NO_CONTENT)
 }

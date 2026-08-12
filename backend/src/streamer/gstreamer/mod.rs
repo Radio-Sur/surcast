@@ -144,16 +144,6 @@ impl GStreamerPipeline {
         snapshot.elapsed = Duration::ZERO;
     }
 
-    fn finish_paused_transaction(&self, previous_state: PipelineState, result: Result<(), PipelineError>) -> Result<(), PipelineError> {
-        match self.restore_state(previous_state) {
-            Ok(()) => result,
-            Err(error) => {
-                self.force_stopped();
-                Err(error)
-            }
-        }
-    }
-
     fn replace_active(&self, plan: &PairPlan, cancellation: &ReplaceCancellation) -> Result<(), PipelineError> {
         let previous_state = self.snapshot.lock().unwrap_or_else(|error| error.into_inner()).state;
         let mut candidates = Vec::with_capacity(2);
