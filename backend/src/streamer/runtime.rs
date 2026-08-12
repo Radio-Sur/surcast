@@ -239,7 +239,7 @@ impl StationRuntime {
 impl StationCommand {
     async fn run(self, controller: &mut StationController, retries: mpsc::Sender<StationCommand>) -> bool {
         match self {
-            Self::Play(response) => PendingPipelineAction::operation(controller.play(), Some(response)).launch(controller.driver()),
+            Self::Play(response) => PendingPipelineAction::operation(controller.play().await, Some(response)).launch(controller.driver()),
             Self::Pause(response) => PendingPipelineAction::operation(controller.pause(), Some(response)).launch(controller.driver()),
             Self::Shutdown(response) => {
                 let result = controller.driver().execute(controller.stop()).await.map(|_| ());

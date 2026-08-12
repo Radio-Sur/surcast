@@ -124,7 +124,7 @@ async fn fill_from_schedule_entry(
                     };
                     self::auto_fill::fill_from_auto_dj_source(db, station_id, &config, upcoming_count, upload_dir).await?;
                 } else {
-                    self::auto_fill::fill_from_playlist(db, station_id, pid, upload_dir).await?;
+                    self::auto_fill::fill_from_playlist(db, station_id, pid, auto_dj_songs_ahead, upload_dir).await?;
                 }
             }
         }

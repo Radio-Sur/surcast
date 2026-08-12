@@ -85,7 +85,28 @@ impl QueueRepository {
         if result.rows_affected() == 1 {
             Ok(())
         } else {
-            Err(sqlx::Error::RowNotFound)
+            // The guard failed: the stored cursor references an id that is
+            // gone (queue cleared, song deleted while stopped) or was left
+            // stale by an older session, so no previous/current id matches.
+            // A single streamer owns this station's cursor (the streamer map
+            // is keyed by station), so heal it unconditionally — a frozen
+            // cursor would otherwise fail every later persist and suppress
+            // the AutoDJ refill until the queue drains.
+            sqlx::query(
+                "UPDATE stations
+                 SET current_queue_item_id = $1,
+                     consumed_queue_item_ids = $2,
+                     current_song_index = $3,
+                     current_queue_cursor_format = 1
+                 WHERE id = $4",
+            )
+            .bind(cursor.current_queue_item_id)
+            .bind(&cursor.consumed_queue_item_ids)
+            .bind(cursor.legacy_position)
+            .bind(self.station_id)
+            .execute(&self.db)
+            .await?;
+            Ok(())
         }
     }
 
@@ -93,19 +114,34 @@ impl QueueRepository {
         &self,
         previous_current_queue_item_id: Option<Uuid>,
         cursor: &QueueCursor,
-        upcoming: i64,
     ) -> Result<(), sqlx::Error> {
         self.persist_cursor_if_current(previous_current_queue_item_id, cursor).await?;
         self.trim_played_items().await;
-        self.refill(upcoming).await;
+        // The cursor was just persisted, so the database count
+        // (position > current_song_index) is the authoritative upcoming
+        // window — the in-memory queue can lag the DB (rows added or removed
+        // by other clients) and would under- or over-fill. A failed fill is
+        // retried, bounded, so a transient DB error cannot leave the queue
+        // short for a whole song.
+        let mut attempts = 0;
+        while !self.refill(None).await && attempts < 2 {
+            attempts += 1;
+            tokio::time::sleep(std::time::Duration::from_millis(100 * attempts)).await;
+        }
         Ok(())
     }
 
-    pub(crate) async fn refill(&self, upcoming: i64) {
-        if let Err(error) =
-            crate::scheduling::service::fill_queue_from_schedule(&self.db, self.station_id, Some(upcoming), &self.upload_dir).await
-        {
-            tracing::warn!(station_id = %self.station_id, %error, "AutoDJ successor refill error");
+    /// Runs the AutoDJ / schedule fill. Returns `true` when the fill call
+    /// completed, `false` when it failed (DB error, lock timeout, ...) — a
+    /// failed fill must be retried by the caller, an empty successful fill
+    /// means AutoDJ genuinely had nothing to add.
+    pub(crate) async fn refill(&self, upcoming: Option<i64>) -> bool {
+        match crate::scheduling::service::fill_queue_from_schedule(&self.db, self.station_id, upcoming, &self.upload_dir).await {
+            Ok(()) => true,
+            Err(error) => {
+                tracing::warn!(station_id = %self.station_id, %error, "AutoDJ successor refill error");
+                false
+            }
         }
     }
 

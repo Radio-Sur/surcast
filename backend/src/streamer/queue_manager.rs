@@ -59,6 +59,22 @@ impl QueueManager {
         }
     }
 
+    /// Ask AutoDJ / schedule fill to top the queue up. `None` counts the
+    /// upcoming rows from the database, so the in-memory queue does not need
+    /// to be in sync with the DB for the fill to target the right number of
+    /// songs. `Some(count)` uses the caller's count — the controller passes
+    /// the in-memory count at EOS, where the DB count would include the
+    /// just-finished (uncommitted) current track and the fill would stop the
+    /// station with songs still available. Returns `false` only when the
+    /// fill call itself failed.
+    pub(crate) async fn refill(&self, upcoming: Option<i64>) -> bool {
+        self.repository.refill(upcoming).await
+    }
+
+    pub(crate) fn upcoming(&self) -> i64 {
+        self.state.lock().unwrap_or_else(|error| error.into_inner()).upcoming()
+    }
+
     pub async fn reload_from_db(&self) {
         self.retry_dirty_cursor().await;
         let (songs, current_index) = self.repository.load().await;
@@ -109,12 +125,12 @@ impl QueueManager {
     }
 
     pub async fn commit_current(&self, key: &TrackKey, anchor: QueueAnchor) -> Option<TrackKey> {
-        let (previous_current_queue_item_id, cursor, upcoming) = {
+        let (previous_current_queue_item_id, cursor) = {
             let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
             let previous_current_queue_item_id = state.current_song_info().map(|song| song.queue_item_id);
             let song = state.song_by_queue_item_id(key.queue_item_id)?;
             state.commit_current(song, anchor);
-            (previous_current_queue_item_id, state.persistence_cursor(), state.upcoming())
+            (previous_current_queue_item_id, state.persistence_cursor())
         };
         let owns_refill = reserve_refill(
             &mut self.refill_attempted_for.lock().unwrap_or_else(|error| error.into_inner()),
@@ -122,7 +138,7 @@ impl QueueManager {
         );
         let result = if owns_refill {
             self.repository
-                .commit_cursor_and_refill(previous_current_queue_item_id, &cursor, upcoming)
+                .commit_cursor_and_refill(previous_current_queue_item_id, &cursor)
                 .await
         } else {
             self.repository

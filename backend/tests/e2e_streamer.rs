@@ -3,6 +3,7 @@ mod api_common;
 mod common;
 
 use axum_test::TestServer;
+use chrono::Datelike;
 use serial_test::serial;
 use std::{
     collections::HashMap,
@@ -710,6 +711,1768 @@ async fn manual_auto_dj_trigger_keeps_an_exhausted_memory_queue_playing() {
         .await?;
         if advanced["song_index"].as_u64() != Some(1) {
             return Err(failure(format!("auto-fill pick played at the wrong index: {advanced}")));
+        }
+        Ok(())
+    }
+    .await;
+
+    let active = { streamers.lock().unwrap().values().cloned().collect::<Vec<_>>() };
+    futures::future::join_all(active.into_iter().map(|streamer| async move { streamer.shutdown().await })).await;
+    let icecast_result = icecast.stop().await;
+    if let Err(error) = result {
+        panic!("{error}");
+    }
+    icecast_result.unwrap();
+}
+
+#[tokio::test]
+#[serial]
+async fn play_with_empty_queue_fills_from_auto_dj_and_starts() {
+    // Regression: pressing play with an empty queue used to leave the
+    // streamer Stopped forever, even with Auto DJ enabled and a library full
+    // of songs. play() must give Auto DJ one chance to fill the queue, reload
+    // it, and start broadcasting.
+    let _ = tracing_subscriber::fmt().with_test_writer().try_init();
+    let db = common::setup_db().await;
+    let files = TempDir::new().unwrap();
+    let icecast_dir = TempDir::new().unwrap();
+    let port = free_port();
+    let icecast = IcecastManager::new(icecast_dir.path().into());
+    icecast.start(port.into(), "surcast", "admin", "surcast").await.unwrap();
+    let mut config = api_common::test_config();
+    config.upload_dir = files.path().display().to_string();
+    let streamers: StreamersMap = Arc::new(Mutex::new(HashMap::new()));
+
+    let result: Result<(), Box<dyn std::error::Error>> = async {
+        let server = TestServer::new(router::create_router(
+            db.clone(),
+            config,
+            streamers.clone(),
+            icecast.clone(),
+            ListenersState::new(),
+        ))?;
+        server
+            .post("/api/setup/init")
+            .json(&serde_json::json!({"username":"admin","password":"admin123","name":"Admin"}))
+            .await;
+        let login = server
+            .post("/api/auth/login")
+            .json(&serde_json::json!({"username":"admin","password":"admin123"}))
+            .await;
+        let auth = format!(
+            "Bearer {}",
+            login.json::<serde_json::Value>()["access_token"]
+                .as_str()
+                .ok_or_else(|| failure("login response has no access token"))?
+        );
+        sqlx::query(
+            "UPDATE icecast_settings SET enabled=true, mode='managed', port=$1, \
+             source_password='surcast', admin_user='admin', admin_password='surcast'",
+        )
+        .bind(port as i32)
+        .execute(&db)
+        .await?;
+        let station = server
+            .post("/api/stations")
+            .add_header("Authorization", &auth)
+            .json(&serde_json::json!({
+                "name": "Empty play Auto DJ",
+                "stream_url": "empty-play-autodj",
+                "prebuffer_bytes": 1024,
+                "transition_mode": "off"
+            }))
+            .await;
+        if station.status_code() != 201 {
+            return Err(failure(format!("station creation failed: {}", station.text())));
+        }
+        let station_id = station.json::<serde_json::Value>()["id"]
+            .as_str()
+            .ok_or_else(|| failure("station response has no id"))?
+            .to_owned();
+        let admin: (uuid::Uuid,) = sqlx::query_as("SELECT id FROM users WHERE username='admin'").fetch_one(&db).await?;
+
+        // Songs live only in the station library; the queue itself stays empty.
+        std::fs::create_dir(files.path().join("audio"))?;
+        let tones = [(330.0, "tone A"), (440.0, "tone B"), (550.0, "tone C")];
+        let song_ids = tones
+            .iter()
+            .enumerate()
+            .map(|(index, (frequency, title))| {
+                let song_id = uuid::Uuid::new_v4();
+                std::fs::write(
+                    files.path().join("audio").join(format!("empty-dj-{index}.wav")),
+                    wav_for(*frequency, 4),
+                )?;
+                Ok::<_, Box<dyn std::error::Error>>((song_id, title))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        for (index, (song_id, title)) in song_ids.iter().enumerate() {
+            sqlx::query(
+                "INSERT INTO songs (id,title,artist,file_path,file_size,mime_type,duration,uploaded_by) \
+                 VALUES ($1,$2,'test',$3,1,'audio/wav',4,$4)",
+            )
+            .bind(song_id)
+            .bind(title)
+            .bind(format!("empty-dj-{index}.wav"))
+            .bind(admin.0)
+            .execute(&db)
+            .await?;
+            let assigned = server
+                .post(&format!("/api/songs/{song_id}/stations"))
+                .add_header("Authorization", &auth)
+                .json(&serde_json::json!({"station_ids":[station_id.clone()]}))
+                .await;
+            if assigned.status_code().as_u16() >= 300 {
+                return Err(failure(format!("song assignment failed: {}", assigned.text())));
+            }
+        }
+
+        // Enable Auto DJ before starting; play must trigger the fill itself.
+        let configured = server
+            .put(&format!("/api/stations/{station_id}/auto-fill"))
+            .add_header("Authorization", &auth)
+            .json(&serde_json::json!({
+                "enabled": true,
+                "mode": "random",
+                "source_type": "station_library",
+                "avoid_artist_repeat": false,
+                "songs_ahead": 2,
+            }))
+            .await;
+        if configured.status_code() != 200 {
+            return Err(failure(format!("auto-fill config failed: {}", configured.text())));
+        }
+
+        let started = server
+            .post(&format!("/api/stations/{station_id}/stream/play"))
+            .add_header("Authorization", &auth)
+            .await;
+        if started.status_code() != 200 {
+            return Err(failure(format!("play on empty queue failed: {}", started.text())));
+        }
+
+        // The queue must be populated by Auto DJ and playback must start
+        // instead of staying Stopped. songs_ahead=2 means the upcoming window
+        // holds two picks: three rows total with the current track.
+        let playing = wait_for_status(&server, &station_id, &auth, |status| {
+            status["playing"] == true && status["total"].as_u64() == Some(3)
+        })
+        .await
+        .map_err(|error| failure(format!("streamer stayed stopped after play on an empty queue: {error}")))?;
+        let title = playing["title"].as_str().unwrap_or("").to_owned();
+        if !["tone A", "tone B", "tone C"].contains(&title.as_str()) {
+            return Err(failure(format!("Auto DJ pick has an unexpected title: {playing}")));
+        }
+        let client = reqwest::Client::builder().timeout(Duration::from_secs(5)).build()?;
+        let url = format!("http://127.0.0.1:{port}/empty-play-autodj.mp3");
+        let response = open_mount(&client, &url).await?;
+        drop(response);
+        Ok(())
+    }
+    .await;
+
+    let active = { streamers.lock().unwrap().values().cloned().collect::<Vec<_>>() };
+    futures::future::join_all(active.into_iter().map(|streamer| async move { streamer.shutdown().await })).await;
+    let icecast_result = icecast.stop().await;
+    if let Err(error) = result {
+        panic!("{error}");
+    }
+    icecast_result.unwrap();
+}
+
+#[tokio::test]
+#[serial]
+async fn natural_queue_exhaustion_refills_from_auto_dj() {
+    // Regression: when the last queued track ends and nothing is queued
+    // behind it, the controller must give Auto DJ a chance to fill the queue
+    // instead of stopping the radio for good.
+    let _ = tracing_subscriber::fmt().with_test_writer().try_init();
+    let db = common::setup_db().await;
+    let files = TempDir::new().unwrap();
+    let icecast_dir = TempDir::new().unwrap();
+    let port = free_port();
+    let icecast = IcecastManager::new(icecast_dir.path().into());
+    icecast.start(port.into(), "surcast", "admin", "surcast").await.unwrap();
+    let mut config = api_common::test_config();
+    config.upload_dir = files.path().display().to_string();
+    let streamers: StreamersMap = Arc::new(Mutex::new(HashMap::new()));
+
+    let result: Result<(), Box<dyn std::error::Error>> = async {
+        let server = TestServer::new(router::create_router(
+            db.clone(),
+            config,
+            streamers.clone(),
+            icecast.clone(),
+            ListenersState::new(),
+        ))?;
+        server
+            .post("/api/setup/init")
+            .json(&serde_json::json!({"username":"admin","password":"admin123","name":"Admin"}))
+            .await;
+        let login = server
+            .post("/api/auth/login")
+            .json(&serde_json::json!({"username":"admin","password":"admin123"}))
+            .await;
+        let auth = format!(
+            "Bearer {}",
+            login.json::<serde_json::Value>()["access_token"]
+                .as_str()
+                .ok_or_else(|| failure("login response has no access token"))?
+        );
+        sqlx::query(
+            "UPDATE icecast_settings SET enabled=true, mode='managed', port=$1, \
+             source_password='surcast', admin_user='admin', admin_password='surcast'",
+        )
+        .bind(port as i32)
+        .execute(&db)
+        .await?;
+        let station = server
+            .post("/api/stations")
+            .add_header("Authorization", &auth)
+            .json(&serde_json::json!({
+                "name": "Natural exhaustion Auto DJ",
+                "stream_url": "natural-exhaustion-autodj",
+                "prebuffer_bytes": 1024,
+                "transition_mode": "off"
+            }))
+            .await;
+        if station.status_code() != 201 {
+            return Err(failure(format!("station creation failed: {}", station.text())));
+        }
+        let station_id = station.json::<serde_json::Value>()["id"]
+            .as_str()
+            .ok_or_else(|| failure("station response has no id"))?
+            .to_owned();
+        let admin: (uuid::Uuid,) = sqlx::query_as("SELECT id FROM users WHERE username='admin'").fetch_one(&db).await?;
+
+        std::fs::create_dir(files.path().join("audio"))?;
+        let tones = [(330.0, "tone A"), (440.0, "tone B"), (550.0, "tone C")];
+        let song_ids = tones
+            .iter()
+            .enumerate()
+            .map(|(index, (frequency, title))| {
+                let song_id = uuid::Uuid::new_v4();
+                std::fs::write(
+                    files.path().join("audio").join(format!("exhaust-dj-{index}.wav")),
+                    wav_for(*frequency, 4),
+                )?;
+                Ok::<_, Box<dyn std::error::Error>>((song_id, title))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        for (index, (song_id, title)) in song_ids.iter().enumerate() {
+            sqlx::query(
+                "INSERT INTO songs (id,title,artist,file_path,file_size,mime_type,duration,uploaded_by) \
+                 VALUES ($1,$2,'test',$3,1,'audio/wav',4,$4)",
+            )
+            .bind(song_id)
+            .bind(title)
+            .bind(format!("exhaust-dj-{index}.wav"))
+            .bind(admin.0)
+            .execute(&db)
+            .await?;
+            let assigned = server
+                .post(&format!("/api/songs/{song_id}/stations"))
+                .add_header("Authorization", &auth)
+                .json(&serde_json::json!({"station_ids":[station_id.clone()]}))
+                .await;
+            if assigned.status_code().as_u16() >= 300 {
+                return Err(failure(format!("song assignment failed: {}", assigned.text())));
+            }
+        }
+
+        // Queue only the first track; the others stay in the station library
+        // as Auto DJ picks once the queue runs dry.
+        let queued = server
+            .post(&format!("/api/stations/{station_id}/queue"))
+            .add_header("Authorization", &auth)
+            .json(&serde_json::json!({"song_ids": [song_ids[0].0]}))
+            .await;
+        if queued.status_code().as_u16() >= 300 {
+            return Err(failure(format!("queue creation failed: {}", queued.text())));
+        }
+        let configured = server
+            .put(&format!("/api/stations/{station_id}/auto-fill"))
+            .add_header("Authorization", &auth)
+            .json(&serde_json::json!({
+                "enabled": true,
+                "mode": "random",
+                "source_type": "station_library",
+                "avoid_artist_repeat": false,
+                "songs_ahead": 2,
+            }))
+            .await;
+        if configured.status_code() != 200 {
+            return Err(failure(format!("auto-fill config failed: {}", configured.text())));
+        }
+
+        let started = server
+            .post(&format!("/api/stations/{station_id}/stream/restart"))
+            .add_header("Authorization", &auth)
+            .await;
+        if started.status_code() != 200 {
+            return Err(failure(format!("stream start failed: {}", started.text())));
+        }
+        let client = reqwest::Client::builder().timeout(Duration::from_secs(5)).build()?;
+        let url = format!("http://127.0.0.1:{port}/natural-exhaustion-autodj.mp3");
+        let response = open_mount(&client, &url).await?;
+        drop(response);
+
+        wait_for_status(&server, &station_id, &auth, |status| {
+            status["title"].as_str() == Some("tone A") && status["playing"] == true
+        })
+        .await?;
+
+        // tone A ends with nothing queued behind it: the controller must
+        // refill from Auto DJ and continue instead of stopping.
+        let advanced = wait_for_status(&server, &station_id, &auth, |status| {
+            status["playing"] == true && status["title"].as_str() != Some("tone A")
+        })
+        .await
+        .map_err(|error| failure(format!("playback stopped after queue exhaustion: {error}")))?;
+        // The queue must now hold the played track plus at least the two
+        // songs_ahead picks; the exact count can grow as later refills top up.
+        if advanced["total"].as_u64().unwrap_or(0) < 3 {
+            return Err(failure(format!("Auto DJ refill did not populate the queue: {advanced}")));
+        }
+        if advanced["song_index"].as_u64() != Some(1) {
+            return Err(failure(format!("Auto DJ pick played at the wrong index: {advanced}")));
+        }
+        Ok(())
+    }
+    .await;
+
+    let active = { streamers.lock().unwrap().values().cloned().collect::<Vec<_>>() };
+    futures::future::join_all(active.into_iter().map(|streamer| async move { streamer.shutdown().await })).await;
+    let icecast_result = icecast.stop().await;
+    if let Err(error) = result {
+        panic!("{error}");
+    }
+    icecast_result.unwrap();
+}
+
+#[tokio::test]
+#[serial]
+async fn repro_audio_survives_last_track_refill_after_empty_queue_start() {
+    // The user's report: start pressed with an empty queue, AutoDJ added one
+    // track, it played to the end, AutoDJ then refilled the queue — the panel
+    // showed the new tracks as playing, but the broadcast was actually dead
+    // after the first track. Status only reflects controller/pipeline state,
+    // so the Icecast mount itself must be cross-checked: it must serve audio
+    // after the last-track EOS refill transition, not just report playing.
+    let _ = tracing_subscriber::fmt().with_test_writer().try_init();
+    let db = common::setup_db().await;
+    let files = TempDir::new().unwrap();
+    let icecast_dir = TempDir::new().unwrap();
+    let port = free_port();
+    let icecast = IcecastManager::new(icecast_dir.path().into());
+    icecast.start(port.into(), "surcast", "admin", "surcast").await.unwrap();
+    let mut config = api_common::test_config();
+    config.upload_dir = files.path().display().to_string();
+    let streamers: StreamersMap = Arc::new(Mutex::new(HashMap::new()));
+
+    let result: Result<(), Box<dyn std::error::Error>> = async {
+        let server = TestServer::new(router::create_router(
+            db.clone(),
+            config,
+            streamers.clone(),
+            icecast.clone(),
+            ListenersState::new(),
+        ))?;
+        server
+            .post("/api/setup/init")
+            .json(&serde_json::json!({"username":"admin","password":"admin123","name":"Admin"}))
+            .await;
+        let login = server
+            .post("/api/auth/login")
+            .json(&serde_json::json!({"username":"admin","password":"admin123"}))
+            .await;
+        let auth = format!(
+            "Bearer {}",
+            login.json::<serde_json::Value>()["access_token"]
+                .as_str()
+                .ok_or_else(|| failure("login response has no access token"))?
+        );
+        sqlx::query(
+            "UPDATE icecast_settings SET enabled=true, mode='managed', port=$1, \
+             source_password='surcast', admin_user='admin', admin_password='surcast'",
+        )
+        .bind(port as i32)
+        .execute(&db)
+        .await?;
+        let station = server
+            .post("/api/stations")
+            .add_header("Authorization", &auth)
+            .json(&serde_json::json!({
+                "name": "Empty start audio repro",
+                "stream_url": "empty-start-audio-repro",
+                "prebuffer_bytes": 1024,
+                "transition_mode": "off"
+            }))
+            .await;
+        if station.status_code() != 201 {
+            return Err(failure(format!("station creation failed: {}", station.text())));
+        }
+        let station_id = station.json::<serde_json::Value>()["id"]
+            .as_str()
+            .ok_or_else(|| failure("station response has no id"))?
+            .to_owned();
+        let admin: (uuid::Uuid,) = sqlx::query_as("SELECT id FROM users WHERE username='admin'").fetch_one(&db).await?;
+
+        // Songs live only in the station library; the queue stays empty.
+        std::fs::create_dir(files.path().join("audio"))?;
+        let tones = [(330.0, "tone A"), (440.0, "tone B"), (550.0, "tone C")];
+        let song_ids = tones
+            .iter()
+            .enumerate()
+            .map(|(index, (frequency, title))| {
+                let song_id = uuid::Uuid::new_v4();
+                std::fs::write(
+                    files.path().join("audio").join(format!("audio-repro-{index}.wav")),
+                    wav_for(*frequency, 4),
+                )?;
+                Ok::<_, Box<dyn std::error::Error>>((song_id, title))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        for (index, (song_id, title)) in song_ids.iter().enumerate() {
+            sqlx::query(
+                "INSERT INTO songs (id,title,artist,file_path,file_size,mime_type,duration,uploaded_by) \
+                 VALUES ($1,$2,'test',$3,1,'audio/wav',4,$4)",
+            )
+            .bind(song_id)
+            .bind(title)
+            .bind(format!("audio-repro-{index}.wav"))
+            .bind(admin.0)
+            .execute(&db)
+            .await?;
+            let assigned = server
+                .post(&format!("/api/songs/{song_id}/stations"))
+                .add_header("Authorization", &auth)
+                .json(&serde_json::json!({"station_ids":[station_id.clone()]}))
+                .await;
+            if assigned.status_code().as_u16() >= 300 {
+                return Err(failure(format!("song assignment failed: {}", assigned.text())));
+            }
+        }
+        let configured = server
+            .put(&format!("/api/stations/{station_id}/auto-fill"))
+            .add_header("Authorization", &auth)
+            .json(&serde_json::json!({
+                "enabled": true,
+                "mode": "random",
+                "source_type": "station_library",
+                "avoid_artist_repeat": false,
+                "songs_ahead": 1,
+            }))
+            .await;
+        if configured.status_code() != 200 {
+            return Err(failure(format!("auto-fill config failed: {}", configured.text())));
+        }
+
+        // Start with an empty database queue: play()'s own refill adds the
+        // first Auto DJ pick, which plays with nothing staged behind it and
+        // ends through the EOS path (no natural handover) — the exact state
+        // the user hit.
+        let started = server
+            .post(&format!("/api/stations/{station_id}/stream/play"))
+            .add_header("Authorization", &auth)
+            .await;
+        if started.status_code() != 200 {
+            return Err(failure(format!("play on empty queue failed: {}", started.text())));
+        }
+        let playing = wait_for_status(&server, &station_id, &auth, |status| {
+            // songs_ahead=1: the current track plus one upcoming pick.
+            status["playing"] == true && status["total"].as_u64() == Some(2)
+        })
+        .await
+        .map_err(|error| failure(format!("streamer stayed stopped after play on an empty queue: {error}")))?;
+        let first_title = playing["title"].as_str().unwrap_or("").to_owned();
+        if first_title.is_empty() {
+            return Err(failure(format!("no first Auto DJ pick: {playing}")));
+        }
+
+        let url = format!("http://127.0.0.1:{port}/empty-start-audio-repro.mp3");
+        let client = reqwest::Client::builder().timeout(Duration::from_secs(5)).build()?;
+        let mut response = open_mount(&client, &url).await?;
+        let chunk = tokio::time::timeout(Duration::from_secs(15), response.chunk()).await??;
+        if chunk.is_none() || chunk.as_ref().is_none_or(|bytes| bytes.is_empty()) {
+            return Err(failure("mount returned no audio before the first track ended"));
+        }
+        drop(response);
+
+        // The first track ends with nothing staged behind it: the controller
+        // must refill from Auto DJ and keep the broadcast alive.
+        let advanced = wait_for_status(&server, &station_id, &auth, |status| {
+            status["playing"] == true && status["title"].as_str() != Some(first_title.as_str())
+        })
+        .await
+        .map_err(|error| failure(format!("controller did not advance after the last queued track ended: {error}")))?;
+        if advanced["total"].as_u64().unwrap_or(0) < 2 {
+            return Err(failure(format!("Auto DJ refill did not populate the queue: {advanced}")));
+        }
+
+        // The broadcast itself must survive the transition: the mount has to
+        // serve real audio again after the refill, not just report playing.
+        let mut response = open_mount(&client, &url).await?;
+        let chunk = tokio::time::timeout(Duration::from_secs(15), response.chunk()).await??;
+        if chunk.is_none() || chunk.as_ref().is_none_or(|bytes| bytes.is_empty()) {
+            return Err(failure(format!(
+                "mount served no audio after the refill transition; status claimed: {advanced}"
+            )));
+        }
+        drop(response);
+        Ok(())
+    }
+    .await;
+
+    let active = { streamers.lock().unwrap().values().cloned().collect::<Vec<_>>() };
+    futures::future::join_all(active.into_iter().map(|streamer| async move { streamer.shutdown().await })).await;
+    let icecast_result = icecast.stop().await;
+    if let Err(error) = result {
+        panic!("{error}");
+    }
+    icecast_result.unwrap();
+}
+
+#[tokio::test]
+#[serial]
+async fn repro_ws_feed_reports_stopped_after_queue_exhaustion() {
+    // The user's report: after the station stopped itself (queue exhausted,
+    // nothing to refill), the panel kept showing the last playing state — the
+    // live feed only pushes status on events, and the exhaustion stop pushed
+    // none. The feed must report playing=false when the station stops itself.
+    let _ = tracing_subscriber::fmt().with_test_writer().try_init();
+    let db = common::setup_db().await;
+    let files = TempDir::new().unwrap();
+    let icecast_dir = TempDir::new().unwrap();
+    let port = free_port();
+    let icecast = IcecastManager::new(icecast_dir.path().into());
+    icecast.start(port.into(), "surcast", "admin", "surcast").await.unwrap();
+    let mut config = api_common::test_config();
+    config.upload_dir = files.path().display().to_string();
+    let streamers: StreamersMap = Arc::new(Mutex::new(HashMap::new()));
+
+    let result: Result<(), Box<dyn std::error::Error>> = async {
+        let server = TestServer::builder()
+            .http_transport()
+            .build(router::create_router(
+                db.clone(),
+                config.clone(),
+                streamers.clone(),
+                icecast.clone(),
+                ListenersState::new(),
+            ))?;
+        server
+            .post("/api/setup/init")
+            .json(&serde_json::json!({"username":"admin","password":"admin123","name":"Admin"}))
+            .await;
+        let login = server
+            .post("/api/auth/login")
+            .json(&serde_json::json!({"username":"admin","password":"admin123"}))
+            .await;
+        let auth = format!(
+            "Bearer {}",
+            login.json::<serde_json::Value>()["access_token"]
+                .as_str()
+                .ok_or_else(|| failure("login response has no access token"))?
+        );
+        let token = auth.trim_start_matches("Bearer ").to_owned();
+        sqlx::query(
+            "UPDATE icecast_settings SET enabled=true, mode='managed', port=$1, \
+             source_password='surcast', admin_user='admin', admin_password='surcast'",
+        )
+        .bind(port as i32)
+        .execute(&db)
+        .await?;
+        let station = server
+            .post("/api/stations")
+            .add_header("Authorization", &auth)
+            .json(&serde_json::json!({
+                "name": "WS stopped feed repro",
+                "stream_url": "ws-stopped-feed-repro",
+                "prebuffer_bytes": 1024,
+                "transition_mode": "off"
+            }))
+            .await;
+        if station.status_code() != 201 {
+            return Err(failure(format!("station creation failed: {}", station.text())));
+        }
+        let station_id = station.json::<serde_json::Value>()["id"]
+            .as_str()
+            .ok_or_else(|| failure("station response has no id"))?
+            .to_owned();
+        let admin: (uuid::Uuid,) = sqlx::query_as("SELECT id FROM users WHERE username='admin'").fetch_one(&db).await?;
+
+        std::fs::create_dir(files.path().join("audio"))?;
+        let song_id = uuid::Uuid::new_v4();
+        std::fs::write(files.path().join("audio").join("ws-stopped.wav"), wav_for(330.0, 4))?;
+        sqlx::query(
+            "INSERT INTO songs (id,title,artist,file_path,file_size,mime_type,duration,uploaded_by) \
+             VALUES ($1,'tone A','test','ws-stopped.wav',1,'audio/wav',4,$2)",
+        )
+        .bind(song_id)
+        .bind(admin.0)
+        .execute(&db)
+        .await?;
+        let _assigned = server
+            .post(&format!("/api/songs/{song_id}/stations"))
+            .add_header("Authorization", &auth)
+            .json(&serde_json::json!({"station_ids":[station_id.clone()]}))
+            .await;
+        let queued = server
+            .post(&format!("/api/stations/{station_id}/queue"))
+            .add_header("Authorization", &auth)
+            .json(&serde_json::json!({"song_ids": [song_id]}))
+            .await;
+        if queued.status_code().as_u16() >= 300 {
+            return Err(failure(format!("queue creation failed: {}", queued.text())));
+        }
+        let started = server
+            .post(&format!("/api/stations/{station_id}/stream/play"))
+            .add_header("Authorization", &auth)
+            .await;
+        if started.status_code() != 200 {
+            return Err(failure(format!("stream start failed: {}", started.text())));
+        }
+        wait_for_status(&server, &station_id, &auth, |status| {
+            status["title"].as_str() == Some("tone A") && status["playing"] == true
+        })
+        .await?;
+
+        let mut address = server.server_address().ok_or_else(|| failure("no server address"))?;
+        address.set_scheme("ws").map_err(|_| failure("bad address"))?;
+        let ws_url = address.join("/api/ws").map_err(|_| failure("bad ws url"))?;
+        let (mut socket, _) = tokio_tungstenite::connect_async(ws_url.to_string()).await?;
+        use futures::SinkExt;
+        use tokio_tungstenite::tungstenite::Message as WsMessage;
+        socket
+            .send(WsMessage::Text(serde_json::json!({"type": "auth", "token": token}).to_string().into()))
+            .await?;
+        socket
+            .send(WsMessage::Text(
+                serde_json::json!({"type": "subscribe", "station_id": station_id}).to_string().into(),
+            ))
+            .await?;
+        let _auth_ok = ws_recv_text(&mut socket, 10).await?;
+        // Drain the initial snapshot (status + queue_update); the first
+        // status must report the station as playing.
+        let mut saw_playing = false;
+        for _ in 0..8 {
+            let msg: serde_json::Value = serde_json::from_str(&ws_recv_text(&mut socket, 10).await?)?;
+            if msg["type"] == "status" && msg["data"]["data"]["playing"] == true {
+                saw_playing = true;
+            }
+            if msg["type"] == "queue_update" {
+                break;
+            }
+        }
+        if !saw_playing {
+            return Err(failure("initial live status did not report playing"));
+        }
+
+        // The single track ends: no Auto DJ is configured, so the controller
+        // stops the station. The live feed must push the stopped state; the
+        // panel must not keep the last playing snapshot forever.
+        let deadline = Instant::now() + Duration::from_secs(20);
+        loop {
+            let msg: serde_json::Value = serde_json::from_str(&ws_recv_text(&mut socket, 10).await?)?;
+            if msg["type"] == "status" && msg["data"]["data"]["playing"] == false {
+                break;
+            }
+            if Instant::now() >= deadline {
+                return Err(failure(format!(
+                    "live feed never reported the exhausted station as stopped; last message: {msg}"
+                )));
+            }
+        }
+        Ok(())
+    }
+    .await;
+
+    let active = { streamers.lock().unwrap().values().cloned().collect::<Vec<_>>() };
+    futures::future::join_all(active.into_iter().map(|streamer| async move { streamer.shutdown().await })).await;
+    let icecast_result = icecast.stop().await;
+    if let Err(error) = result {
+        panic!("{error:?}");
+    }
+    icecast_result.unwrap();
+}
+
+#[tokio::test]
+#[serial]
+async fn mixed_queue_drain_keeps_playing_with_auto_dj_picks() {
+    // User report: a station whose queue held manually added songs plus
+    // Auto DJ picks stopped broadcasting after those songs finished, even
+    // though Auto DJ was enabled. Playback must roll from the manual tail
+    // into Auto DJ picks and keep refilling across handovers.
+    let _ = tracing_subscriber::fmt().with_test_writer().try_init();
+    let db = common::setup_db().await;
+    let files = TempDir::new().unwrap();
+    let icecast_dir = TempDir::new().unwrap();
+    let port = free_port();
+    let icecast = IcecastManager::new(icecast_dir.path().into());
+    icecast.start(port.into(), "surcast", "admin", "surcast").await.unwrap();
+    let mut config = api_common::test_config();
+    config.upload_dir = files.path().display().to_string();
+    let streamers: StreamersMap = Arc::new(Mutex::new(HashMap::new()));
+
+    let result: Result<(), Box<dyn std::error::Error>> = async {
+        let server = TestServer::new(router::create_router(
+            db.clone(),
+            config,
+            streamers.clone(),
+            icecast.clone(),
+            ListenersState::new(),
+        ))?;
+        server
+            .post("/api/setup/init")
+            .json(&serde_json::json!({"username":"admin","password":"admin123","name":"Admin"}))
+            .await;
+        let login = server
+            .post("/api/auth/login")
+            .json(&serde_json::json!({"username":"admin","password":"admin123"}))
+            .await;
+        let auth = format!(
+            "Bearer {}",
+            login.json::<serde_json::Value>()["access_token"]
+                .as_str()
+                .ok_or_else(|| failure("login response has no access token"))?
+        );
+        sqlx::query(
+            "UPDATE icecast_settings SET enabled=true, mode='managed', port=$1, \
+             source_password='surcast', admin_user='admin', admin_password='surcast'",
+        )
+        .bind(port as i32)
+        .execute(&db)
+        .await?;
+        let station = server
+            .post("/api/stations")
+            .add_header("Authorization", &auth)
+            .json(&serde_json::json!({
+                "name": "Mixed drain Auto DJ",
+                "stream_url": "mixed-drain-autodj",
+                "prebuffer_bytes": 1024,
+                "transition_mode": "off"
+            }))
+            .await;
+        if station.status_code() != 201 {
+            return Err(failure(format!("station creation failed: {}", station.text())));
+        }
+        let station_id = station.json::<serde_json::Value>()["id"]
+            .as_str()
+            .ok_or_else(|| failure("station response has no id"))?
+            .to_owned();
+        let admin: (uuid::Uuid,) = sqlx::query_as("SELECT id FROM users WHERE username='admin'").fetch_one(&db).await?;
+
+        std::fs::create_dir(files.path().join("audio"))?;
+        let tones = [(330.0, "tone A"), (440.0, "tone B"), (550.0, "tone C"), (660.0, "tone D"), (770.0, "tone E")];
+        let song_ids = tones
+            .iter()
+            .enumerate()
+            .map(|(index, (frequency, title))| {
+                let song_id = uuid::Uuid::new_v4();
+                std::fs::write(
+                    files.path().join("audio").join(format!("mixed-dj-{index}.wav")),
+                    wav_for(*frequency, 4),
+                )?;
+                Ok::<_, Box<dyn std::error::Error>>((song_id, title))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        for (index, (song_id, title)) in song_ids.iter().enumerate() {
+            sqlx::query(
+                "INSERT INTO songs (id,title,artist,file_path,file_size,mime_type,duration,uploaded_by) \
+                 VALUES ($1,$2,'test',$3,1,'audio/wav',4,$4)",
+            )
+            .bind(song_id)
+            .bind(title)
+            .bind(format!("mixed-dj-{index}.wav"))
+            .bind(admin.0)
+            .execute(&db)
+            .await?;
+            let assigned = server
+                .post(&format!("/api/songs/{song_id}/stations"))
+                .add_header("Authorization", &auth)
+                .json(&serde_json::json!({"station_ids":[station_id.clone()]}))
+                .await;
+            if assigned.status_code().as_u16() >= 300 {
+                return Err(failure(format!("song assignment failed: {}", assigned.text())));
+            }
+        }
+
+        // Queue three manual songs; the last two stay in the library as
+        // Auto DJ picks.
+        let queued = server
+            .post(&format!("/api/stations/{station_id}/queue"))
+            .add_header("Authorization", &auth)
+            .json(&serde_json::json!({"song_ids": [song_ids[0].0, song_ids[1].0, song_ids[2].0]}))
+            .await;
+        if queued.status_code().as_u16() >= 300 {
+            return Err(failure(format!("queue creation failed: {}", queued.text())));
+        }
+        let configured = server
+            .put(&format!("/api/stations/{station_id}/auto-fill"))
+            .add_header("Authorization", &auth)
+            .json(&serde_json::json!({
+                "enabled": true,
+                "mode": "random",
+                "source_type": "station_library",
+                "avoid_artist_repeat": false,
+                "songs_ahead": 2,
+            }))
+            .await;
+        if configured.status_code() != 200 {
+            return Err(failure(format!("auto-fill config failed: {}", configured.text())));
+        }
+
+        let started = server
+            .post(&format!("/api/stations/{station_id}/stream/restart"))
+            .add_header("Authorization", &auth)
+            .await;
+        if started.status_code() != 200 {
+            return Err(failure(format!("stream start failed: {}", started.text())));
+        }
+        let client = reqwest::Client::builder().timeout(Duration::from_secs(5)).build()?;
+        let url = format!("http://127.0.0.1:{port}/mixed-drain-autodj.mp3");
+        let response = open_mount(&client, &url).await?;
+        drop(response);
+
+        // The manual songs play through one by one...
+        wait_for_status(&server, &station_id, &auth, |status| {
+            status["title"].as_str() == Some("tone A") && status["playing"] == true
+        })
+        .await?;
+        wait_for_status(&server, &station_id, &auth, |status| {
+            status["title"].as_str() == Some("tone B") && status["playing"] == true
+        })
+        .await?;
+        wait_for_status(&server, &station_id, &auth, |status| {
+            status["title"].as_str() == Some("tone C") && status["playing"] == true
+        })
+        .await?;
+
+        // ...and when the manual tail ends the radio must roll into Auto DJ
+        // picks instead of stopping.
+        let pick = wait_for_status(&server, &station_id, &auth, |status| {
+            status["playing"] == true && matches!(status["title"].as_str(), Some("tone D") | Some("tone E"))
+        })
+        .await
+        .map_err(|error| failure(format!("radio stopped after the manual queue drained: {error}")))?;
+        if pick["total"].as_u64().unwrap_or(0) < 4 {
+            return Err(failure(format!("Auto DJ did not refill past the manual tail: {pick}")));
+        }
+        let first_pick = pick["title"].as_str().unwrap_or("").to_owned();
+        let second = if first_pick == "tone D" { "tone E" } else { "tone D" };
+        // The next handover must keep playing another Auto DJ pick, proving
+        // the refill keeps the queue alive across transitions.
+        wait_for_status(&server, &station_id, &auth, |status| {
+            status["playing"] == true && status["title"].as_str() == Some(second)
+        })
+        .await
+        .map_err(|error| failure(format!("playback stopped between Auto DJ picks: {error}")))?;
+        Ok(())
+    }
+    .await;
+
+    let active = { streamers.lock().unwrap().values().cloned().collect::<Vec<_>>() };
+    futures::future::join_all(active.into_iter().map(|streamer| async move { streamer.shutdown().await })).await;
+    let icecast_result = icecast.stop().await;
+    if let Err(error) = result {
+        panic!("{error}");
+    }
+    icecast_result.unwrap();
+}
+
+#[tokio::test]
+#[serial]
+async fn auto_dj_keeps_songs_ahead_with_crossfade_handovers() {
+    // User report: AutoDJ fills the queue only when it is completely empty;
+    // as the player consumes tracks one by one the queue shrinks below the
+    // configured songs_ahead minimum and nothing tops it up. The queue must
+    // be refilled at every handover so upcoming stays at songs_ahead.
+    let _ = tracing_subscriber::fmt().with_test_writer().try_init();
+    let db = common::setup_db().await;
+    let files = TempDir::new().unwrap();
+    let icecast_dir = TempDir::new().unwrap();
+    let port = free_port();
+    let icecast = IcecastManager::new(icecast_dir.path().into());
+    icecast.start(port.into(), "surcast", "admin", "surcast").await.unwrap();
+    let mut config = api_common::test_config();
+    config.upload_dir = files.path().display().to_string();
+    let streamers: StreamersMap = Arc::new(Mutex::new(HashMap::new()));
+
+    let result: Result<(), Box<dyn std::error::Error>> = async {
+        let server = TestServer::new(router::create_router(
+            db.clone(),
+            config,
+            streamers.clone(),
+            icecast.clone(),
+            ListenersState::new(),
+        ))?;
+        server
+            .post("/api/setup/init")
+            .json(&serde_json::json!({"username":"admin","password":"admin123","name":"Admin"}))
+            .await;
+        let login = server
+            .post("/api/auth/login")
+            .json(&serde_json::json!({"username":"admin","password":"admin123"}))
+            .await;
+        let auth = format!(
+            "Bearer {}",
+            login.json::<serde_json::Value>()["access_token"]
+                .as_str()
+                .ok_or_else(|| failure("login response has no access token"))?
+        );
+        sqlx::query(
+            "UPDATE icecast_settings SET enabled=true, mode='managed', port=$1, \
+             source_password='surcast', admin_user='admin', admin_password='surcast'",
+        )
+        .bind(port as i32)
+        .execute(&db)
+        .await?;
+        let station = server
+            .post("/api/stations")
+            .add_header("Authorization", &auth)
+            .json(&serde_json::json!({
+                "name": "Crossfade keep-ahead",
+                "stream_url": "crossfade-keep-ahead",
+                "prebuffer_bytes": 1024,
+            }))
+            .await;
+        if station.status_code() != 201 {
+            return Err(failure(format!("station creation failed: {}", station.text())));
+        }
+        let station_id = station.json::<serde_json::Value>()["id"]
+            .as_str()
+            .ok_or_else(|| failure("station response has no id"))?
+            .to_owned();
+        let admin: (uuid::Uuid,) = sqlx::query_as("SELECT id FROM users WHERE username='admin'").fetch_one(&db).await?;
+
+        std::fs::create_dir(files.path().join("audio"))?;
+        let tones = [(330.0, "ka A"), (440.0, "ka B"), (550.0, "ka C"), (660.0, "ka D"), (770.0, "ka E"), (880.0, "ka F")];
+        let song_ids = tones
+            .iter()
+            .enumerate()
+            .map(|(index, (frequency, title))| {
+                let song_id = uuid::Uuid::new_v4();
+                std::fs::write(
+                    files.path().join("audio").join(format!("keep-ahead-{index}.wav")),
+                    wav_for(*frequency, 4),
+                )?;
+                Ok::<_, Box<dyn std::error::Error>>((song_id, title))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        for (index, (song_id, title)) in song_ids.iter().enumerate() {
+            sqlx::query(
+                "INSERT INTO songs (id,title,artist,file_path,file_size,mime_type,duration,uploaded_by) \
+                 VALUES ($1,$2,'test',$3,1,'audio/wav',4,$4)",
+            )
+            .bind(song_id)
+            .bind(title)
+            .bind(format!("keep-ahead-{index}.wav"))
+            .bind(admin.0)
+            .execute(&db)
+            .await?;
+            let assigned = server
+                .post(&format!("/api/songs/{song_id}/stations"))
+                .add_header("Authorization", &auth)
+                .json(&serde_json::json!({"station_ids":[station_id.clone()]}))
+                .await;
+            if assigned.status_code().as_u16() >= 300 {
+                return Err(failure(format!("song assignment failed: {}", assigned.text())));
+            }
+        }
+
+        let configured = server
+            .put(&format!("/api/stations/{station_id}/auto-fill"))
+            .add_header("Authorization", &auth)
+            .json(&serde_json::json!({
+                "enabled": true,
+                "mode": "random",
+                "source_type": "station_library",
+                "avoid_artist_repeat": true,
+                "songs_ahead": 4,
+            }))
+            .await;
+        if configured.status_code() != 200 {
+            return Err(failure(format!("auto-fill config failed: {}", configured.text())));
+        }
+
+        let started = server
+            .post(&format!("/api/stations/{station_id}/stream/restart"))
+            .add_header("Authorization", &auth)
+            .await;
+        if started.status_code() != 200 {
+            return Err(failure(format!("stream start failed: {}", started.text())));
+        }
+
+        async fn upcoming_rows(db: &sqlx::PgPool, station_id: &str) -> i64 {
+            let station_uuid = uuid::Uuid::parse_str(station_id).unwrap();
+            sqlx::query_scalar(
+                "SELECT COUNT(*) FROM station_queue WHERE station_id = $1 AND position > \
+                 (SELECT COALESCE(current_song_index, 0) FROM stations WHERE id = $1)",
+            )
+            .bind(station_uuid)
+            .fetch_one(db)
+            .await
+            .unwrap_or(0)
+        }
+
+        // The queue starts empty: AutoDJ must seed it so the upcoming window
+        // holds songs_ahead picks (plus the row that becomes the current one).
+        let first = wait_for_status(&server, &station_id, &auth, |status| status["playing"] == true).await?;
+        let seeded = upcoming_rows(&db, &station_id).await;
+        if seeded < 4 {
+            return Err(failure(format!("AutoDJ did not seed songs_ahead upcoming rows: {seeded} (status {first})")));
+        }
+
+        // After every handover the DB queue must be topped back up to the
+        // songs_ahead minimum — the player may consume one track per song but
+        // the upcoming window must never shrink below the configured floor.
+        let mut last_index = 0u64;
+        for _ in 0..10 {
+            let status = wait_for_status(&server, &station_id, &auth, |status| {
+                status["playing"] == true
+                    && status["song_index"].as_u64().is_some_and(|index| index > last_index)
+            })
+            .await
+            .map_err(|error| failure(format!("playback stalled between handovers: {error}")))?;
+            last_index = status["song_index"].as_u64().unwrap_or(last_index);
+            let upcoming = upcoming_rows(&db, &station_id).await;
+            if upcoming < 4 {
+                return Err(failure(format!(
+                    "upcoming queue fell below songs_ahead=4 after handover to {:?}: {} rows",
+                    status["title"], upcoming
+                )));
+            }
+            // The panel queue view must show the same floor: the frontend
+            // splits the queue API rows at song_index % len (played / now /
+            // upcoming) — verify the upcoming slice it derives stays >= 4.
+            let queue = fetch_queue(&server, &station_id, &auth).await;
+            let queue = queue.as_array().cloned().unwrap_or_default();
+            let pos = if queue.is_empty() {
+                0
+            } else {
+                (status["song_index"].as_u64().unwrap_or(0) as usize) % queue.len()
+            };
+            let visible_upcoming = queue.len().saturating_sub(pos + 1);
+            if visible_upcoming < 4 {
+                return Err(failure(format!(
+                    "panel queue view shows {visible_upcoming} upcoming (< 4) after {:?} (queue {} rows, song_index {})",
+                    status["title"],
+                    queue.len(),
+                    status["song_index"]
+                )));
+            }
+        }
+
+        // Songs removed while the station is stopped must be topped back up
+        // to the minimum on the next start (play() refills below-target
+        // queues, not just empty ones).
+        let stopped = server
+            .post(&format!("/api/stations/{station_id}/stream/stop"))
+            .add_header("Authorization", &auth)
+            .await;
+        if stopped.status_code() != 200 {
+            return Err(failure(format!("stream stop failed: {}", stopped.text())));
+        }
+        sqlx::query(
+            "DELETE FROM station_queue WHERE station_id = $1 AND position > \
+             (SELECT COALESCE(current_song_index, 0) FROM stations WHERE id = $1)",
+        )
+        .bind(uuid::Uuid::parse_str(&station_id).unwrap())
+        .execute(&db)
+        .await?;
+        let restarted = server
+            .post(&format!("/api/stations/{station_id}/stream/play"))
+            .add_header("Authorization", &auth)
+            .await;
+        if restarted.status_code() != 200 {
+            return Err(failure(format!("stream play after removal failed: {}", restarted.text())));
+        }
+        wait_for_status(&server, &station_id, &auth, |status| {
+            status["playing"] == true && status["song_index"].as_u64().is_some_and(|index| index > last_index)
+        })
+        .await
+        .map_err(|error| failure(format!("playback did not resume after the queue was trimmed: {error}")))?;
+        let refilled = upcoming_rows(&db, &station_id).await;
+        if refilled < 2 {
+            return Err(failure(format!(
+                "start did not top the trimmed queue back up to songs_ahead=2: {refilled} rows"
+            )));
+        }
+        Ok(())
+    }
+    .await;
+
+    let active = { streamers.lock().unwrap().values().cloned().collect::<Vec<_>>() };
+    futures::future::join_all(active.into_iter().map(|streamer| async move { streamer.shutdown().await })).await;
+    let icecast_result = icecast.stop().await;
+    if let Err(error) = result {
+        panic!("{error}");
+    }
+    icecast_result.unwrap();
+}
+
+#[tokio::test]
+#[serial]
+async fn autodj_never_overfills_the_upcoming_window() {
+    // User report: with songs_ahead=4 the refill dumped 8 tracks into the
+    // queue at once. The fill must add exactly (songs_ahead - visible
+    // upcoming) — one track when three are visible, nothing when four are
+    // visible — never a batch.
+    let _ = tracing_subscriber::fmt().with_test_writer().try_init();
+    let db = common::setup_db().await;
+    let files = TempDir::new().unwrap();
+    let icecast_dir = TempDir::new().unwrap();
+    let port = free_port();
+    let icecast = IcecastManager::new(icecast_dir.path().into());
+    icecast.start(port.into(), "surcast", "admin", "surcast").await.unwrap();
+    let mut config = api_common::test_config();
+    config.upload_dir = files.path().display().to_string();
+    let streamers: StreamersMap = Arc::new(Mutex::new(HashMap::new()));
+
+    let result: Result<(), Box<dyn std::error::Error>> = async {
+        let server = TestServer::new(router::create_router(
+            db.clone(),
+            config,
+            streamers.clone(),
+            icecast.clone(),
+            ListenersState::new(),
+        ))?;
+        server
+            .post("/api/setup/init")
+            .json(&serde_json::json!({"username":"admin","password":"admin123","name":"Admin"}))
+            .await;
+        let login = server
+            .post("/api/auth/login")
+            .json(&serde_json::json!({"username":"admin","password":"admin123"}))
+            .await;
+        let auth = format!(
+            "Bearer {}",
+            login.json::<serde_json::Value>()["access_token"]
+                .as_str()
+                .ok_or_else(|| failure("login response has no access token"))?
+        );
+        sqlx::query(
+            "UPDATE icecast_settings SET enabled=true, mode='managed', port=$1, \
+             source_password='surcast', admin_user='admin', admin_password='surcast'",
+        )
+        .bind(port as i32)
+        .execute(&db)
+        .await?;
+        let station = server
+            .post("/api/stations")
+            .add_header("Authorization", &auth)
+            .json(&serde_json::json!({
+                "name": "Never overfill",
+                "stream_url": "never-overfill",
+                "prebuffer_bytes": 1024,
+            }))
+            .await;
+        if station.status_code() != 201 {
+            return Err(failure(format!("station creation failed: {}", station.text())));
+        }
+        let station_id = station.json::<serde_json::Value>()["id"]
+            .as_str()
+            .ok_or_else(|| failure("station response has no id"))?
+            .to_owned();
+        let admin: (uuid::Uuid,) = sqlx::query_as("SELECT id FROM users WHERE username='admin'").fetch_one(&db).await?;
+
+        std::fs::create_dir(files.path().join("audio"))?;
+        let tones = [(330.0, "nf A"), (440.0, "nf B"), (550.0, "nf C"), (660.0, "nf D"), (770.0, "nf E"), (880.0, "nf F")];
+        let song_ids = tones
+            .iter()
+            .enumerate()
+            .map(|(index, (frequency, title))| {
+                let song_id = uuid::Uuid::new_v4();
+                std::fs::write(
+                    files.path().join("audio").join(format!("never-overfill-{index}.wav")),
+                    wav_for(*frequency, 4),
+                )?;
+                Ok::<_, Box<dyn std::error::Error>>((song_id, title))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        for (index, (song_id, title)) in song_ids.iter().enumerate() {
+            sqlx::query(
+                "INSERT INTO songs (id,title,artist,file_path,file_size,mime_type,duration,uploaded_by) \
+                 VALUES ($1,$2,'test',$3,1,'audio/wav',4,$4)",
+            )
+            .bind(song_id)
+            .bind(title)
+            .bind(format!("never-overfill-{index}.wav"))
+            .bind(admin.0)
+            .execute(&db)
+            .await?;
+            let assigned = server
+                .post(&format!("/api/songs/{song_id}/stations"))
+                .add_header("Authorization", &auth)
+                .json(&serde_json::json!({"station_ids":[station_id.clone()]}))
+                .await;
+            if assigned.status_code().as_u16() >= 300 {
+                return Err(failure(format!("song assignment failed: {}", assigned.text())));
+            }
+        }
+
+        let configured = server
+            .put(&format!("/api/stations/{station_id}/auto-fill"))
+            .add_header("Authorization", &auth)
+            .json(&serde_json::json!({
+                "enabled": true,
+                "mode": "random",
+                "source_type": "station_library",
+                "avoid_artist_repeat": false,
+                "songs_ahead": 4,
+            }))
+            .await;
+        if configured.status_code() != 200 {
+            return Err(failure(format!("auto-fill config failed: {}", configured.text())));
+        }
+
+        let started = server
+            .post(&format!("/api/stations/{station_id}/stream/restart"))
+            .add_header("Authorization", &auth)
+            .await;
+        if started.status_code() != 200 {
+            return Err(failure(format!("stream start failed: {}", started.text())));
+        }
+
+        async fn visible_upcoming(server: &TestServer, station_id: &str, auth: &str) -> i64 {
+            let queue = fetch_queue(server, station_id, auth).await;
+            let queue = queue.as_array().cloned().unwrap_or_default();
+            let status = server
+                .get(&format!("/api/stations/{station_id}/stream/status"))
+                .add_header("Authorization", auth)
+                .await
+                .json::<serde_json::Value>();
+            let pos = if queue.is_empty() {
+                0
+            } else {
+                (status["song_index"].as_u64().unwrap_or(0) as usize) % queue.len()
+            };
+            (queue.len().saturating_sub(pos + 1)) as i64
+        }
+
+        let mut last_index = 0u64;
+        async fn advance(
+            server: &TestServer,
+            station_id: &str,
+            auth: &str,
+            last_index: &mut u64,
+        ) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
+            let status = wait_for_status(server, station_id, auth, |status| {
+                status["playing"] == true
+                    && status["song_index"].as_u64().is_some_and(|index| index > *last_index)
+            })
+            .await?;
+            *last_index = status["song_index"].as_u64().unwrap_or(*last_index);
+            Ok(status)
+        }
+
+        // Seed from an empty queue: exactly four visible upcoming.
+        wait_for_status(&server, &station_id, &auth, |status| status["playing"] == true).await?;
+        let seeded = visible_upcoming(&server, &station_id, &auth).await;
+        if seeded != 4 {
+            return Err(failure(format!("seed produced {seeded} upcoming, expected exactly 4")));
+        }
+
+        // Three handovers: the window must stay exactly 4, never grow.
+        for _ in 0..3 {
+            advance(&server, &station_id, &auth, &mut last_index).await?;
+            let upcoming = visible_upcoming(&server, &station_id, &auth).await;
+            if upcoming != 4 {
+                return Err(failure(format!("after a handover the window holds {upcoming}, expected exactly 4")));
+            }
+        }
+
+        // The manual trigger must be a no-op at a full window.
+        let triggered = server
+            .post(&format!("/api/stations/{station_id}/auto-fill/trigger"))
+            .add_header("Authorization", &auth)
+            .await;
+        if triggered.status_code() != 200 {
+            return Err(failure(format!("manual trigger failed: {}", triggered.text())));
+        }
+        let after_trigger = visible_upcoming(&server, &station_id, &auth).await;
+        if after_trigger != 4 {
+            return Err(failure(format!("manual trigger overfilled the window: {after_trigger} upcoming")));
+        }
+
+        // The user removes every queued track while the station plays: the
+        // reseed must again produce exactly four upcoming, not a batch.
+        let queue = fetch_queue(&server, &station_id, &auth).await;
+        let queue = queue.as_array().cloned().unwrap_or_default();
+        if queue.is_empty() {
+            return Err(failure("expected a non-empty queue before the clear"));
+        }
+        for item in &queue {
+            let item_id = item["id"].as_str().ok_or_else(|| failure("queue item has no id"))?;
+            let removed = server
+                .delete(&format!("/api/stations/{station_id}/queue/{item_id}"))
+                .add_header("Authorization", &auth)
+                .await;
+            if removed.status_code() != 204 {
+                return Err(failure(format!("queue item removal failed: {}", removed.text())));
+            }
+        }
+        advance(&server, &station_id, &auth, &mut last_index).await?;
+        let reseeded = visible_upcoming(&server, &station_id, &auth).await;
+        if reseeded != 4 {
+            let queue = fetch_queue(&server, &station_id, &auth).await;
+            let queue = queue.as_array().cloned().unwrap_or_default();
+            let status = server
+                .get(&format!("/api/stations/{station_id}/stream/status"))
+                .add_header("Authorization", &auth)
+                .await
+                .json::<serde_json::Value>();
+            let db_state: Vec<(String, String, bool)> = sqlx::query_as(
+                "SELECT sq.id::text, sq.position::text, sq.is_auto_dj FROM station_queue sq \
+                 WHERE sq.station_id = $1 ORDER BY sq.position",
+            )
+            .bind(uuid::Uuid::parse_str(&station_id).unwrap())
+            .fetch_all(&db)
+            .await
+            .unwrap_or_default();
+            return Err(failure(format!(
+                "after clearing the queue the reseed holds {reseeded} upcoming, expected exactly 4 \
+                 (status {status}, queue {} rows, db {:?})",
+                queue.len(),
+                db_state
+            )));
+        }
+        Ok(())
+    }
+    .await;
+
+    let active = { streamers.lock().unwrap().values().cloned().collect::<Vec<_>>() };
+    futures::future::join_all(active.into_iter().map(|streamer| async move { streamer.shutdown().await })).await;
+    let icecast_result = icecast.stop().await;
+    if let Err(error) = result {
+        panic!("{error}");
+    }
+    icecast_result.unwrap();
+}
+
+#[tokio::test]
+#[serial]
+async fn schedule_playlist_fill_tops_up_instead_of_dumping() {
+    // User report: the refill dumped 8 tracks at once. A schedule whose
+    // source is a plain playlist (no auto_dj_mode) fed the WHOLE playlist
+    // into the queue in one fill. The playlist fill must top up to the
+    // songs_ahead window like every other fill.
+    let _ = tracing_subscriber::fmt().with_test_writer().try_init();
+    let db = common::setup_db().await;
+    let files = TempDir::new().unwrap();
+    let icecast_dir = TempDir::new().unwrap();
+    let port = free_port();
+    let icecast = IcecastManager::new(icecast_dir.path().into());
+    icecast.start(port.into(), "surcast", "admin", "surcast").await.unwrap();
+    let mut config = api_common::test_config();
+    config.upload_dir = files.path().display().to_string();
+    let streamers: StreamersMap = Arc::new(Mutex::new(HashMap::new()));
+
+    let result: Result<(), Box<dyn std::error::Error>> = async {
+        let server = TestServer::new(router::create_router(
+            db.clone(),
+            config,
+            streamers.clone(),
+            icecast.clone(),
+            ListenersState::new(),
+        ))?;
+        server
+            .post("/api/setup/init")
+            .json(&serde_json::json!({"username":"admin","password":"admin123","name":"Admin"}))
+            .await;
+        let login = server
+            .post("/api/auth/login")
+            .json(&serde_json::json!({"username":"admin","password":"admin123"}))
+            .await;
+        let auth = format!(
+            "Bearer {}",
+            login.json::<serde_json::Value>()["access_token"]
+                .as_str()
+                .ok_or_else(|| failure("login response has no access token"))?
+        );
+        sqlx::query(
+            "UPDATE icecast_settings SET enabled=true, mode='managed', port=$1, \
+             source_password='surcast', admin_user='admin', admin_password='surcast'",
+        )
+        .bind(port as i32)
+        .execute(&db)
+        .await?;
+        let station = server
+            .post("/api/stations")
+            .add_header("Authorization", &auth)
+            .json(&serde_json::json!({
+                "name": "Schedule top-up",
+                "stream_url": "schedule-topup",
+                "prebuffer_bytes": 1024,
+            }))
+            .await;
+        if station.status_code() != 201 {
+            return Err(failure(format!("station creation failed: {}", station.text())));
+        }
+        let station_id = station.json::<serde_json::Value>()["id"]
+            .as_str()
+            .ok_or_else(|| failure("station response has no id"))?
+            .to_owned();
+        let admin: (uuid::Uuid,) = sqlx::query_as("SELECT id FROM users WHERE username='admin'").fetch_one(&db).await?;
+
+        std::fs::create_dir(files.path().join("audio"))?;
+        let mut song_ids = Vec::new();
+        for index in 0..8 {
+            let song_id = uuid::Uuid::new_v4();
+            std::fs::write(
+                files.path().join("audio").join(format!("sched-topup-{index}.wav")),
+                wav_for(330.0 + 110.0 * index as f32, 4),
+            )?;
+            sqlx::query(
+                "INSERT INTO songs (id,title,artist,file_path,file_size,mime_type,duration,uploaded_by) \
+                 VALUES ($1,$2,'test',$3,1,'audio/wav',4,$4)",
+            )
+            .bind(song_id)
+            .bind(format!("sp {index}"))
+            .bind(format!("sched-topup-{index}.wav"))
+            .bind(admin.0)
+            .execute(&db)
+            .await?;
+            song_ids.push(song_id);
+        }
+        let playlist_id = uuid::Uuid::new_v4();
+        sqlx::query("INSERT INTO playlists (id, name, created_by) VALUES ($1, 'topup', $2)")
+            .bind(playlist_id)
+            .bind(admin.0)
+            .execute(&db)
+            .await?;
+        for (position, song_id) in song_ids.iter().enumerate() {
+            sqlx::query("INSERT INTO playlist_songs (playlist_id, song_id, position) VALUES ($1, $2, $3)")
+                .bind(playlist_id)
+                .bind(song_id)
+                .bind(position as i32)
+                .execute(&db)
+                .await?;
+        }
+
+        // The user's AutoDJ minimum, plus a permanently active schedule whose
+        // source is the 8-song playlist without an auto_dj_mode.
+        let configured = server
+            .put(&format!("/api/stations/{station_id}/auto-fill"))
+            .add_header("Authorization", &auth)
+            .json(&serde_json::json!({
+                "enabled": true,
+                "mode": "random",
+                "source_type": "station_library",
+                "avoid_artist_repeat": false,
+                "songs_ahead": 4,
+            }))
+            .await;
+        if configured.status_code() != 200 {
+            return Err(failure(format!("auto-fill config failed: {}", configured.text())));
+        }
+        let today = chrono::Local::now();
+        let dow = today.weekday().num_days_from_monday() as i16;
+        let scheduled = server
+            .post(&format!("/api/stations/{station_id}/schedules"))
+            .add_header("Authorization", &auth)
+            .json(&serde_json::json!({
+                "day_of_week": dow,
+                "start_time": "00:00",
+                "end_time": "23:59",
+                "source_type": "playlist",
+                "playlist_id": playlist_id,
+            }))
+            .await;
+        if scheduled.status_code() != 201 {
+            return Err(failure(format!("schedule creation failed: {}", scheduled.text())));
+        }
+
+        let started = server
+            .post(&format!("/api/stations/{station_id}/stream/restart"))
+            .add_header("Authorization", &auth)
+            .await;
+        if started.status_code() != 200 {
+            return Err(failure(format!("stream start failed: {}", started.text())));
+        }
+        wait_for_status(&server, &station_id, &auth, |status| status["playing"] == true).await?;
+
+        // The upcoming window must hold songs_ahead rows, not the whole
+        // playlist. (The play() refill runs the schedule fill with the DB
+        // count, so the current row is not yet known — five rows total.)
+        let rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM station_queue WHERE station_id = $1")
+            .bind(uuid::Uuid::parse_str(&station_id).unwrap())
+            .fetch_one(&db)
+            .await?;
+        if rows > 5 {
+            return Err(failure(format!(
+                "schedule playlist fill dumped {rows} rows into the queue, expected at most 5"
+            )));
+        }
+        Ok(())
+    }
+    .await;
+
+    let active = { streamers.lock().unwrap().values().cloned().collect::<Vec<_>>() };
+    futures::future::join_all(active.into_iter().map(|streamer| async move { streamer.shutdown().await })).await;
+    let icecast_result = icecast.stop().await;
+    if let Err(error) = result {
+        panic!("{error}");
+    }
+    icecast_result.unwrap();
+}
+
+#[tokio::test]
+#[serial]
+async fn stale_cursor_heals_and_queue_keeps_refilling() {
+    // User report: after a queue clears, AutoDJ reseeds only songs_ahead
+    // tracks (one short), the last played track replays, and during playback
+    // nothing is ever added — the queue drains to empty before the next
+    // seed. Root cause: a persisted cursor whose id no longer exists (queue
+    // cleared / song deleted while stopped) fails the commit guard, and the
+    // failing commit suppressed the refill at every handover. The cursor
+    // must heal on the first commit and the refill must keep the upcoming
+    // window at songs_ahead.
+    let _ = tracing_subscriber::fmt().with_test_writer().try_init();
+    let db = common::setup_db().await;
+    let files = TempDir::new().unwrap();
+    let icecast_dir = TempDir::new().unwrap();
+    let port = free_port();
+    let icecast = IcecastManager::new(icecast_dir.path().into());
+    icecast.start(port.into(), "surcast", "admin", "surcast").await.unwrap();
+    let mut config = api_common::test_config();
+    config.upload_dir = files.path().display().to_string();
+    let streamers: StreamersMap = Arc::new(Mutex::new(HashMap::new()));
+
+    let result: Result<(), Box<dyn std::error::Error>> = async {
+        let server = TestServer::new(router::create_router(
+            db.clone(),
+            config,
+            streamers.clone(),
+            icecast.clone(),
+            ListenersState::new(),
+        ))?;
+        server
+            .post("/api/setup/init")
+            .json(&serde_json::json!({"username":"admin","password":"admin123","name":"Admin"}))
+            .await;
+        let login = server
+            .post("/api/auth/login")
+            .json(&serde_json::json!({"username":"admin","password":"admin123"}))
+            .await;
+        let auth = format!(
+            "Bearer {}",
+            login.json::<serde_json::Value>()["access_token"]
+                .as_str()
+                .ok_or_else(|| failure("login response has no access token"))?
+        );
+        sqlx::query(
+            "UPDATE icecast_settings SET enabled=true, mode='managed', port=$1, \
+             source_password='surcast', admin_user='admin', admin_password='surcast'",
+        )
+        .bind(port as i32)
+        .execute(&db)
+        .await?;
+        let station = server
+            .post("/api/stations")
+            .add_header("Authorization", &auth)
+            .json(&serde_json::json!({
+                "name": "Stale cursor heal",
+                "stream_url": "stale-cursor-heal",
+                "prebuffer_bytes": 1024,
+            }))
+            .await;
+        if station.status_code() != 201 {
+            return Err(failure(format!("station creation failed: {}", station.text())));
+        }
+        let station_id = station.json::<serde_json::Value>()["id"]
+            .as_str()
+            .ok_or_else(|| failure("station response has no id"))?
+            .to_owned();
+        let admin: (uuid::Uuid,) = sqlx::query_as("SELECT id FROM users WHERE username='admin'").fetch_one(&db).await?;
+
+        std::fs::create_dir(files.path().join("audio"))?;
+        let tones = [(330.0, "sc A"), (440.0, "sc B"), (550.0, "sc C"), (660.0, "sc D"), (770.0, "sc E"), (880.0, "sc F")];
+        let song_ids = tones
+            .iter()
+            .enumerate()
+            .map(|(index, (frequency, title))| {
+                let song_id = uuid::Uuid::new_v4();
+                std::fs::write(
+                    files.path().join("audio").join(format!("stale-cursor-{index}.wav")),
+                    wav_for(*frequency, 4),
+                )?;
+                Ok::<_, Box<dyn std::error::Error>>((song_id, title))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        for (index, (song_id, title)) in song_ids.iter().enumerate() {
+            sqlx::query(
+                "INSERT INTO songs (id,title,artist,file_path,file_size,mime_type,duration,uploaded_by) \
+                 VALUES ($1,$2,'test',$3,1,'audio/wav',4,$4)",
+            )
+            .bind(song_id)
+            .bind(title)
+            .bind(format!("stale-cursor-{index}.wav"))
+            .bind(admin.0)
+            .execute(&db)
+            .await?;
+            let assigned = server
+                .post(&format!("/api/songs/{song_id}/stations"))
+                .add_header("Authorization", &auth)
+                .json(&serde_json::json!({"station_ids":[station_id.clone()]}))
+                .await;
+            if assigned.status_code().as_u16() >= 300 {
+                return Err(failure(format!("song assignment failed: {}", assigned.text())));
+            }
+        }
+
+        let configured = server
+            .put(&format!("/api/stations/{station_id}/auto-fill"))
+            .add_header("Authorization", &auth)
+            .json(&serde_json::json!({
+                "enabled": true,
+                "mode": "random",
+                "source_type": "station_library",
+                "avoid_artist_repeat": false,
+                "songs_ahead": 4,
+            }))
+            .await;
+        if configured.status_code() != 200 {
+            return Err(failure(format!("auto-fill config failed: {}", configured.text())));
+        }
+
+        let started = server
+            .post(&format!("/api/stations/{station_id}/stream/restart"))
+            .add_header("Authorization", &auth)
+            .await;
+        if started.status_code() != 200 {
+            return Err(failure(format!("stream start failed: {}", started.text())));
+        }
+
+        // The panel measure: the frontend splits the queue API rows at
+        // song_index % len and shows the slice after it as upcoming. This is
+        // what the user watches, and it stays meaningful even when a stale
+        // database index would corrupt a position-based SQL count.
+        async fn visible_upcoming(server: &TestServer, station_id: &str, auth: &str) -> i64 {
+            let queue = fetch_queue(server, station_id, auth).await;
+            let queue = queue.as_array().cloned().unwrap_or_default();
+            let status = server
+                .get(&format!("/api/stations/{station_id}/stream/status"))
+                .add_header("Authorization", auth)
+                .await
+                .json::<serde_json::Value>();
+            let pos = if queue.is_empty() {
+                0
+            } else {
+                (status["song_index"].as_u64().unwrap_or(0) as usize) % queue.len()
+            };
+            (queue.len().saturating_sub(pos + 1)) as i64
+        }
+
+        // Seed: five rows (one current + songs_ahead upcoming).
+        wait_for_status(&server, &station_id, &auth, |status| status["playing"] == true).await?;
+        if visible_upcoming(&server, &station_id, &auth).await < 4 {
+            return Err(failure("AutoDJ did not seed the upcoming window"));
+        }
+
+        let mut last_index = 0u64;
+        async fn advance(
+            server: &TestServer,
+            station_id: &str,
+            auth: &str,
+            last_index: &mut u64,
+        ) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
+            let status = wait_for_status(server, station_id, auth, |status| {
+                status["playing"] == true
+                    && status["song_index"].as_u64().is_some_and(|index| index > *last_index)
+            })
+            .await?;
+            *last_index = status["song_index"].as_u64().unwrap_or(*last_index);
+            Ok(status)
+        }
+
+        // Two clean handovers first.
+        advance(&server, &station_id, &auth, &mut last_index).await?;
+        advance(&server, &station_id, &auth, &mut last_index).await?;
+        if visible_upcoming(&server, &station_id, &auth).await < 4 {
+            return Err(failure("queue fell below songs_ahead during clean playback"));
+        }
+
+        // The cursor now references a row that no longer exists — the exact
+        // state left behind when the queue is cleared or a song is deleted
+        // while the station is stopped. Every later commit must heal it and
+        // keep refilling; the queue must not drain.
+        sqlx::query(
+            "UPDATE stations SET current_queue_item_id = $1, current_song_index = 0, \
+             current_queue_cursor_format = 1 WHERE id = $2",
+        )
+        .bind(uuid::Uuid::new_v4())
+        .bind(uuid::Uuid::parse_str(&station_id).unwrap())
+        .execute(&db)
+        .await?;
+
+        for _ in 0..4 {
+            advance(&server, &station_id, &auth, &mut last_index).await?;
+            let upcoming = visible_upcoming(&server, &station_id, &auth).await;
+            if upcoming < 4 {
+                return Err(failure(format!(
+                    "queue drained below songs_ahead=4 after the stale cursor: {upcoming} rows"
+                )));
+            }
+        }
+        let healed: (uuid::Uuid,) = sqlx::query_as(
+            "SELECT current_queue_item_id FROM stations WHERE id = $1",
+        )
+        .bind(uuid::Uuid::parse_str(&station_id).unwrap())
+        .fetch_one(&db)
+        .await?;
+        let healed_row: Option<(uuid::Uuid,)> =
+            sqlx::query_as("SELECT id FROM station_queue WHERE station_id = $1 AND id = $2")
+                .bind(uuid::Uuid::parse_str(&station_id).unwrap())
+                .bind(healed.0)
+                .fetch_optional(&db)
+                .await?;
+        if healed_row.is_none() {
+            return Err(failure("cursor id was not healed to a live queue row"));
+        }
+
+        // Exhausted reseed: every row consumed (they still sit in the table —
+        // trimming only starts after played_limit plays) and no current row.
+        // The seed must add songs_ahead + 1 so the upcoming window is full,
+        // not one short as when the queue was seen as "empty by position".
+        let stopped = server
+            .post(&format!("/api/stations/{station_id}/stream/stop"))
+            .add_header("Authorization", &auth)
+            .await;
+        if stopped.status_code() != 200 {
+            return Err(failure(format!("stream stop failed: {}", stopped.text())));
+        }
+        let station_uuid = uuid::Uuid::parse_str(&station_id).unwrap();
+        let all_ids: Vec<uuid::Uuid> = sqlx::query_scalar(
+            "SELECT id FROM station_queue WHERE station_id = $1 ORDER BY position",
+        )
+        .bind(station_uuid)
+        .fetch_all(&db)
+        .await?;
+        sqlx::query(
+            "UPDATE stations SET current_queue_item_id = NULL, \
+             consumed_queue_item_ids = $1, current_song_index = $2, \
+             current_queue_cursor_format = 1 WHERE id = $3",
+        )
+        .bind(&all_ids)
+        .bind(all_ids.len() as i32)
+        .bind(station_uuid)
+        .execute(&db)
+        .await?;
+        let restarted = server
+            .post(&format!("/api/stations/{station_id}/stream/play"))
+            .add_header("Authorization", &auth)
+            .await;
+        if restarted.status_code() != 200 {
+            return Err(failure(format!("stream play after exhaustion failed: {}", restarted.text())));
+        }
+        wait_for_status(&server, &station_id, &auth, |status| status["playing"] == true).await?;
+        let reseeded = visible_upcoming(&server, &station_id, &auth).await;
+        if reseeded < 4 {
+            return Err(failure(format!(
+                "exhausted reseed left the upcoming window short: {reseeded} rows"
+            )));
         }
         Ok(())
     }

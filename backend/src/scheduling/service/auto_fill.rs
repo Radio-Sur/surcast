@@ -53,14 +53,26 @@ async fn active_song_ids(db: &PgPool, station_id: Uuid) -> Result<HashSet<Uuid>,
     .map(|song_ids: Vec<Uuid>| song_ids.into_iter().collect())
 }
 
-pub(crate) async fn fill_from_playlist(db: &PgPool, station_id: Uuid, playlist_id: Uuid, upload_dir: &str) -> Result<(), AppError> {
+pub(crate) async fn fill_from_playlist(
+    db: &PgPool,
+    station_id: Uuid,
+    playlist_id: Uuid,
+    songs_ahead: Option<i32>,
+    upload_dir: &str,
+) -> Result<(), AppError> {
     let mut lock = lock_station_queue(db, station_id).await?;
-    let result = fill_from_playlist_locked(db, station_id, playlist_id, upload_dir).await;
+    let result = fill_from_playlist_locked(db, station_id, playlist_id, songs_ahead, upload_dir).await;
     unlock_station_queue(&mut lock, station_id).await;
     result
 }
 
-async fn fill_from_playlist_locked(db: &PgPool, station_id: Uuid, playlist_id: Uuid, upload_dir: &str) -> Result<(), AppError> {
+async fn fill_from_playlist_locked(
+    db: &PgPool,
+    station_id: Uuid,
+    playlist_id: Uuid,
+    songs_ahead: Option<i32>,
+    upload_dir: &str,
+) -> Result<(), AppError> {
     let song_ids: Vec<Uuid> = sqlx::query_scalar("SELECT ps.song_id FROM playlist_songs ps WHERE ps.playlist_id = $1 ORDER BY ps.position")
         .bind(playlist_id)
         .fetch_all(db)
@@ -71,6 +83,22 @@ async fn fill_from_playlist_locked(db: &PgPool, station_id: Uuid, playlist_id: U
         return Ok(());
     }
 
+    // The playlist fill tops the queue up to the same songs_ahead window as
+    // every other fill — it must never dump the whole playlist in one go.
+    // The schedule's own setting wins; otherwise the station's AutoDJ
+    // minimum applies, with the legacy default of five.
+    let target: i64 = match songs_ahead {
+        Some(n) => i64::from(n),
+        None => sqlx::query_scalar::<_, Option<i32>>("SELECT songs_ahead FROM station_auto_fill WHERE station_id = $1")
+            .bind(station_id)
+            .fetch_optional(db)
+            .await
+            .db_error("failed to load auto-fill songs_ahead")?
+            .flatten()
+            .map(i64::from)
+            .unwrap_or(5),
+    };
+
     let upcoming_count: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM station_queue WHERE station_id = $1 AND position > (SELECT COALESCE(current_song_index, 0) FROM stations WHERE id = $1)"
     )
@@ -79,30 +107,55 @@ async fn fill_from_playlist_locked(db: &PgPool, station_id: Uuid, playlist_id: U
     .await
     .db_error("failed to count upcoming songs")?;
 
-    if upcoming_count >= song_ids.len() as i64 * 2 {
+    if upcoming_count >= target {
         return Ok(());
     }
 
-    let next_pos: i32 = sqlx::query_scalar("SELECT COALESCE(MAX(position), 0) + 1 FROM station_queue WHERE station_id = $1")
+    // Same rule as the AutoDJ fill: a queue without a current row needs one
+    // extra pick, because the first inserted row becomes the current track.
+    let queue_empty: bool = sqlx::query_scalar(
+        "SELECT NOT EXISTS (
+             SELECT 1 FROM station_queue sq
+             JOIN stations st ON st.id = sq.station_id
+             WHERE sq.station_id = $1
+               AND sq.id <> ALL(st.consumed_queue_item_ids)
+         )",
+    )
+    .bind(station_id)
+    .fetch_one(db)
+    .await
+    .db_error("failed to check whether the queue is empty")?;
+
+    let mut need = target - upcoming_count;
+    if queue_empty {
+        need += 1;
+    }
+
+    let next_pos: i32 = sqlx::query_scalar("SELECT COALESCE(MAX(position), -1) + 1 FROM station_queue WHERE station_id = $1")
         .bind(station_id)
         .fetch_one(db)
         .await
         .db_error("failed to find next queue position")?;
 
     let active_song_ids = active_song_ids(db, station_id).await?;
-    for (i, song_id) in song_ids.iter().filter(|song_id| !active_song_ids.contains(song_id)).enumerate() {
+    let mut added = 0i64;
+    for song_id in song_ids.iter().filter(|song_id| !active_song_ids.contains(song_id)) {
+        if added >= need {
+            break;
+        }
         sqlx::query(
             "INSERT INTO station_queue (station_id, song_id, position, origin_playlist_id) VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING",
         )
         .bind(station_id)
         .bind(song_id)
-        .bind(next_pos + i as i32)
+        .bind(next_pos + added as i32)
         .bind(playlist_id)
         .execute(db)
         .await
         .db_error("failed to enqueue playlist song")?;
 
         crate::songs::analysis::spawn_analysis(db, *song_id, station_id, upload_dir);
+        added += 1;
     }
 
     Ok(())
@@ -341,7 +394,7 @@ async fn pick_and_insert_song(
     };
 
     if let Some(sid) = song_id {
-        let next_pos: i32 = sqlx::query_scalar("SELECT COALESCE(MAX(position), 0) + 1 FROM station_queue WHERE station_id = $1")
+        let next_pos: i32 = sqlx::query_scalar("SELECT COALESCE(MAX(position), -1) + 1 FROM station_queue WHERE station_id = $1")
             .bind(station_id)
             .fetch_one(db)
             .await
@@ -403,7 +456,31 @@ async fn fill_from_auto_dj_source_locked(
         return Ok(());
     }
 
-    let need = target - upcoming_count;
+    // A queue without a current row needs one extra pick: the first inserted
+    // row lands on the position the current track will occupy, so the
+    // upcoming window needs `songs_ahead + 1` entries in total. The queue is
+    // "functionally empty" when no unconsumed row remains — consumed rows can
+    // still sit in the table (they are trimmed only after `played_limit`
+    // plays), so a plain table-emptiness check would miss the exhausted case
+    // and seed one short.
+    let queue_empty: bool = sqlx::query_scalar(
+        "SELECT NOT EXISTS (
+             SELECT 1 FROM station_queue sq
+             JOIN stations st ON st.id = sq.station_id
+             WHERE sq.station_id = $1
+               AND sq.id <> ALL(st.consumed_queue_item_ids)
+         )",
+    )
+    .bind(station_id)
+    .fetch_one(db)
+    .await
+    .db_error("failed to check whether the queue is empty")?;
+
+    let mut need = target - upcoming_count;
+    if queue_empty {
+        need += 1;
+    }
+    tracing::debug!(station_id = %station_id, target, upcoming_count, queue_empty, need, "AutoDJ fill demand");
     let mut excluded = active_song_ids(db, station_id).await?;
     let mut added = 0i32;
     let mut attempts = 0;

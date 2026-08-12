@@ -215,10 +215,38 @@ impl StationController {
         }))
     }
 
-    pub(crate) fn play(&mut self) -> PipelineOperation {
+    pub(crate) async fn play(&mut self) -> PipelineOperation {
         if self.state == PipelineState::Stopped {
             if self.queue.current_song_info().is_none() {
-                return PipelineOperation::Stop;
+                // An empty queue is not immediately terminal: Auto DJ /
+                // schedule fill may have rows to add. Give it a chance and
+                // reload from the DB before falling back to Stopped; only a
+                // failing fill is retried, bounded, so a transient DB error
+                // cannot leave the station dead.
+                let mut attempts = 0u32;
+                loop {
+                    let ran = self.queue.refill(None).await;
+                    self.queue.reload_from_db().await;
+                    if self.queue.current_song_info().is_some() || ran || attempts >= 2 {
+                        break;
+                    }
+                    attempts += 1;
+                    tokio::time::sleep(Duration::from_millis(250 * u64::from(attempts))).await;
+                }
+                if self.queue.current_song_info().is_none() {
+                    return PipelineOperation::Stop;
+                }
+                self.push_queue_update().await;
+            } else {
+                // The queue may hold fewer upcoming songs than the configured
+                // AutoDJ songs_ahead minimum (e.g. songs were removed while
+                // the station was stopped). Top the database queue up before
+                // starting; the fill is count-based and no-ops when nothing
+                // is missing. The in-memory copy is not reloaded here — the
+                // first commit (handover or skip) reloads it, and the panel
+                // queue view reads the database directly.
+                self.queue.refill(None).await;
+                self.push_queue_update().await;
             }
             let operation = self.replace_current(ReplaceMode::InitialReplaceFromStopped);
             self.state = PipelineState::Playing;
@@ -250,6 +278,19 @@ impl StationController {
     fn stop_after_current(&mut self) -> PipelineOperation {
         self.generation += 1;
         self.state = PipelineState::Stopped;
+        // No StatusEvent is pushed anywhere else on this path; without this
+        // the panel live feed keeps the last playing state forever and shows
+        // an exhausted station as still broadcasting.
+        let song = self.queue.current_song_info();
+        let _ = self.status_tx.send(StatusEvent::State {
+            playing: false,
+            song_index: self.queue.current_song_index(),
+            total: self.queue.song_count(),
+            elapsed: 0,
+            title: song.as_ref().map_or_else(String::new, |song| song.title.clone()),
+            artist: song.as_ref().map_or_else(String::new, |song| song.artist.clone()),
+            duration: song.map_or(0, |song| song.duration),
+        });
         PipelineOperation::Stop
     }
 
@@ -269,6 +310,29 @@ impl StationController {
             // treating the queue as exhausted.
             self.queue.reload_from_db().await;
             next = self.queue.successor_after(&current_key);
+        }
+        if next.is_none() {
+            // The queue is exhausted in the DB too. Give Auto DJ / schedule
+            // fill a chance to add successors before stopping. A clean no-op
+            // (Auto DJ disabled, nothing to pick) stops immediately; only a
+            // failing fill is retried, a bounded number of times, so a
+            // transient DB error cannot kill the radio for good.
+            let mut attempts = 0u32;
+            loop {
+                // The in-memory queue was just reloaded from the DB, so its
+                // upcoming count is authoritative — and unlike the DB count
+                // (rows with position > the persisted cursor index) it does
+                // not include the just-finished current track when the cursor
+                // was never committed (e.g. the first track of a session).
+                let ran = self.queue.refill(Some(self.queue.upcoming())).await;
+                self.queue.reload_from_db().await;
+                next = self.queue.successor_after(&current_key);
+                if next.is_some() || ran || attempts >= 2 {
+                    break;
+                }
+                attempts += 1;
+                tokio::time::sleep(Duration::from_millis(250 * u64::from(attempts))).await;
+            }
         }
         let Some(next) = next else {
             return Ok(self.stop_after_current());
@@ -299,7 +363,7 @@ impl StationController {
             // (manual add, Auto DJ refill, schedule) playback must begin;
             // play() stays a no-op while the queue remains empty.
             return Ok(if self.queue.current_song_info().is_some() {
-                Some(self.play())
+                Some(self.play().await)
             } else {
                 None
             });
@@ -560,6 +624,9 @@ mod tests {
 
     #[tokio::test]
     async fn play_with_an_empty_queue_keeps_the_controller_stopped() {
+        // No database is reachable here, so the AutoDJ refill attempt inside
+        // play() cannot produce songs and the controller must stay Stopped
+        // (the E2E suite covers the case where the refill succeeds).
         let (status_tx, _) = broadcast::channel(1);
         let (queue_tx, _) = broadcast::channel(1);
         let db = sqlx::postgres::PgPoolOptions::new()
@@ -584,7 +651,7 @@ mod tests {
             planned_next: None,
         };
 
-        assert!(matches!(controller.play(), PipelineOperation::Stop));
+        assert!(matches!(controller.play().await, PipelineOperation::Stop));
         assert_eq!(controller.state, PipelineState::Stopped);
         assert_eq!(pipeline.replacements.load(Ordering::Acquire), 0);
     }
@@ -713,7 +780,9 @@ mod tests {
                 current: StationController::track(song).key,
             })
             .unwrap();
-        tokio::time::timeout(Duration::from_millis(100), async {
+        // With no database reachable the exhaustion refill fails and is
+        // retried (bounded, ~750ms of backoff) before the controller stops.
+        tokio::time::timeout(Duration::from_secs(2), async {
             while pipeline.stops.load(Ordering::Acquire) == 0 {
                 tokio::task::yield_now().await;
             }
@@ -792,8 +861,11 @@ mod tests {
             .unwrap();
         events.send(PipelineEvent::CurrentEos { generation: 1, current }).unwrap();
 
+        // The matching CurrentEos above exhausts the queue; with no DB the
+        // refill fails and is retried (bounded, ~750ms of backoff) before the
+        // controller stops, so this command queues behind it.
         tokio::time::timeout(
-            Duration::from_millis(100),
+            Duration::from_secs(2),
             runtime.update_config(StationPlaybackConfig::from_persisted("crossfade", 1000, 1000, 0).unwrap()),
         )
         .await
@@ -802,7 +874,10 @@ mod tests {
 
         pipeline.release_replace.notify_one();
         playing.await.unwrap().unwrap();
-        tokio::time::timeout(Duration::from_millis(100), async {
+        // play() tops up a below-minimum queue through the database, so the
+        // stop after the terminal EOS waits on real DB roundtrips; the exact
+        // call sequence is asserted below, this is only a wait-for-it window.
+        tokio::time::timeout(Duration::from_secs(5), async {
             while pipeline.calls.lock().await.len() < 2 {
                 tokio::task::yield_now().await;
             }
@@ -832,7 +907,7 @@ mod tests {
         }
     }
 
-    fn playing_controller(songs: Vec<SongInfo>) -> (StationController, Arc<FakePipeline>) {
+    async fn playing_controller(songs: Vec<SongInfo>) -> (StationController, Arc<FakePipeline>) {
         let (status_tx, _) = broadcast::channel(1);
         let (queue_tx, _) = broadcast::channel(1);
         let db = sqlx::postgres::PgPoolOptions::new()
@@ -856,7 +931,7 @@ mod tests {
             output_epoch: 0,
             planned_next: None,
         };
-        assert!(matches!(controller.play(), PipelineOperation::Replace(_)));
+        assert!(matches!(controller.play().await, PipelineOperation::Replace(_)));
         assert_eq!(controller.state, PipelineState::Playing);
         (controller, pipeline)
     }
@@ -892,7 +967,7 @@ mod tests {
                 planned_next: None,
             };
             // Play with an empty queue is a no-op that leaves the controller stopped.
-            assert!(matches!(controller.play(), PipelineOperation::Stop));
+            assert!(matches!(controller.play().await, PipelineOperation::Stop));
             assert_eq!(controller.state, PipelineState::Stopped);
             (controller, pipeline)
         };
@@ -930,7 +1005,7 @@ mod tests {
                 output_epoch: 0,
                 planned_next: None,
             };
-            assert!(matches!(controller.play(), PipelineOperation::Stop));
+            assert!(matches!(controller.play().await, PipelineOperation::Stop));
             (controller, pipeline)
         };
         let operation = controller.reload(vec![], false).await.unwrap();
@@ -944,7 +1019,7 @@ mod tests {
         let b = song_at(1, "B");
         let c = song_at(2, "C");
         let x = song_at(3, "X");
-        let (mut controller, _) = playing_controller(vec![a.clone(), b.clone(), c.clone()]);
+        let (mut controller, _) = playing_controller(vec![a.clone(), b.clone(), c.clone()]).await;
         assert_eq!(controller.planned_next.as_ref().unwrap().0.queue_item_id, b.queue_item_id);
 
         // A reorder moved X to the top: the staged next (B) must be replaced by X
@@ -967,7 +1042,7 @@ mod tests {
         let a = song_at(0, "A");
         let b = song_at(1, "B");
         let x = song_at(3, "X");
-        let (mut controller, _) = playing_controller(vec![a.clone(), b.clone()]);
+        let (mut controller, _) = playing_controller(vec![a.clone(), b.clone()]).await;
         let operation = controller.reload(vec![a, x, b.clone()], false).await.unwrap();
         assert!(operation.is_none(), "non-aligning reload must not touch the pipeline");
         assert_eq!(controller.planned_next.as_ref().unwrap().0.queue_item_id, b.queue_item_id);
@@ -979,7 +1054,7 @@ mod tests {
         let b = song_at(1, "B");
         let c = song_at(2, "C");
         let x = song_at(3, "X");
-        let (mut controller, _) = playing_controller(vec![a.clone(), b.clone(), c.clone()]);
+        let (mut controller, _) = playing_controller(vec![a.clone(), b.clone(), c.clone()]).await;
         // Append-only change (e.g. a manual add): the head stays B, no swap needed
         let operation = controller.reload(vec![a, b.clone(), c.clone(), x], true).await.unwrap();
         assert!(operation.is_none(), "append-only reload must not roll");
@@ -990,7 +1065,7 @@ mod tests {
     async fn reload_exhausting_queue_drops_the_staged_next() {
         let a = song_at(0, "A");
         let b = song_at(1, "B");
-        let (mut controller, _) = playing_controller(vec![a.clone(), b.clone()]);
+        let (mut controller, _) = playing_controller(vec![a.clone(), b.clone()]).await;
         let operation = controller.reload(vec![a.clone()], true).await.unwrap();
         let Some(PipelineOperation::Roll(plan)) = operation else {
             panic!("exhausting reload must issue a roll");
@@ -1008,7 +1083,7 @@ mod tests {
         let a = song_at(0, "A");
         let b = song_at(1, "B");
         let x = song_at(3, "X");
-        let (mut controller, _) = playing_controller(vec![a.clone(), b.clone()]);
+        let (mut controller, _) = playing_controller(vec![a.clone(), b.clone()]).await;
         let b_key = StationController::track(b.clone()).key;
         controller.reload(vec![a.clone(), x.clone(), b.clone()], true).await.unwrap();
         assert_eq!(controller.planned_next.as_ref().unwrap().0.queue_item_id, x.queue_item_id);
