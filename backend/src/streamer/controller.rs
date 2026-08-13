@@ -8,7 +8,7 @@ use tokio::sync::{broadcast, mpsc};
 use super::driver::{PipelineDriver, PipelineOperation, PipelineOperationResult};
 use super::pipeline::{
     IcecastTarget, PairPlan, PipelineError, PipelineEvent, PipelineSnapshot, PipelineState, PipelineTrack, PlannedNext,
-    PlaybackPipelineFactory, ReplaceMode, RollingChange, RollingPlan, StationPlaybackConfig, TrackKey,
+    PlaybackPipelineFactory, ReplaceMode, RollingChange, RollingPlan, StationPlaybackConfig, TrackKey, TrackMetadata,
 };
 use super::{QueueManager, SongInfo, StatusEvent};
 use crate::stations::repository;
@@ -182,6 +182,10 @@ impl StationController {
             key: TrackKey {
                 queue_item_id: song.queue_item_id,
                 song_id: song.song_id,
+            },
+            metadata: TrackMetadata {
+                title: song.title,
+                artist: song.artist,
             },
             path: PathBuf::from(song.file_path),
             cue_in: Duration::from_secs_f64(song.cue_in.max(0.0)),

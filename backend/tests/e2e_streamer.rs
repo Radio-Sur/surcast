@@ -497,6 +497,18 @@ async fn crossfade_naturally_promotes_each_queued_track_once() {
             .ok_or_else(|| failure("station response has no id"))?
             .to_owned();
         let station_uuid = uuid::Uuid::parse_str(&station_id)?;
+        // The natural-transition assertions expect the queued tones to play
+        // exactly once in queue order. AutoDJ is enabled by default for new
+        // stations, so disable it or its random refills would interleave
+        // library picks and break the expected title sequence.
+        let auto_fill = server
+            .put(&format!("/api/stations/{station_id}/auto-fill"))
+            .add_header("Authorization", &auth)
+            .json(&serde_json::json!({ "enabled": false }))
+            .await;
+        if auto_fill.status_code() != 200 {
+            return Err(failure(format!("auto-fill disable failed: {}", auto_fill.text())));
+        }
         sqlx::query("UPDATE stations SET transition_mode='crossfade', default_fade_ms=500 WHERE id=$1")
             .bind(station_uuid)
             .execute(&db)
@@ -650,6 +662,17 @@ async fn manual_auto_dj_trigger_keeps_an_exhausted_memory_queue_playing() {
             .as_str()
             .ok_or_else(|| failure("station response has no id"))?
             .to_owned();
+        // AutoDJ is enabled by default for new stations and would refill the
+        // queue as soon as playback starts, before the manual trigger below.
+        // Disable it so the trigger is the only fill path under test.
+        let auto_fill = server
+            .put(&format!("/api/stations/{station_id}/auto-fill"))
+            .add_header("Authorization", &auth)
+            .json(&serde_json::json!({ "enabled": false }))
+            .await;
+        if auto_fill.status_code() != 200 {
+            return Err(failure(format!("auto-fill disable failed: {}", auto_fill.text())));
+        }
         let admin: (uuid::Uuid,) = sqlx::query_as("SELECT id FROM users WHERE username='admin'").fetch_one(&db).await?;
 
         std::fs::create_dir(files.path().join("audio"))?;
@@ -2649,6 +2672,16 @@ async fn reorder_during_playback_plays_the_moved_track_next() {
             .as_str()
             .ok_or_else(|| failure("station response has no id"))?
             .to_owned();
+        // AutoDJ is enabled by default for new stations; the reorder
+        // assertions need the exact queued sequence, so disable it.
+        let auto_fill = server
+            .put(&format!("/api/stations/{station_id}/auto-fill"))
+            .add_header("Authorization", &auth)
+            .json(&serde_json::json!({ "enabled": false }))
+            .await;
+        if auto_fill.status_code() != 200 {
+            return Err(failure(format!("auto-fill disable failed: {}", auto_fill.text())));
+        }
         let admin: (uuid::Uuid,) = sqlx::query_as("SELECT id FROM users WHERE username='admin'").fetch_one(&db).await?;
 
         std::fs::create_dir(files.path().join("audio"))?;
@@ -2847,6 +2880,16 @@ async fn removed_staged_track_is_not_played_next() {
             .as_str()
             .ok_or_else(|| failure("station response has no id"))?
             .to_owned();
+        // AutoDJ is enabled by default for new stations; the staged-removal
+        // assertions need the exact queued sequence, so disable it.
+        let auto_fill = server
+            .put(&format!("/api/stations/{station_id}/auto-fill"))
+            .add_header("Authorization", &auth)
+            .json(&serde_json::json!({ "enabled": false }))
+            .await;
+        if auto_fill.status_code() != 200 {
+            return Err(failure(format!("auto-fill disable failed: {}", auto_fill.text())));
+        }
         let admin: (uuid::Uuid,) = sqlx::query_as("SELECT id FROM users WHERE username='admin'").fetch_one(&db).await?;
 
         std::fs::create_dir(files.path().join("audio"))?;
@@ -3212,6 +3255,17 @@ async fn repro_ws_queue_feed_survives_radio_restart() {
             .as_str()
             .ok_or_else(|| failure("station response has no id"))?
             .to_owned();
+        // AutoDJ is enabled by default for new stations; the WS feed
+        // assertions expect exactly the queued sequence of events, so disable
+        // it (its refills would inject extra queue updates and rows).
+        let auto_fill = server
+            .put(&format!("/api/stations/{station_id}/auto-fill"))
+            .add_header("Authorization", &auth)
+            .json(&serde_json::json!({ "enabled": false }))
+            .await;
+        if auto_fill.status_code() != 200 {
+            return Err(failure(format!("auto-fill disable failed: {}", auto_fill.text())));
+        }
         let admin: (uuid::Uuid,) = sqlx::query_as("SELECT id FROM users WHERE username='admin'").fetch_one(&db).await?;
 
         let mp3_dir = std::env::temp_dir().join(format!("surcast-wsfeed-{}", uuid::Uuid::new_v4()));
@@ -3466,6 +3520,17 @@ async fn repro_queue_modifications_persist_across_radio_restart() {
             .as_str()
             .ok_or_else(|| failure("station response has no id"))?
             .to_owned();
+        // AutoDJ is enabled by default for new stations; the persistence
+        // assertions compare the queue before and after edits, so disable it
+        // (its refills would add rows the test never queued).
+        let auto_fill = server
+            .put(&format!("/api/stations/{station_id}/auto-fill"))
+            .add_header("Authorization", &auth)
+            .json(&serde_json::json!({ "enabled": false }))
+            .await;
+        if auto_fill.status_code() != 200 {
+            return Err(failure(format!("auto-fill disable failed: {}", auto_fill.text())));
+        }
         let admin: (uuid::Uuid,) = sqlx::query_as("SELECT id FROM users WHERE username='admin'").fetch_one(&db).await?;
 
         let mp3_dir = std::env::temp_dir().join(format!("surcast-qpersist-{}", uuid::Uuid::new_v4()));

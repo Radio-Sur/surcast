@@ -5,18 +5,22 @@ use gst::prelude::*;
 use gstreamer as gst;
 use tokio::sync::mpsc;
 
-use super::super::pipeline::{PipelineError, PipelineEvent};
-use super::{ActivePlan, ReplaceCancellation};
+use super::super::pipeline::{IcecastTarget, PipelineError, PipelineEvent};
+use super::{sink::MetadataPublisher, ActivePlan, ReplaceCancellation};
 
 pub(super) fn install(
     pipeline: &gst::Pipeline,
     clock_gate: &gst::Element,
+    metadata_target: Arc<Mutex<IcecastTarget>>,
+    metadata_publisher: Option<MetadataPublisher>,
     active: Arc<Mutex<Option<ActivePlan>>>,
     replacing: Arc<Mutex<Option<ReplaceCancellation>>>,
     output_reconnecting: Arc<AtomicBool>,
     events: mpsc::UnboundedSender<PipelineEvent>,
 ) -> Result<(), PipelineError> {
     let handover_active = active.clone();
+    let handover_target = metadata_target;
+    let handover_publisher = metadata_publisher;
     let handover_events = events.clone();
     let clock_gate_src = clock_gate
         .static_pad("src")
@@ -36,17 +40,22 @@ pub(super) fn install(
                 });
                 if due && !plan.handed_over {
                     plan.handed_over = true;
-                    plan.next.take().map(|next| {
+                    plan.next.take().map(|(next, metadata)| {
                         plan.current = next.clone();
+                        plan.current_metadata = metadata.clone();
                         plan.current_epoch = plan.last_elapsed;
-                        (plan.generation, next)
+                        (plan.generation, next, metadata)
                     })
                 } else {
                     None
                 }
             })
         };
-        if let Some((generation, current)) = handover {
+        if let Some((generation, current, metadata)) = handover {
+            if let Some(publisher) = &handover_publisher {
+                let target = handover_target.lock().unwrap_or_else(|error| error.into_inner()).clone();
+                publisher.publish(target, metadata);
+            }
             let _ = handover_events.send(PipelineEvent::Handover { generation, current });
         }
         gst::PadProbeReturn::Ok

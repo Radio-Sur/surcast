@@ -12,9 +12,16 @@ pub(crate) struct TrackKey {
     pub song_id: Uuid,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct TrackMetadata {
+    pub title: String,
+    pub artist: String,
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct PipelineTrack {
     pub key: TrackKey,
+    pub metadata: TrackMetadata,
     pub path: PathBuf,
     pub cue_in: Duration,
     pub cue_out: Duration,
@@ -419,6 +426,10 @@ mod tests {
             key: TrackKey {
                 queue_item_id: Uuid::nil(),
                 song_id: Uuid::nil(),
+            },
+            metadata: TrackMetadata {
+                title: String::new(),
+                artist: String::new(),
             },
             path: PathBuf::from("/tmp/test.wav"),
             cue_in: Duration::from_secs(cue_in),

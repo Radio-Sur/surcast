@@ -16,7 +16,7 @@ use tokio::sync::mpsc;
 use super::pipeline::{
     resolve_transition, IcecastTarget, OutputConfig, PairPlan, PipelineConfig, PipelineError, PipelineEvent, PipelineInstance,
     PipelineSnapshot, PipelineState, PlaybackPipeline, PlaybackPipelineFactory, ReplaceMode, RollingChange, RollingPlan, TrackKey,
-    TransitionPlan,
+    TrackMetadata, TransitionPlan,
 };
 use branch::Branch;
 
@@ -45,7 +45,8 @@ struct ActivePlan {
     generation: u64,
     output_epoch: u64,
     current: TrackKey,
-    next: Option<TrackKey>,
+    current_metadata: TrackMetadata,
+    next: Option<(TrackKey, TrackMetadata)>,
     handover_at: Option<gst::ClockTime>,
     started_at: Option<gst::ClockTime>,
     timeline_origin: gst::ClockTime,
@@ -103,6 +104,8 @@ pub(crate) struct GStreamerPipeline {
     output_caps: gst::Element,
     encoder: gst::Element,
     sink: Mutex<SinkSlot>,
+    metadata_target: Arc<Mutex<IcecastTarget>>,
+    metadata_publisher: Option<sink::MetadataPublisher>,
     clock_gate: gst::Element,
     sink_factory: &'static str,
     branches: Mutex<Vec<Branch>>,
@@ -136,6 +139,13 @@ impl GStreamerPipeline {
             snapshot.elapsed = Duration::ZERO;
         }
         Ok(())
+    }
+    fn publish_metadata(&self, metadata: &TrackMetadata) {
+        let Some(publisher) = &self.metadata_publisher else {
+            return;
+        };
+        let target = self.metadata_target.lock().unwrap_or_else(|error| error.into_inner()).clone();
+        publisher.publish(target, metadata.clone());
     }
     fn restore_state(&self, state: PipelineState) -> Result<(), PipelineError> {
         self.set_state(state)
@@ -212,7 +222,7 @@ impl GStreamerPipeline {
             .next
             .as_ref()
             .filter(|_| candidates.len() > 1)
-            .map(|next| next.track.key.clone());
+            .map(|next| (next.track.key.clone(), next.track.metadata.clone()));
         let transition_plan = plan
             .next
             .as_ref()
@@ -249,6 +259,7 @@ impl GStreamerPipeline {
             generation: plan.generation,
             output_epoch: plan.output_epoch,
             current: plan.current.key.clone(),
+            current_metadata: plan.current.metadata.clone(),
             next: scheduled_next,
             handover_at,
             handed_over: false,
@@ -257,6 +268,7 @@ impl GStreamerPipeline {
             current_epoch: gst::ClockTime::ZERO,
             last_elapsed: gst::ClockTime::ZERO,
         });
+        self.publish_metadata(&plan.current.metadata);
         {
             let mut live = self.branches.lock().unwrap_or_else(|error| error.into_inner());
             for candidate in live.iter_mut() {
@@ -371,7 +383,7 @@ impl PlaybackPipeline for GStreamerPipeline {
                 .0
                 .map_err(|error| PipelineError::Pipeline(error.to_string()))?;
             self.branches.lock().unwrap_or_else(|error| error.into_inner()).push(next_branch);
-            scheduled_next = Some(next.track.key.clone());
+            scheduled_next = Some((next.track.key.clone(), next.track.metadata.clone()));
             transition_plan = next.transition;
         }
         let next_duration = if scheduled_next.is_some() {
@@ -392,10 +404,12 @@ impl PlaybackPipeline for GStreamerPipeline {
             }
             handover
         };
+        let current_metadata = plan.current.metadata.clone();
         *self.active.lock().unwrap_or_else(|error| error.into_inner()) = Some(ActivePlan {
             generation: plan.generation,
             output_epoch: plan.output_epoch,
             current: plan.current.key,
+            current_metadata: current_metadata.clone(),
             next: scheduled_next,
             handover_at,
             handed_over: false,
@@ -404,6 +418,7 @@ impl PlaybackPipeline for GStreamerPipeline {
             current_epoch: gst::ClockTime::ZERO,
             last_elapsed: gst::ClockTime::ZERO,
         });
+        self.publish_metadata(&current_metadata);
         self.set_state(PipelineState::Playing)
     }
 
@@ -418,7 +433,9 @@ impl PlaybackPipeline for GStreamerPipeline {
         let matches_plan = |active: &ActivePlan| {
             active.generation == plan.generation
                 && active.current == plan.current
-                && !expected_next.as_ref().is_some_and(|key| active.next.as_ref() != Some(key))
+                && !expected_next
+                    .as_ref()
+                    .is_some_and(|key| active.next.as_ref().map(|(next, _)| next) != Some(key))
                 && !(expected_next.is_none() && active.next.is_some())
         };
         {
@@ -536,7 +553,7 @@ impl PlaybackPipeline for GStreamerPipeline {
                     .as_mut()
                     .filter(|active| matches_plan(active))
                     .ok_or(PipelineError::StalePlan)?;
-                active.next = Some(next.track.key);
+                active.next = Some((next.track.key, next.track.metadata));
                 active.handover_at = handover_at;
                 active.handed_over = false;
             }
@@ -563,6 +580,7 @@ impl PlaybackPipeline for GStreamerPipeline {
                     sink::configure(sink, &target);
                 }
             }
+            *self.metadata_target.lock().unwrap_or_else(|error| error.into_inner()) = target;
             return Ok(());
         }
 
@@ -594,6 +612,16 @@ impl PlaybackPipeline for GStreamerPipeline {
                 if self.sink_factory == sink::DEFAULT_FACTORY {
                     sink::configure(sink, &target);
                 }
+            }
+            *self.metadata_target.lock().unwrap_or_else(|error| error.into_inner()) = target;
+            let metadata = self
+                .active
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .as_ref()
+                .map(|active| active.current_metadata.clone());
+            if let Some(metadata) = metadata {
+                self.publish_metadata(&metadata);
             }
             return self.restore_state(PipelineState::Paused);
         }
@@ -644,6 +672,16 @@ impl PlaybackPipeline for GStreamerPipeline {
         }
 
         *self.sink.lock().unwrap_or_else(|error| error.into_inner()) = SinkSlot::Active(candidate);
+        *self.metadata_target.lock().unwrap_or_else(|error| error.into_inner()) = target;
+        let metadata = self
+            .active
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .as_ref()
+            .map(|active| active.current_metadata.clone());
+        if let Some(metadata) = metadata {
+            self.publish_metadata(&metadata);
+        }
         Ok(())
     }
 
@@ -660,6 +698,9 @@ impl PlaybackPipeline for GStreamerPipeline {
     async fn stop(&self) -> Result<(), PipelineError> {
         *self.replacing.lock().unwrap_or_else(|error| error.into_inner()) = None;
         *self.active.lock().unwrap_or_else(|error| error.into_inner()) = None;
+        if let Some(publisher) = &self.metadata_publisher {
+            publisher.clear();
+        }
         self.set_state(PipelineState::Stopped)
     }
 }
@@ -680,9 +721,14 @@ impl PlaybackPipelineFactory for GStreamerPipelineFactory {
         let active: Arc<Mutex<Option<ActivePlan>>> = Arc::new(Mutex::new(None));
         let replacing: Arc<Mutex<Option<ReplaceCancellation>>> = Arc::new(Mutex::new(None));
         let output_reconnecting = Arc::new(AtomicBool::new(false));
+        let metadata_target = Arc::new(Mutex::new(config.target.clone()));
+        let metadata_publisher = (self.sink_factory == sink::DEFAULT_FACTORY).then(sink::MetadataPublisher::spawn);
+        let sink_slot = Mutex::new(SinkSlot::Active(sink));
         bus::install(
             &pipeline,
             &clock_gate,
+            metadata_target.clone(),
+            metadata_publisher.clone(),
             active.clone(),
             replacing.clone(),
             output_reconnecting.clone(),
@@ -696,7 +742,9 @@ impl PlaybackPipelineFactory for GStreamerPipelineFactory {
                 output_queue,
                 output_caps,
                 encoder,
-                sink: Mutex::new(SinkSlot::Active(sink)),
+                sink: sink_slot,
+                metadata_target,
+                metadata_publisher,
                 clock_gate,
                 sink_factory: self.sink_factory,
                 branches: Mutex::new(Vec::new()),
@@ -718,6 +766,8 @@ impl PlaybackPipelineFactory for GStreamerPipelineFactory {
 mod tests {
     use super::*;
     use crate::streamer::pipeline::{IcecastTarget, OutputConfig, PipelineTrack, PlannedNext, TransitionPlan};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::{TcpListener, TcpStream};
 
     fn config() -> PipelineConfig {
         PipelineConfig {
@@ -730,6 +780,27 @@ mod tests {
             },
         }
     }
+    async fn read_http_request(stream: &mut TcpStream) -> String {
+        let mut request = Vec::new();
+        loop {
+            let mut chunk = vec![0; 1024];
+            let length = stream.read(&mut chunk).await.unwrap();
+            assert!(length > 0, "request ended before its form body");
+            request.extend_from_slice(&chunk[..length]);
+            let Some(header_end) = request.windows(4).position(|window| window == b"\r\n\r\n") else {
+                continue;
+            };
+            let headers = String::from_utf8_lossy(&request[..header_end]);
+            let content_length = headers
+                .lines()
+                .find_map(|line| line.to_ascii_lowercase().strip_prefix("content-length: ")?.parse::<usize>().ok())
+                .unwrap_or_default();
+            if request.len() >= header_end + 4 + content_length {
+                return String::from_utf8(request).unwrap();
+            }
+        }
+    }
+
     fn write_wav(file: &std::path::Path, duration: Duration, sample: i16) {
         let frames = (duration.as_secs_f64() * 44_100.0).round() as u32;
         let data_len = frames * 4;
@@ -771,11 +842,15 @@ mod tests {
         assert!(replacement.is_cancelled());
     }
 
-    fn track(path: &std::path::Path, _position: i32) -> PipelineTrack {
+    fn track(path: &std::path::Path, position: i32) -> PipelineTrack {
         PipelineTrack {
             key: TrackKey {
                 queue_item_id: uuid::Uuid::new_v4(),
                 song_id: uuid::Uuid::new_v4(),
+            },
+            metadata: TrackMetadata {
+                title: format!("Track {position}"),
+                artist: format!("Artist {position}"),
             },
             path: path.to_path_buf(),
             cue_in: Duration::ZERO,
@@ -865,6 +940,10 @@ mod tests {
                 1,
                 PipelineTrack {
                     key: key.clone(),
+                    metadata: TrackMetadata {
+                        title: "Test track".into(),
+                        artist: "Test artist".into(),
+                    },
                     path: file.path().to_path_buf(),
                     cue_in: Duration::ZERO,
                     cue_out: Duration::ZERO,
@@ -910,7 +989,11 @@ mod tests {
 
         let event = tokio::time::timeout(Duration::from_secs(3), events.recv()).await.unwrap();
         assert!(
-            matches!(event, Some(PipelineEvent::Handover { generation: 7, ref current }) if current == &next_key),
+            matches!(
+                event,
+                Some(PipelineEvent::Handover { generation: 7, ref current })
+                    if current == &next_key
+            ),
             "{event:?}"
         );
         assert!(started.elapsed() >= Duration::from_millis(500));
@@ -1201,6 +1284,10 @@ mod tests {
                     queue_item_id: Uuid::new_v4(),
                     song_id: Uuid::new_v4(),
                 },
+                metadata: TrackMetadata {
+                    title: "Test track".into(),
+                    artist: "Test artist".into(),
+                },
                 path: file.path().to_path_buf(),
                 cue_in: Duration::ZERO,
                 cue_out: Duration::ZERO,
@@ -1348,6 +1435,22 @@ mod tests {
         let replacement = track(replacement_file.path(), 2);
         let current_key = current.key.clone();
         let next_key = next.key.clone();
+        let replacement_key = replacement.key.clone();
+        let metadata_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let metadata_port = metadata_listener.local_addr().unwrap().port();
+        let metadata_server = tokio::spawn(async move {
+            let mut requests = Vec::new();
+            for delay in [Duration::ZERO, Duration::from_millis(300)] {
+                let (mut stream, _) = metadata_listener.accept().await.unwrap();
+                requests.push(read_http_request(&mut stream).await);
+                tokio::time::sleep(delay).await;
+                stream
+                    .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                    .await
+                    .unwrap();
+            }
+            requests
+        });
 
         // Build the concrete pipeline so the test can probe the clock gate pad.
         let graph::Backbone {
@@ -1363,9 +1466,16 @@ mod tests {
         let active: Arc<Mutex<Option<ActivePlan>>> = Arc::new(Mutex::new(None));
         let replacing: Arc<Mutex<Option<ReplaceCancellation>>> = Arc::new(Mutex::new(None));
         let output_reconnecting = Arc::new(AtomicBool::new(false));
+        let metadata_target = Arc::new(Mutex::new(
+            IcecastTarget::parse(&format!("127.0.0.1:{metadata_port}"), "secret".into(), "test", "test".into()).unwrap(),
+        ));
+        let metadata_publisher = Some(sink::MetadataPublisher::spawn());
+        let sink_slot = Mutex::new(SinkSlot::Active(sink));
         bus::install(
             &pipeline,
             &clock_gate,
+            metadata_target.clone(),
+            metadata_publisher.clone(),
             active.clone(),
             replacing.clone(),
             output_reconnecting.clone(),
@@ -1378,7 +1488,9 @@ mod tests {
             output_queue,
             output_caps,
             encoder,
-            sink: Mutex::new(SinkSlot::Active(sink)),
+            sink: sink_slot,
+            metadata_target,
+            metadata_publisher,
             clock_gate,
             sink_factory: "fakesink",
             branches: Mutex::new(Vec::new()),
@@ -1391,7 +1503,7 @@ mod tests {
             }),
             events,
         };
-        let _events = receiver;
+        let mut pipeline_events = receiver;
         // Probe the clock-gated output (post-encoder, steady ~26ms frame
         // cadence): a mid-track stall longer than the ~64ms output prebuffer
         // would show up here as a gap well over one frame period.
@@ -1436,8 +1548,21 @@ mod tests {
             .await
             .unwrap();
         let roll_elapsed = roll_started.elapsed();
-        // A ends at 1s; X plays after. Cover both plus margin.
-        tokio::time::sleep(Duration::from_millis(1_100)).await;
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while !matches!(
+                pipeline_events.recv().await,
+                Some(PipelineEvent::Handover { ref current, .. }) if current == &replacement_key
+            ) {}
+        })
+        .await
+        .expect("replacement handover");
+        let metadata_requests = tokio::time::timeout(Duration::from_secs(1), metadata_server)
+            .await
+            .expect("metadata requests")
+            .unwrap();
+        assert!(metadata_requests[0].ends_with("song=Artist+0+-+Track+0"));
+        assert!(metadata_requests[1].ends_with("song=Artist+2+-+Track+2"));
+        tokio::time::sleep(Duration::from_millis(100)).await;
         pipeline.stop().await.unwrap();
 
         let arrivals = arrivals.lock().unwrap_or_else(|error| error.into_inner());
