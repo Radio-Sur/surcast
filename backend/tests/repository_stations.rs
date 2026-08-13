@@ -74,6 +74,43 @@ async fn test_insert_and_find_station() {
 }
 
 #[tokio::test]
+async fn test_new_station_persists_enabled_auto_dj_defaults() {
+    let db = common::setup_db().await;
+    let user_id = make_user(&db).await;
+    let station_id = Uuid::new_v4();
+
+    repository::insert_station(
+        &db,
+        &CreateStationParams {
+            id: station_id,
+            name: "AutoDJ Station".into(),
+            description: "".into(),
+            slug: "autodj-station".into(),
+            stream_url: None,
+            prebuffer_bytes: 0,
+            played_limit: 5,
+            default_fade_ms: 2000,
+            transition_mode: "autocue".into(),
+            autocue_fade_max_ms: 5000,
+            created_by: user_id,
+        },
+    )
+    .await
+    .unwrap();
+
+    let config: (bool, String, String, Option<Uuid>, bool, i32, i32) = sqlx::query_as(
+        "SELECT enabled, mode, source_type, source_playlist_id, avoid_artist_repeat, min_song_gap, songs_ahead
+         FROM station_auto_fill WHERE station_id = $1",
+    )
+    .bind(station_id)
+    .fetch_one(&db)
+    .await
+    .expect("new station must persist its enabled AutoDJ configuration");
+
+    assert_eq!(config, (true, "random".into(), "station_library".into(), None, true, 3, 4,));
+}
+
+#[tokio::test]
 async fn test_find_all_stations() {
     let db = common::setup_db().await;
     let user_id = make_user(&db).await;

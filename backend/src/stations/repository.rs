@@ -55,6 +55,7 @@ pub struct CreateStationParams {
 }
 
 pub async fn insert_station(db: &PgPool, params: &CreateStationParams) -> Result<(), AppError> {
+    let mut transaction = db.begin().await.db_error("failed to begin station creation")?;
     sqlx::query(
         "INSERT INTO stations (id, name, description, slug, stream_url, prebuffer_bytes, played_limit, default_fade_ms, transition_mode, autocue_fade_max_ms, created_by) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
     )
@@ -69,9 +70,17 @@ pub async fn insert_station(db: &PgPool, params: &CreateStationParams) -> Result
     .bind(&params.transition_mode)
     .bind(params.autocue_fade_max_ms)
     .bind(params.created_by)
-    .execute(db)
+    .execute(&mut *transaction)
     .await
     .db_error("failed to create station")?;
+
+    sqlx::query("INSERT INTO station_auto_fill (station_id) VALUES ($1)")
+        .bind(params.id)
+        .execute(&mut *transaction)
+        .await
+        .db_error("failed to create default AutoDJ configuration")?;
+
+    transaction.commit().await.db_error("failed to create station")?;
     Ok(())
 }
 

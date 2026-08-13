@@ -169,7 +169,7 @@ CREATE TABLE IF NOT EXISTS station_auto_fill (
     source_playlist_id UUID REFERENCES playlists(id) ON DELETE SET NULL,
     avoid_artist_repeat BOOLEAN NOT NULL DEFAULT true,
     min_song_gap INTEGER NOT NULL DEFAULT 3,
-    songs_ahead INTEGER NOT NULL DEFAULT 5
+    songs_ahead INTEGER NOT NULL DEFAULT 4
 );
 
 CREATE TABLE IF NOT EXISTS station_auto_fill_playlists (

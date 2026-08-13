@@ -228,8 +228,15 @@ async fn test_auto_fill_config_upsert_and_find() {
 
     let config = repository::find_auto_fill_config(&db, station_id)
         .await
-        .expect("find config failed");
-    assert!(config.is_none());
+        .expect("find config failed")
+        .expect("new station must have default AutoDJ configuration");
+    assert!(config.enabled);
+    assert_eq!(config.mode, AutoDjMode::Random);
+    assert_eq!(config.source_type, SourceType::StationLibrary);
+    assert!(config.source_playlist_id.is_none());
+    assert!(config.avoid_artist_repeat);
+    assert_eq!(config.min_song_gap, 3);
+    assert_eq!(config.songs_ahead, 4);
 
     repository::upsert_auto_fill_config(
         &db,
@@ -307,6 +314,41 @@ async fn test_auto_fill_playlists_add_update_delete() {
         .await
         .expect("find auto-fill playlists failed");
     assert!(playlists.is_empty());
+}
+
+#[tokio::test]
+async fn test_new_station_default_auto_dj_fills_queue_without_schedule() {
+    let db = common::setup_db().await;
+    let user_id = make_user(&db).await;
+    let station_id = make_station(&db, user_id).await;
+    let song_id = Uuid::new_v4();
+
+    sqlx::query(
+        "INSERT INTO songs (id, title, file_path, uploaded_by)
+         VALUES ($1, 'Default AutoDJ Song', '/tmp/default-autodj-song.mp3', $2)",
+    )
+    .bind(song_id)
+    .bind(user_id)
+    .execute(&db)
+    .await
+    .unwrap();
+    sqlx::query("INSERT INTO station_songs (station_id, song_id, position) VALUES ($1, $2, 0)")
+        .bind(station_id)
+        .bind(song_id)
+        .execute(&db)
+        .await
+        .unwrap();
+
+    service::fill_queue_from_schedule(&db, station_id, "/tmp").await.unwrap();
+
+    let queued: Vec<(Uuid, bool)> = sqlx::query_as("SELECT song_id, is_auto_dj FROM station_queue WHERE station_id = $1")
+        .bind(station_id)
+        .fetch_all(&db)
+        .await
+        .unwrap();
+    assert!(queued
+        .iter()
+        .any(|(queued_song_id, is_auto_dj)| *queued_song_id == song_id && *is_auto_dj));
 }
 
 #[tokio::test]
