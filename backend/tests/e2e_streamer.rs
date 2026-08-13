@@ -123,7 +123,7 @@ async fn managed_icecast_serves_gstreamer_encoded_mp3() {
             streamers.clone(),
             icecast.clone(),
             ListenersState::new(),
-        ))?;
+        ));
         server
             .post("/api/setup/init")
             .json(&serde_json::json!({"username":"admin","password":"admin123","name":"Admin"}))
@@ -415,7 +415,7 @@ async fn crossfade_naturally_promotes_each_queued_track_once() {
             streamers.clone(),
             icecast.clone(),
             ListenersState::new(),
-        ))?;
+        ));
         server
             .post("/api/setup/init")
             .json(&serde_json::json!({"username":"admin","password":"admin123","name":"Admin"}))
@@ -569,7 +569,7 @@ async fn manual_auto_dj_trigger_keeps_an_exhausted_memory_queue_playing() {
             streamers.clone(),
             icecast.clone(),
             ListenersState::new(),
-        ))?;
+        ));
         server
             .post("/api/setup/init")
             .json(&serde_json::json!({"username":"admin","password":"admin123","name":"Admin"}))
@@ -747,7 +747,7 @@ async fn play_with_empty_queue_fills_from_auto_dj_and_starts() {
             streamers.clone(),
             icecast.clone(),
             ListenersState::new(),
-        ))?;
+        ));
         server
             .post("/api/setup/init")
             .json(&serde_json::json!({"username":"admin","password":"admin123","name":"Admin"}))
@@ -901,7 +901,7 @@ async fn natural_queue_exhaustion_refills_from_auto_dj() {
             streamers.clone(),
             icecast.clone(),
             ListenersState::new(),
-        ))?;
+        ));
         server
             .post("/api/setup/init")
             .json(&serde_json::json!({"username":"admin","password":"admin123","name":"Admin"}))
@@ -1074,7 +1074,7 @@ async fn repro_audio_survives_last_track_refill_after_empty_queue_start() {
             streamers.clone(),
             icecast.clone(),
             ListenersState::new(),
-        ))?;
+        ));
         server
             .post("/api/setup/init")
             .json(&serde_json::json!({"username":"admin","password":"admin123","name":"Admin"}))
@@ -1255,7 +1255,7 @@ async fn repro_ws_feed_reports_stopped_after_queue_exhaustion() {
             streamers.clone(),
             icecast.clone(),
             ListenersState::new(),
-        ))?;
+        ));
         server
             .post("/api/setup/init")
             .json(&serde_json::json!({"username":"admin","password":"admin123","name":"Admin"}))
@@ -1421,7 +1421,7 @@ async fn mixed_queue_drain_keeps_playing_with_auto_dj_picks() {
             streamers.clone(),
             icecast.clone(),
             ListenersState::new(),
-        ))?;
+        ));
         server
             .post("/api/setup/init")
             .json(&serde_json::json!({"username":"admin","password":"admin123","name":"Admin"}))
@@ -1611,7 +1611,7 @@ async fn auto_dj_keeps_songs_ahead_with_crossfade_handovers() {
             streamers.clone(),
             icecast.clone(),
             ListenersState::new(),
-        ))?;
+        ));
         server
             .post("/api/setup/init")
             .json(&serde_json::json!({"username":"admin","password":"admin123","name":"Admin"}))
@@ -1850,7 +1850,7 @@ async fn autodj_never_overfills_the_upcoming_window() {
             streamers.clone(),
             icecast.clone(),
             ListenersState::new(),
-        ))?;
+        ));
         server
             .post("/api/setup/init")
             .json(&serde_json::json!({"username":"admin","password":"admin123","name":"Admin"}))
@@ -2095,7 +2095,7 @@ async fn schedule_playlist_fill_tops_up_instead_of_dumping() {
             streamers.clone(),
             icecast.clone(),
             ListenersState::new(),
-        ))?;
+        ));
         server
             .post("/api/setup/init")
             .json(&serde_json::json!({"username":"admin","password":"admin123","name":"Admin"}))
@@ -2266,7 +2266,7 @@ async fn stale_cursor_heals_and_queue_keeps_refilling() {
             streamers.clone(),
             icecast.clone(),
             ListenersState::new(),
-        ))?;
+        ));
         server
             .post("/api/setup/init")
             .json(&serde_json::json!({"username":"admin","password":"admin123","name":"Admin"}))
@@ -2526,7 +2526,7 @@ async fn reorder_during_playback_plays_the_moved_track_next() {
             streamers.clone(),
             icecast.clone(),
             ListenersState::new(),
-        ))?;
+        ));
         server
             .post("/api/setup/init")
             .json(&serde_json::json!({"username":"admin","password":"admin123","name":"Admin"}))
@@ -2724,7 +2724,7 @@ async fn removed_staged_track_is_not_played_next() {
             streamers.clone(),
             icecast.clone(),
             ListenersState::new(),
-        ))?;
+        ));
         server
             .post("/api/setup/init")
             .json(&serde_json::json!({"username":"admin","password":"admin123","name":"Admin"}))
@@ -2923,7 +2923,7 @@ async fn play_starts_with_the_queue_loaded_from_the_database() {
             streamers.clone(),
             icecast.clone(),
             ListenersState::new(),
-        ))?;
+        ));
         server
             .post("/api/setup/init")
             .json(&serde_json::json!({"username":"admin","password":"admin123","name":"Admin"}))
@@ -3087,7 +3087,7 @@ async fn repro_ws_queue_feed_survives_radio_restart() {
             streamers.clone(),
             icecast.clone(),
             ListenersState::new(),
-        ))?;
+        ));
         server
             .post("/api/setup/init")
             .json(&serde_json::json!({"username":"admin","password":"admin123","name":"Admin"}))
@@ -3226,7 +3226,7 @@ async fn repro_ws_queue_feed_survives_radio_restart() {
         let _auth_ok = ws_recv_text(&mut socket, 10).await?;
         // The subscribe reply is a status followed by a queue_update; drain
         // until the initial queue snapshot arrives.
-        let initial_snapshot = loop {
+        let _initial_snapshot = loop {
             let text = ws_recv_text(&mut socket, 10).await?;
             let msg: serde_json::Value = serde_json::from_str(&text).map_err(|_| failure("bad ws json"))?;
             if msg["type"] == "queue_update" && msg["data"].as_array().map(|a| a.len()) == Some(4) {
@@ -3250,7 +3250,7 @@ async fn repro_ws_queue_feed_survives_radio_restart() {
         if removed.status_code() != 204 {
             return Err(failure(format!("queue removal failed: {}", removed.status_code())));
         }
-        let live_update = tokio::time::timeout(Duration::from_secs(5), async {
+        let _live_update = tokio::time::timeout(Duration::from_secs(5), async {
             loop {
                 let text = ws_recv_text(&mut socket, 5).await?;
                 let msg: serde_json::Value = serde_json::from_str(&text).map_err(|_| failure("bad ws json"))?;
@@ -3342,7 +3342,7 @@ async fn repro_queue_modifications_persist_across_radio_restart() {
             streamers.clone(),
             icecast.clone(),
             ListenersState::new(),
-        ))?;
+        ));
         server
             .post("/api/setup/init")
             .json(&serde_json::json!({"username":"admin","password":"admin123","name":"Admin"}))
@@ -3552,7 +3552,7 @@ async fn repro_play_resumes_after_server_restart() {
             streamers.clone(),
             icecast.clone(),
             ListenersState::new(),
-        ))?;
+        ));
         server
             .post("/api/setup/init")
             .json(&serde_json::json!({"username":"admin","password":"admin123","name":"Admin"}))
@@ -3728,7 +3728,7 @@ async fn repro_play_resumes_after_server_restart() {
             streamers.clone(),
             icecast.clone(),
             ListenersState::new(),
-        ))?;
+        ));
         let login = server
             .post("/api/auth/login")
             .json(&serde_json::json!({"username":"admin","password":"admin123"}))
@@ -3801,7 +3801,7 @@ async fn repro_cold_restart_icecast_comes_back_with_the_backend() {
             streamers.clone(),
             icecast.clone(),
             ListenersState::new(),
-        ))?;
+        ));
         server
             .post("/api/setup/init")
             .json(&serde_json::json!({"username":"admin","password":"admin123","name":"Admin"}))
@@ -3944,7 +3944,7 @@ async fn repro_cold_restart_icecast_comes_back_with_the_backend() {
             streamers.clone(),
             icecast.clone(),
             ListenersState::new(),
-        ))?;
+        ));
         let login = server
             .post("/api/auth/login")
             .json(&serde_json::json!({"username":"admin","password":"admin123"}))
@@ -4015,7 +4015,7 @@ async fn repro_start_with_empty_queue_plays_once_songs_arrive() {
             streamers.clone(),
             icecast.clone(),
             ListenersState::new(),
-        ))?;
+        ));
         server
             .post("/api/setup/init")
             .json(&serde_json::json!({"username":"admin","password":"admin123","name":"Admin"}))
@@ -4215,7 +4215,7 @@ async fn repro_autocue_analyzed_mp3_starts_playing() {
             streamers.clone(),
             icecast.clone(),
             ListenersState::new(),
-        ))?;
+        ));
         server
             .post("/api/setup/init")
             .json(&serde_json::json!({"username":"admin","password":"admin123","name":"Admin"}))

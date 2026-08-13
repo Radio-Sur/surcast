@@ -331,8 +331,9 @@ async fn test_renumber_syncs_current_song_index() {
     .unwrap();
 
     // reorder: renumber densely, B (current) moves to index 0
-    let ids: Vec<(Uuid,)> = sqlx::query_as("SELECT id FROM station_queue WHERE station_id = $1 ORDER BY id")
+    let ids: Vec<(Uuid,)> = sqlx::query_as("SELECT id FROM station_queue WHERE station_id = $1 ORDER BY id = $2 DESC, id")
         .bind(station_id)
+        .bind(current_id)
         .fetch_all(&db)
         .await
         .unwrap();

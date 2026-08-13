@@ -210,7 +210,7 @@ async fn test_remove_playlist_from_queue_returns_204() {
 async fn test_add_songs_trims_consumed_queue_items() {
     let pool = common::setup_db().await;
     let app = api_common::create_test_app(pool.clone());
-    let server = TestServer::new(app).expect("server");
+    let server = TestServer::new(app);
 
     let init_resp = server
         .post("/api/setup/init")
@@ -284,7 +284,7 @@ async fn test_add_songs_trims_consumed_queue_items() {
 async fn test_reorder_then_add_keeps_upcoming_songs() {
     let pool = common::setup_db().await;
     let app = api_common::create_test_app(pool.clone());
-    let server = TestServer::new(app).expect("server");
+    let server = TestServer::new(app);
 
     let init_resp = server
         .post("/api/setup/init")
