@@ -13,12 +13,6 @@ pub async fn create_pool(database_url: &str) -> PgPool {
 }
 
 pub async fn run_migrations(pool: &PgPool) {
-    // Reset migration tracking so modified 001_initial.sql re-applies cleanly.
-    // All statements use IF NOT EXISTS / ON CONFLICT DO NOTHING, so re-running is safe.
-    sqlx::query("DROP TABLE IF EXISTS _sqlx_migrations CASCADE")
-        .execute(pool)
-        .await
-        .ok();
 
     sqlx::migrate!("./migrations")
         .run(pool)

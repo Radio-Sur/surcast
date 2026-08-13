@@ -1,8 +1,5 @@
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
--- ---------------------------------------------------------------
--- Users & API keys
--- ---------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS users (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     username VARCHAR(255) UNIQUE NOT NULL,
@@ -14,6 +11,24 @@ CREATE TABLE IF NOT EXISTS users (
 );
 
 CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
+
+CREATE TABLE IF NOT EXISTS stations (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    name VARCHAR(255) NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    slug VARCHAR(255) NOT NULL DEFAULT '',
+    stream_url TEXT,
+    current_song_index INTEGER NOT NULL DEFAULT 0,
+    prebuffer_bytes INTEGER NOT NULL DEFAULT 16384,
+    played_limit INTEGER NOT NULL DEFAULT 100,
+    default_fade_ms INTEGER NOT NULL DEFAULT 3000,
+    created_by UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_stations_created_by ON stations(created_by);
+CREATE INDEX IF NOT EXISTS idx_stations_slug ON stations(slug);
 
 CREATE TABLE IF NOT EXISTS api_keys (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -30,32 +45,6 @@ CREATE TABLE IF NOT EXISTS api_keys (
 CREATE INDEX IF NOT EXISTS idx_api_keys_user_id ON api_keys(user_id);
 CREATE INDEX IF NOT EXISTS idx_api_keys_key_hash ON api_keys(key_hash);
 
--- ---------------------------------------------------------------
--- Stations
--- ---------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS stations (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    name VARCHAR(255) NOT NULL,
-    description TEXT NOT NULL DEFAULT '',
-    slug VARCHAR(255) NOT NULL DEFAULT '',
-    stream_url TEXT,
-    current_song_index INTEGER NOT NULL DEFAULT 0,
-    prebuffer_bytes INTEGER NOT NULL DEFAULT 16384,
-    played_limit INTEGER NOT NULL DEFAULT 100,
-    default_fade_ms INTEGER NOT NULL DEFAULT 3000,
-    transition_mode TEXT NOT NULL DEFAULT 'autocue',
-    autocue_fade_max_ms INTEGER NOT NULL DEFAULT 5000,
-    created_by UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-CREATE INDEX IF NOT EXISTS idx_stations_created_by ON stations(created_by);
-CREATE INDEX IF NOT EXISTS idx_stations_slug ON stations(slug);
-
--- ---------------------------------------------------------------
--- Songs (incl. autocue analysis columns)
--- ---------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS songs (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     title VARCHAR(255) NOT NULL,
@@ -67,26 +56,24 @@ CREATE TABLE IF NOT EXISTS songs (
     mime_type VARCHAR(100) NOT NULL DEFAULT 'audio/mpeg',
     cover_path TEXT NOT NULL DEFAULT '',
     uploaded_by UUID NOT NULL REFERENCES users(id),
-    cue_in DOUBLE PRECISION NOT NULL DEFAULT 0,
-    cue_out DOUBLE PRECISION NOT NULL DEFAULT 0,
-    cross_start_next DOUBLE PRECISION NOT NULL DEFAULT 0,
-    loudness REAL,
-    loudness_range REAL,
-    true_peak REAL,
-    true_peak_db REAL,
-    amplify REAL,
-    sustained_ending BOOLEAN NOT NULL DEFAULT false,
-    longtail BOOLEAN NOT NULL DEFAULT false,
-    analyzed_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE INDEX IF NOT EXISTS idx_songs_uploaded_by ON songs(uploaded_by);
 
--- ---------------------------------------------------------------
--- Playlists
--- ---------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS station_songs (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    station_id UUID NOT NULL REFERENCES stations(id) ON DELETE CASCADE,
+    song_id UUID NOT NULL REFERENCES songs(id) ON DELETE CASCADE,
+    position INTEGER NOT NULL DEFAULT 0,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(station_id, song_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_station_songs_station_id ON station_songs(station_id);
+CREATE INDEX IF NOT EXISTS idx_station_songs_song_id ON station_songs(song_id);
+
 CREATE TABLE IF NOT EXISTS playlists (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     name VARCHAR(255) NOT NULL,
@@ -111,21 +98,6 @@ CREATE TABLE IF NOT EXISTS playlist_songs (
 
 CREATE INDEX IF NOT EXISTS idx_playlist_songs_playlist_id ON playlist_songs(playlist_id);
 CREATE INDEX IF NOT EXISTS idx_playlist_songs_song_id ON playlist_songs(song_id);
-
--- ---------------------------------------------------------------
--- Station library / queue / scheduling / auto-fill
--- ---------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS station_songs (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    station_id UUID NOT NULL REFERENCES stations(id) ON DELETE CASCADE,
-    song_id UUID NOT NULL REFERENCES songs(id) ON DELETE CASCADE,
-    position INTEGER NOT NULL DEFAULT 0,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    UNIQUE(station_id, song_id)
-);
-
-CREATE INDEX IF NOT EXISTS idx_station_songs_station_id ON station_songs(station_id);
-CREATE INDEX IF NOT EXISTS idx_station_songs_song_id ON station_songs(song_id);
 
 CREATE TABLE IF NOT EXISTS station_queue (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -201,12 +173,9 @@ CREATE TABLE IF NOT EXISTS station_schedule_events (
 CREATE INDEX IF NOT EXISTS idx_schedule_events_station ON station_schedule_events(station_id);
 CREATE INDEX IF NOT EXISTS idx_schedule_events_dates ON station_schedule_events(station_id, start_date);
 
--- ---------------------------------------------------------------
--- Icecast (managed, auto-start by default)
--- ---------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS icecast_settings (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    enabled BOOLEAN NOT NULL DEFAULT true,
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    enabled BOOLEAN NOT NULL DEFAULT false,
     mode TEXT NOT NULL DEFAULT 'managed',
     port INTEGER NOT NULL DEFAULT 8000,
     source_password TEXT NOT NULL DEFAULT 'surcast',
@@ -220,37 +189,5 @@ CREATE TABLE IF NOT EXISTS icecast_settings (
 );
 
 INSERT INTO icecast_settings (id, enabled)
-VALUES ('00000000-0000-0000-0000-000000000001', true)
+VALUES ('00000000-0000-0000-0000-000000000001', false)
 ON CONFLICT (id) DO NOTHING;
-
--- ---------------------------------------------------------------
--- Listener stats
--- ---------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS listener_stats (
-    id BIGSERIAL PRIMARY KEY,
-    station_id UUID NOT NULL REFERENCES stations(id) ON DELETE CASCADE,
-    listeners INTEGER NOT NULL DEFAULT 0,
-    recorded_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-CREATE INDEX IF NOT EXISTS idx_listener_stats_station_time ON listener_stats(station_id, recorded_at);
-CREATE INDEX IF NOT EXISTS idx_listener_stats_recorded_at ON listener_stats(recorded_at);
-
--- ---------------------------------------------------------------
--- Upload jobs (async upload + analysis progress)
--- ---------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS upload_jobs (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    status TEXT NOT NULL DEFAULT 'processing',
-    total INTEGER NOT NULL DEFAULT 0,
-    processed INTEGER NOT NULL DEFAULT 0,
-    failed INTEGER NOT NULL DEFAULT 0,
-    current_file TEXT,
-    error TEXT,
-    song_ids JSONB NOT NULL DEFAULT '[]',
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-CREATE INDEX IF NOT EXISTS idx_upload_jobs_user ON upload_jobs(user_id, created_at DESC);
