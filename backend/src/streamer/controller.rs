@@ -978,7 +978,11 @@ mod tests {
         };
         assert!(matches!(plan.mode, ReplaceMode::InitialReplaceFromStopped));
         assert_eq!(controller.state, PipelineState::Playing);
-        assert_eq!(pipeline.replacements.load(Ordering::Acquire), 0, "replace is executed by the runtime, not the controller");
+        assert_eq!(
+            pipeline.replacements.load(Ordering::Acquire),
+            0,
+            "replace is executed by the runtime, not the controller"
+        );
 
         // A reload that still arrives empty must keep the controller stopped.
         let (mut controller, _) = {
@@ -1023,12 +1027,19 @@ mod tests {
         assert_eq!(controller.planned_next.as_ref().unwrap().0.queue_item_id, b.queue_item_id);
 
         // A reorder moved X to the top: the staged next (B) must be replaced by X
-        let operation = controller.reload(vec![a.clone(), x.clone(), b.clone(), c.clone()], true).await.unwrap();
+        let operation = controller
+            .reload(vec![a.clone(), x.clone(), b.clone(), c.clone()], true)
+            .await
+            .unwrap();
         let Some(PipelineOperation::Roll(plan)) = operation else {
             panic!("reorder reload must issue a rolling replacement");
         };
         assert_eq!(plan.current.queue_item_id, a.queue_item_id);
-        let RollingChange::ReplaceNext { expected_next, replacement } = plan.change else {
+        let RollingChange::ReplaceNext {
+            expected_next,
+            replacement,
+        } = plan.change
+        else {
             panic!("reorder reload must use ReplaceNext");
         };
         assert_eq!(expected_next.queue_item_id, b.queue_item_id);
@@ -1070,7 +1081,11 @@ mod tests {
         let Some(PipelineOperation::Roll(plan)) = operation else {
             panic!("exhausting reload must issue a roll");
         };
-        let RollingChange::ReplaceNext { expected_next, replacement } = plan.change else {
+        let RollingChange::ReplaceNext {
+            expected_next,
+            replacement,
+        } = plan.change
+        else {
             panic!("exhausting reload must use ReplaceNext");
         };
         assert_eq!(expected_next.queue_item_id, b.queue_item_id);

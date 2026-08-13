@@ -249,11 +249,7 @@ async fn test_add_songs_trims_consumed_queue_items() {
         .json(&json!({"song_ids": [stale_song]}))
         .await;
     assert_eq!(add.status_code(), 201, "add failed: {}", add.text());
-    let stale_item_id: Uuid = add.json::<Vec<serde_json::Value>>()[0]["id"]
-        .as_str()
-        .unwrap()
-        .parse()
-        .unwrap();
+    let stale_item_id: Uuid = add.json::<Vec<serde_json::Value>>()[0]["id"].as_str().unwrap().parse().unwrap();
     sqlx::query(
         "UPDATE stations SET current_queue_item_id = $1, consumed_queue_item_ids = $2, \
          current_song_index = 1, current_queue_cursor_format = 1 WHERE id = $3",

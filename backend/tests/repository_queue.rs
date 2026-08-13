@@ -209,19 +209,17 @@ async fn test_trim_consumed_queue_items_removes_played_rows() {
     queue_repo::insert_queue_item(&db, station_id, stale_song, 1, None).await.unwrap();
     queue_repo::insert_queue_item(&db, station_id, current_song, 2, None).await.unwrap();
 
-    let stale_ids: Vec<Uuid> =
-        sqlx::query_scalar("SELECT id FROM station_queue WHERE station_id = $1 AND position < 2 ORDER BY position")
-            .bind(station_id)
-            .fetch_all(&db)
-            .await
-            .unwrap();
+    let stale_ids: Vec<Uuid> = sqlx::query_scalar("SELECT id FROM station_queue WHERE station_id = $1 AND position < 2 ORDER BY position")
+        .bind(station_id)
+        .fetch_all(&db)
+        .await
+        .unwrap();
     assert_eq!(stale_ids.len(), 2);
-    let current_item: Uuid =
-        sqlx::query_scalar("SELECT id FROM station_queue WHERE station_id = $1 AND position = 2")
-            .bind(station_id)
-            .fetch_one(&db)
-            .await
-            .unwrap();
+    let current_item: Uuid = sqlx::query_scalar("SELECT id FROM station_queue WHERE station_id = $1 AND position = 2")
+        .bind(station_id)
+        .fetch_one(&db)
+        .await
+        .unwrap();
 
     // durable format-1 cursor: stale rows are tracked by identity
     sqlx::query(
@@ -237,12 +235,11 @@ async fn test_trim_consumed_queue_items_removes_played_rows() {
 
     queue_repo::trim_consumed_queue_items(&db, station_id).await.unwrap();
 
-    let remaining: Vec<(Uuid, i32)> =
-        sqlx::query_as("SELECT id, position FROM station_queue WHERE station_id = $1 ORDER BY position")
-            .bind(station_id)
-            .fetch_all(&db)
-            .await
-            .unwrap();
+    let remaining: Vec<(Uuid, i32)> = sqlx::query_as("SELECT id, position FROM station_queue WHERE station_id = $1 ORDER BY position")
+        .bind(station_id)
+        .fetch_all(&db)
+        .await
+        .unwrap();
     assert_eq!(remaining.len(), 1);
     assert_eq!(remaining[0].0, current_item);
     assert_eq!(remaining[0].1, 2);
@@ -267,18 +264,16 @@ async fn test_trim_consumed_queue_items_ignores_stale_position_cutoff() {
     queue_repo::insert_queue_item(&db, station_id, upcoming_a, 2, None).await.unwrap();
     queue_repo::insert_queue_item(&db, station_id, upcoming_b, 3, None).await.unwrap();
 
-    let played_id: Uuid =
-        sqlx::query_scalar("SELECT id FROM station_queue WHERE station_id = $1 AND position = 0")
-            .bind(station_id)
-            .fetch_one(&db)
-            .await
-            .unwrap();
-    let current_id: Uuid =
-        sqlx::query_scalar("SELECT id FROM station_queue WHERE station_id = $1 AND position = 1")
-            .bind(station_id)
-            .fetch_one(&db)
-            .await
-            .unwrap();
+    let played_id: Uuid = sqlx::query_scalar("SELECT id FROM station_queue WHERE station_id = $1 AND position = 0")
+        .bind(station_id)
+        .fetch_one(&db)
+        .await
+        .unwrap();
+    let current_id: Uuid = sqlx::query_scalar("SELECT id FROM station_queue WHERE station_id = $1 AND position = 1")
+        .bind(station_id)
+        .fetch_one(&db)
+        .await
+        .unwrap();
 
     sqlx::query(
         "UPDATE stations SET current_queue_item_id = $1, consumed_queue_item_ids = $2, \
@@ -294,12 +289,11 @@ async fn test_trim_consumed_queue_items_ignores_stale_position_cutoff() {
     queue_repo::trim_consumed_queue_items(&db, station_id).await.unwrap();
 
     // Only the identity-consumed row is gone; current and upcoming survive.
-    let remaining: Vec<(Uuid, i32)> =
-        sqlx::query_as("SELECT id, position FROM station_queue WHERE station_id = $1 ORDER BY position")
-            .bind(station_id)
-            .fetch_all(&db)
-            .await
-            .unwrap();
+    let remaining: Vec<(Uuid, i32)> = sqlx::query_as("SELECT id, position FROM station_queue WHERE station_id = $1 ORDER BY position")
+        .bind(station_id)
+        .fetch_all(&db)
+        .await
+        .unwrap();
     assert_eq!(remaining.len(), 3);
     assert_eq!(remaining[0].1, 1);
     assert_eq!(remaining[1].1, 2);
@@ -319,12 +313,11 @@ async fn test_renumber_syncs_current_song_index() {
     queue_repo::insert_queue_item(&db, station_id, song_b, 6, None).await.unwrap();
     queue_repo::insert_queue_item(&db, station_id, song_c, 7, None).await.unwrap();
 
-    let current_id: Uuid =
-        sqlx::query_scalar("SELECT id FROM station_queue WHERE station_id = $1 AND position = 6")
-            .bind(station_id)
-            .fetch_one(&db)
-            .await
-            .unwrap();
+    let current_id: Uuid = sqlx::query_scalar("SELECT id FROM station_queue WHERE station_id = $1 AND position = 6")
+        .bind(station_id)
+        .fetch_one(&db)
+        .await
+        .unwrap();
 
     sqlx::query(
         "UPDATE stations SET current_queue_item_id = $1, consumed_queue_item_ids = $2, \
@@ -338,12 +331,11 @@ async fn test_renumber_syncs_current_song_index() {
     .unwrap();
 
     // reorder: renumber densely, B (current) moves to index 0
-    let ids: Vec<(Uuid,)> =
-        sqlx::query_as("SELECT id FROM station_queue WHERE station_id = $1 ORDER BY id")
-            .bind(station_id)
-            .fetch_all(&db)
-            .await
-            .unwrap();
+    let ids: Vec<(Uuid,)> = sqlx::query_as("SELECT id FROM station_queue WHERE station_id = $1 ORDER BY id")
+        .bind(station_id)
+        .fetch_all(&db)
+        .await
+        .unwrap();
     for (i, (id,)) in ids.iter().enumerate() {
         queue_repo::set_queue_position(&db, *id, i as i32).await.unwrap();
     }

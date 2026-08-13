@@ -19,9 +19,10 @@ async fn quiesce_streamers(streamers: &StreamersMap) -> Vec<(Arc<StationStreamer
         streamers.values().cloned().collect::<Vec<_>>()
     };
     futures::future::join_all(active.into_iter().map(|streamer| async move {
-        let was_playing = streamer.status_json().await.map_or(false, |status| {
-            status["playing"].as_bool().unwrap_or(false)
-        });
+        let was_playing = streamer
+            .status_json()
+            .await
+            .map_or(false, |status| status["playing"].as_bool().unwrap_or(false));
         if was_playing {
             if let Err(error) = streamer.pause().await {
                 tracing::warn!(%error, "failed to pause streamer before Icecast restart");

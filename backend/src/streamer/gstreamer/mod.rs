@@ -1364,7 +1364,12 @@ mod tests {
             .map(|pair| pair[1].duration_since(pair[0]))
             .max()
             .unwrap_or_default();
-        tracing::info!(?roll_elapsed, ?max_gap, samples = arrivals.len(), "mid-stream replace next output gaps");
+        tracing::info!(
+            ?roll_elapsed,
+            ?max_gap,
+            samples = arrivals.len(),
+            "mid-stream replace next output gaps"
+        );
         // The output runs at a steady ~26ms frame cadence; the swap must not
         // stall it beyond the ~64ms prebuffer absorption (two frame periods of
         // headroom for jitter). Any future regression that pauses the pipeline

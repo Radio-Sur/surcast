@@ -695,10 +695,7 @@ async fn manual_auto_dj_trigger_keeps_an_exhausted_memory_queue_playing() {
         }
 
         // The streamer must now see 3 tracks (1 queued + 2 Auto DJ picks).
-        let synced = wait_for_status(&server, &station_id, &auth, |status| {
-            status["total"].as_u64() == Some(3)
-        })
-        .await?;
+        let synced = wait_for_status(&server, &station_id, &auth, |status| status["total"].as_u64() == Some(3)).await?;
         if synced["song_index"].as_u64() != Some(0) {
             return Err(failure(format!("auto-fill sync moved the cursor: {synced}")));
         }
@@ -1252,15 +1249,13 @@ async fn repro_ws_feed_reports_stopped_after_queue_exhaustion() {
     let streamers: StreamersMap = Arc::new(Mutex::new(HashMap::new()));
 
     let result: Result<(), Box<dyn std::error::Error>> = async {
-        let server = TestServer::builder()
-            .http_transport()
-            .build(router::create_router(
-                db.clone(),
-                config.clone(),
-                streamers.clone(),
-                icecast.clone(),
-                ListenersState::new(),
-            ))?;
+        let server = TestServer::builder().http_transport().build(router::create_router(
+            db.clone(),
+            config.clone(),
+            streamers.clone(),
+            icecast.clone(),
+            ListenersState::new(),
+        ))?;
         server
             .post("/api/setup/init")
             .json(&serde_json::json!({"username":"admin","password":"admin123","name":"Admin"}))
@@ -1345,11 +1340,15 @@ async fn repro_ws_feed_reports_stopped_after_queue_exhaustion() {
         use futures::SinkExt;
         use tokio_tungstenite::tungstenite::Message as WsMessage;
         socket
-            .send(WsMessage::Text(serde_json::json!({"type": "auth", "token": token}).to_string().into()))
+            .send(WsMessage::Text(
+                serde_json::json!({"type": "auth", "token": token}).to_string().into(),
+            ))
             .await?;
         socket
             .send(WsMessage::Text(
-                serde_json::json!({"type": "subscribe", "station_id": station_id}).to_string().into(),
+                serde_json::json!({"type": "subscribe", "station_id": station_id})
+                    .to_string()
+                    .into(),
             ))
             .await?;
         let _auth_ok = ws_recv_text(&mut socket, 10).await?;
@@ -1464,7 +1463,13 @@ async fn mixed_queue_drain_keeps_playing_with_auto_dj_picks() {
         let admin: (uuid::Uuid,) = sqlx::query_as("SELECT id FROM users WHERE username='admin'").fetch_one(&db).await?;
 
         std::fs::create_dir(files.path().join("audio"))?;
-        let tones = [(330.0, "tone A"), (440.0, "tone B"), (550.0, "tone C"), (660.0, "tone D"), (770.0, "tone E")];
+        let tones = [
+            (330.0, "tone A"),
+            (440.0, "tone B"),
+            (550.0, "tone C"),
+            (660.0, "tone D"),
+            (770.0, "tone E"),
+        ];
         let song_ids = tones
             .iter()
             .enumerate()
@@ -1647,7 +1652,14 @@ async fn auto_dj_keeps_songs_ahead_with_crossfade_handovers() {
         let admin: (uuid::Uuid,) = sqlx::query_as("SELECT id FROM users WHERE username='admin'").fetch_one(&db).await?;
 
         std::fs::create_dir(files.path().join("audio"))?;
-        let tones = [(330.0, "ka A"), (440.0, "ka B"), (550.0, "ka C"), (660.0, "ka D"), (770.0, "ka E"), (880.0, "ka F")];
+        let tones = [
+            (330.0, "ka A"),
+            (440.0, "ka B"),
+            (550.0, "ka C"),
+            (660.0, "ka D"),
+            (770.0, "ka E"),
+            (880.0, "ka F"),
+        ];
         let song_ids = tones
             .iter()
             .enumerate()
@@ -1721,7 +1733,9 @@ async fn auto_dj_keeps_songs_ahead_with_crossfade_handovers() {
         let first = wait_for_status(&server, &station_id, &auth, |status| status["playing"] == true).await?;
         let seeded = upcoming_rows(&db, &station_id).await;
         if seeded < 4 {
-            return Err(failure(format!("AutoDJ did not seed songs_ahead upcoming rows: {seeded} (status {first})")));
+            return Err(failure(format!(
+                "AutoDJ did not seed songs_ahead upcoming rows: {seeded} (status {first})"
+            )));
         }
 
         // After every handover the DB queue must be topped back up to the
@@ -1730,8 +1744,7 @@ async fn auto_dj_keeps_songs_ahead_with_crossfade_handovers() {
         let mut last_index = 0u64;
         for _ in 0..10 {
             let status = wait_for_status(&server, &station_id, &auth, |status| {
-                status["playing"] == true
-                    && status["song_index"].as_u64().is_some_and(|index| index > last_index)
+                status["playing"] == true && status["song_index"].as_u64().is_some_and(|index| index > last_index)
             })
             .await
             .map_err(|error| failure(format!("playback stalled between handovers: {error}")))?;
@@ -1878,7 +1891,14 @@ async fn autodj_never_overfills_the_upcoming_window() {
         let admin: (uuid::Uuid,) = sqlx::query_as("SELECT id FROM users WHERE username='admin'").fetch_one(&db).await?;
 
         std::fs::create_dir(files.path().join("audio"))?;
-        let tones = [(330.0, "nf A"), (440.0, "nf B"), (550.0, "nf C"), (660.0, "nf D"), (770.0, "nf E"), (880.0, "nf F")];
+        let tones = [
+            (330.0, "nf A"),
+            (440.0, "nf B"),
+            (550.0, "nf C"),
+            (660.0, "nf D"),
+            (770.0, "nf E"),
+            (880.0, "nf F"),
+        ];
         let song_ids = tones
             .iter()
             .enumerate()
@@ -1959,8 +1979,7 @@ async fn autodj_never_overfills_the_upcoming_window() {
             last_index: &mut u64,
         ) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
             let status = wait_for_status(server, station_id, auth, |status| {
-                status["playing"] == true
-                    && status["song_index"].as_u64().is_some_and(|index| index > *last_index)
+                status["playing"] == true && status["song_index"].as_u64().is_some_and(|index| index > *last_index)
             })
             .await?;
             *last_index = status["song_index"].as_u64().unwrap_or(*last_index);
@@ -2288,7 +2307,14 @@ async fn stale_cursor_heals_and_queue_keeps_refilling() {
         let admin: (uuid::Uuid,) = sqlx::query_as("SELECT id FROM users WHERE username='admin'").fetch_one(&db).await?;
 
         std::fs::create_dir(files.path().join("audio"))?;
-        let tones = [(330.0, "sc A"), (440.0, "sc B"), (550.0, "sc C"), (660.0, "sc D"), (770.0, "sc E"), (880.0, "sc F")];
+        let tones = [
+            (330.0, "sc A"),
+            (440.0, "sc B"),
+            (550.0, "sc C"),
+            (660.0, "sc D"),
+            (770.0, "sc E"),
+            (880.0, "sc F"),
+        ];
         let song_ids = tones
             .iter()
             .enumerate()
@@ -2379,8 +2405,7 @@ async fn stale_cursor_heals_and_queue_keeps_refilling() {
             last_index: &mut u64,
         ) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
             let status = wait_for_status(server, station_id, auth, |status| {
-                status["playing"] == true
-                    && status["song_index"].as_u64().is_some_and(|index| index > *last_index)
+                status["playing"] == true && status["song_index"].as_u64().is_some_and(|index| index > *last_index)
             })
             .await?;
             *last_index = status["song_index"].as_u64().unwrap_or(*last_index);
@@ -2416,18 +2441,15 @@ async fn stale_cursor_heals_and_queue_keeps_refilling() {
                 )));
             }
         }
-        let healed: (uuid::Uuid,) = sqlx::query_as(
-            "SELECT current_queue_item_id FROM stations WHERE id = $1",
-        )
-        .bind(uuid::Uuid::parse_str(&station_id).unwrap())
-        .fetch_one(&db)
-        .await?;
-        let healed_row: Option<(uuid::Uuid,)> =
-            sqlx::query_as("SELECT id FROM station_queue WHERE station_id = $1 AND id = $2")
-                .bind(uuid::Uuid::parse_str(&station_id).unwrap())
-                .bind(healed.0)
-                .fetch_optional(&db)
-                .await?;
+        let healed: (uuid::Uuid,) = sqlx::query_as("SELECT current_queue_item_id FROM stations WHERE id = $1")
+            .bind(uuid::Uuid::parse_str(&station_id).unwrap())
+            .fetch_one(&db)
+            .await?;
+        let healed_row: Option<(uuid::Uuid,)> = sqlx::query_as("SELECT id FROM station_queue WHERE station_id = $1 AND id = $2")
+            .bind(uuid::Uuid::parse_str(&station_id).unwrap())
+            .bind(healed.0)
+            .fetch_optional(&db)
+            .await?;
         if healed_row.is_none() {
             return Err(failure("cursor id was not healed to a live queue row"));
         }
@@ -2444,12 +2466,10 @@ async fn stale_cursor_heals_and_queue_keeps_refilling() {
             return Err(failure(format!("stream stop failed: {}", stopped.text())));
         }
         let station_uuid = uuid::Uuid::parse_str(&station_id).unwrap();
-        let all_ids: Vec<uuid::Uuid> = sqlx::query_scalar(
-            "SELECT id FROM station_queue WHERE station_id = $1 ORDER BY position",
-        )
-        .bind(station_uuid)
-        .fetch_all(&db)
-        .await?;
+        let all_ids: Vec<uuid::Uuid> = sqlx::query_scalar("SELECT id FROM station_queue WHERE station_id = $1 ORDER BY position")
+            .bind(station_uuid)
+            .fetch_all(&db)
+            .await?;
         sqlx::query(
             "UPDATE stations SET current_queue_item_id = NULL, \
              consumed_queue_item_ids = $1, current_song_index = $2, \
@@ -2470,9 +2490,7 @@ async fn stale_cursor_heals_and_queue_keeps_refilling() {
         wait_for_status(&server, &station_id, &auth, |status| status["playing"] == true).await?;
         let reseeded = visible_upcoming(&server, &station_id, &auth).await;
         if reseeded < 4 {
-            return Err(failure(format!(
-                "exhausted reseed left the upcoming window short: {reseeded} rows"
-            )));
+            return Err(failure(format!("exhausted reseed left the upcoming window short: {reseeded} rows")));
         }
         Ok(())
     }
@@ -2589,9 +2607,18 @@ async fn reorder_during_playback_plays_the_moved_track_next() {
             return Err(failure(format!("queue creation failed: {}", queued.text())));
         }
         let initial_items = queued.json::<Vec<serde_json::Value>>();
-        let a_id = initial_items[0]["id"].as_str().ok_or_else(|| failure("queue item has no id"))?.to_owned();
-        let b_id = initial_items[1]["id"].as_str().ok_or_else(|| failure("queue item has no id"))?.to_owned();
-        let c_id = initial_items[2]["id"].as_str().ok_or_else(|| failure("queue item has no id"))?.to_owned();
+        let a_id = initial_items[0]["id"]
+            .as_str()
+            .ok_or_else(|| failure("queue item has no id"))?
+            .to_owned();
+        let b_id = initial_items[1]["id"]
+            .as_str()
+            .ok_or_else(|| failure("queue item has no id"))?
+            .to_owned();
+        let c_id = initial_items[2]["id"]
+            .as_str()
+            .ok_or_else(|| failure("queue item has no id"))?
+            .to_owned();
 
         let started = server
             .post(&format!("/api/stations/{station_id}/stream/restart"))
@@ -2778,9 +2805,18 @@ async fn removed_staged_track_is_not_played_next() {
             return Err(failure(format!("queue creation failed: {}", queued.text())));
         }
         let initial_items = queued.json::<Vec<serde_json::Value>>();
-        let a_id = initial_items[0]["id"].as_str().ok_or_else(|| failure("queue item has no id"))?.to_owned();
-        let b_id = initial_items[1]["id"].as_str().ok_or_else(|| failure("queue item has no id"))?.to_owned();
-        let c_id = initial_items[2]["id"].as_str().ok_or_else(|| failure("queue item has no id"))?.to_owned();
+        let a_id = initial_items[0]["id"]
+            .as_str()
+            .ok_or_else(|| failure("queue item has no id"))?
+            .to_owned();
+        let b_id = initial_items[1]["id"]
+            .as_str()
+            .ok_or_else(|| failure("queue item has no id"))?
+            .to_owned();
+        let c_id = initial_items[2]["id"]
+            .as_str()
+            .ok_or_else(|| failure("queue item has no id"))?
+            .to_owned();
 
         let started = server
             .post(&format!("/api/stations/{station_id}/stream/restart"))
@@ -3045,15 +3081,13 @@ async fn repro_ws_queue_feed_survives_radio_restart() {
 
     let result: Result<StreamersMap, Box<dyn std::error::Error>> = async {
         let streamers: StreamersMap = Arc::new(Mutex::new(HashMap::new()));
-        let server = TestServer::builder()
-            .http_transport()
-            .build(router::create_router(
-                db.clone(),
-                config.clone(),
-                streamers.clone(),
-                icecast.clone(),
-                ListenersState::new(),
-            ))?;
+        let server = TestServer::builder().http_transport().build(router::create_router(
+            db.clone(),
+            config.clone(),
+            streamers.clone(),
+            icecast.clone(),
+            ListenersState::new(),
+        ))?;
         server
             .post("/api/setup/init")
             .json(&serde_json::json!({"username":"admin","password":"admin123","name":"Admin"}))
@@ -3101,10 +3135,21 @@ async fn repro_ws_queue_feed_survives_radio_restart() {
         let mp3_path = mp3_dir.join("wsfeed.mp3");
         let status = std::process::Command::new("gst-launch-1.0")
             .args([
-                "-q", "audiotestsrc", "freq=440", "wave=sine",
-                "samplesperbuffer=44100", "num-buffers=10",
-                "!", "audioconvert", "!", "lamemp3enc", "cbr=true", "target=bitrate", "bitrate=128",
-                "!", "filesink",
+                "-q",
+                "audiotestsrc",
+                "freq=440",
+                "wave=sine",
+                "samplesperbuffer=44100",
+                "num-buffers=10",
+                "!",
+                "audioconvert",
+                "!",
+                "lamemp3enc",
+                "cbr=true",
+                "target=bitrate",
+                "bitrate=128",
+                "!",
+                "filesink",
             ])
             .arg(format!("location={}", mp3_path.display()))
             .status()?;
@@ -3167,11 +3212,15 @@ async fn repro_ws_queue_feed_survives_radio_restart() {
         use futures::SinkExt;
         use tokio_tungstenite::tungstenite::Message as WsMessage;
         socket
-            .send(WsMessage::Text(serde_json::json!({"type": "auth", "token": token}).to_string().into()))
+            .send(WsMessage::Text(
+                serde_json::json!({"type": "auth", "token": token}).to_string().into(),
+            ))
             .await?;
         socket
             .send(WsMessage::Text(
-                serde_json::json!({"type": "subscribe", "station_id": station_id}).to_string().into(),
+                serde_json::json!({"type": "subscribe", "station_id": station_id})
+                    .to_string()
+                    .into(),
             ))
             .await?;
         let _auth_ok = ws_recv_text(&mut socket, 10).await?;
@@ -3180,9 +3229,7 @@ async fn repro_ws_queue_feed_survives_radio_restart() {
         let initial_snapshot = loop {
             let text = ws_recv_text(&mut socket, 10).await?;
             let msg: serde_json::Value = serde_json::from_str(&text).map_err(|_| failure("bad ws json"))?;
-            if msg["type"] == "queue_update"
-                && msg["data"].as_array().map(|a| a.len()) == Some(4)
-            {
+            if msg["type"] == "queue_update" && msg["data"].as_array().map(|a| a.len()) == Some(4) {
                 break msg;
             }
         };
@@ -3207,9 +3254,7 @@ async fn repro_ws_queue_feed_survives_radio_restart() {
             loop {
                 let text = ws_recv_text(&mut socket, 5).await?;
                 let msg: serde_json::Value = serde_json::from_str(&text).map_err(|_| failure("bad ws json"))?;
-                if msg["type"] == "queue_update"
-                    && msg["data"].as_array().map(|a| a.len()) == Some(3)
-                {
+                if msg["type"] == "queue_update" && msg["data"].as_array().map(|a| a.len()) == Some(3) {
                     return Ok::<serde_json::Value, Box<dyn std::error::Error>>(msg);
                 }
             }
@@ -3240,9 +3285,7 @@ async fn repro_ws_queue_feed_survives_radio_restart() {
                     .await
                     .map_err(|_| failure("station WS feed died after radio restart; UI freezes on the stale queue"))?;
                 let msg: serde_json::Value = serde_json::from_str(&text).map_err(|_| failure("bad ws json"))?;
-                if msg["type"] == "queue_update"
-                    && msg["data"].as_array().map(|a| a.len()) == Some(2)
-                {
+                if msg["type"] == "queue_update" && msg["data"].as_array().map(|a| a.len()) == Some(2) {
                     return Ok::<serde_json::Value, Box<dyn std::error::Error>>(msg);
                 }
             }
@@ -3346,10 +3389,21 @@ async fn repro_queue_modifications_persist_across_radio_restart() {
         let mp3_path = mp3_dir.join("qpersist.mp3");
         let status = std::process::Command::new("gst-launch-1.0")
             .args([
-                "-q", "audiotestsrc", "freq=440", "wave=sine",
-                "samplesperbuffer=44100", "num-buffers=10",
-                "!", "audioconvert", "!", "lamemp3enc", "cbr=true", "target=bitrate", "bitrate=128",
-                "!", "filesink",
+                "-q",
+                "audiotestsrc",
+                "freq=440",
+                "wave=sine",
+                "samplesperbuffer=44100",
+                "num-buffers=10",
+                "!",
+                "audioconvert",
+                "!",
+                "lamemp3enc",
+                "cbr=true",
+                "target=bitrate",
+                "bitrate=128",
+                "!",
+                "filesink",
             ])
             .arg(format!("location={}", mp3_path.display()))
             .status()?;
@@ -3547,10 +3601,21 @@ async fn repro_play_resumes_after_server_restart() {
         let mp3_path = mp3_dir.join("repro.mp3");
         let status = std::process::Command::new("gst-launch-1.0")
             .args([
-                "-q", "audiotestsrc", "freq=440", "wave=sine",
-                "samplesperbuffer=44100", "num-buffers=10",
-                "!", "audioconvert", "!", "lamemp3enc", "cbr=true", "target=bitrate", "bitrate=128",
-                "!", "filesink",
+                "-q",
+                "audiotestsrc",
+                "freq=440",
+                "wave=sine",
+                "samplesperbuffer=44100",
+                "num-buffers=10",
+                "!",
+                "audioconvert",
+                "!",
+                "lamemp3enc",
+                "cbr=true",
+                "target=bitrate",
+                "bitrate=128",
+                "!",
+                "filesink",
             ])
             .arg(format!("location={}", mp3_path.display()))
             .status()?;
@@ -3615,7 +3680,8 @@ async fn repro_play_resumes_after_server_restart() {
         let mut sock = tokio::net::TcpStream::connect(("127.0.0.1", port)).await?;
         use tokio::io::AsyncReadExt;
         use tokio::io::AsyncWriteExt;
-        sock.write_all(b"GET /restart-repro.mp3 HTTP/1.0\r\nHost: localhost\r\n\r\n").await?;
+        sock.write_all(b"GET /restart-repro.mp3 HTTP/1.0\r\nHost: localhost\r\n\r\n")
+            .await?;
         let mut buf = [0u8; 4096];
         let mut total = 0usize;
         let probe_deadline = Instant::now() + Duration::from_secs(5);
@@ -3627,7 +3693,9 @@ async fn repro_play_resumes_after_server_restart() {
             }
         }
         if total < 100 {
-            return Err(failure(format!("first session served only {total} bytes; pipeline is not broadcasting")));
+            return Err(failure(format!(
+                "first session served only {total} bytes; pipeline is not broadcasting"
+            )));
         }
         drop(sock);
         let playing = wait_for_status(&server, &station_id, &auth, |status| {
@@ -3780,10 +3848,21 @@ async fn repro_cold_restart_icecast_comes_back_with_the_backend() {
         let mp3_path = mp3_dir.join("cold.mp3");
         let status = std::process::Command::new("gst-launch-1.0")
             .args([
-                "-q", "audiotestsrc", "freq=440", "wave=sine",
-                "samplesperbuffer=44100", "num-buffers=10",
-                "!", "audioconvert", "!", "lamemp3enc", "cbr=true", "target=bitrate", "bitrate=128",
-                "!", "filesink",
+                "-q",
+                "audiotestsrc",
+                "freq=440",
+                "wave=sine",
+                "samplesperbuffer=44100",
+                "num-buffers=10",
+                "!",
+                "audioconvert",
+                "!",
+                "lamemp3enc",
+                "cbr=true",
+                "target=bitrate",
+                "bitrate=128",
+                "!",
+                "filesink",
             ])
             .arg(format!("location={}", mp3_path.display()))
             .status()?;
@@ -4000,10 +4079,21 @@ async fn repro_start_with_empty_queue_plays_once_songs_arrive() {
         let mp3_path = mp3_dir.join("empty.mp3");
         let status = std::process::Command::new("gst-launch-1.0")
             .args([
-                "-q", "audiotestsrc", "freq=440", "wave=sine",
-                "samplesperbuffer=44100", "num-buffers=10",
-                "!", "audioconvert", "!", "lamemp3enc", "cbr=true", "target=bitrate", "bitrate=128",
-                "!", "filesink",
+                "-q",
+                "audiotestsrc",
+                "freq=440",
+                "wave=sine",
+                "samplesperbuffer=44100",
+                "num-buffers=10",
+                "!",
+                "audioconvert",
+                "!",
+                "lamemp3enc",
+                "cbr=true",
+                "target=bitrate",
+                "bitrate=128",
+                "!",
+                "filesink",
             ])
             .arg(format!("location={}", mp3_path.display()))
             .status()?;
@@ -4091,10 +4181,21 @@ async fn repro_autocue_analyzed_mp3_starts_playing() {
         let mp3_path = mp3_dir.join("repro.mp3");
         let status = std::process::Command::new("gst-launch-1.0")
             .args([
-                "-q", "audiotestsrc", "freq=440", "wave=sine",
-                "samplesperbuffer=44100", "num-buffers=10",
-                "!", "audioconvert", "!", "lamemp3enc", "cbr=true", "target=bitrate", "bitrate=128",
-                "!", "filesink",
+                "-q",
+                "audiotestsrc",
+                "freq=440",
+                "wave=sine",
+                "samplesperbuffer=44100",
+                "num-buffers=10",
+                "!",
+                "audioconvert",
+                "!",
+                "lamemp3enc",
+                "cbr=true",
+                "target=bitrate",
+                "bitrate=128",
+                "!",
+                "filesink",
             ])
             .arg(format!("location={}", mp3_path.display()))
             .status()?;
@@ -4209,7 +4310,8 @@ async fn repro_autocue_analyzed_mp3_starts_playing() {
         let mut sock = tokio::net::TcpStream::connect(("127.0.0.1", port)).await?;
         use tokio::io::AsyncReadExt;
         use tokio::io::AsyncWriteExt;
-        sock.write_all(b"GET /autocue-repro.mp3 HTTP/1.0\r\nHost: localhost\r\n\r\n").await?;
+        sock.write_all(b"GET /autocue-repro.mp3 HTTP/1.0\r\nHost: localhost\r\n\r\n")
+            .await?;
         let mut buf = [0u8; 4096];
         let mut total = 0usize;
         let read_deadline = Instant::now() + Duration::from_secs(5);
@@ -4221,7 +4323,9 @@ async fn repro_autocue_analyzed_mp3_starts_playing() {
             }
         }
         if total < 100 {
-            return Err(failure(format!("icecast mount served only {total} bytes; pipeline is not broadcasting")));
+            return Err(failure(format!(
+                "icecast mount served only {total} bytes; pipeline is not broadcasting"
+            )));
         }
         drop(sock);
         let playing = wait_for_status(&server, &station_id, &auth, |status| {

@@ -10,7 +10,6 @@ use super::{
     SongInfo,
 };
 
-
 pub(crate) struct QueueManager {
     repository: QueueRepository,
     state: Mutex<QueueState>,
