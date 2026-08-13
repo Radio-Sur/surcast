@@ -473,6 +473,12 @@ mod tests {
     use crate::streamer::runtime::StationRuntime;
 
     use super::*;
+    fn unavailable_db() -> PgPool {
+        sqlx::postgres::PgPoolOptions::new()
+            .acquire_timeout(Duration::from_millis(10))
+            .connect_lazy("postgres://surcast:surcast@127.0.0.1:1/surcast")
+            .unwrap()
+    }
 
     struct FakePipeline {
         replacements: AtomicUsize,
@@ -578,9 +584,7 @@ mod tests {
         };
         let (status_tx, _) = broadcast::channel(1);
         let (queue_tx, _) = broadcast::channel(1);
-        let db = sqlx::postgres::PgPoolOptions::new()
-            .connect_lazy("postgres://surcast:surcast@localhost:5433/surcast")
-            .unwrap();
+        let db = unavailable_db();
         let station_id = Uuid::new_v4();
         let queue = Arc::new(QueueManager::new(db.clone(), station_id, String::new(), vec![song.clone()], 0));
         let pipeline = Arc::new(FakePipeline {
@@ -629,9 +633,7 @@ mod tests {
         // (the E2E suite covers the case where the refill succeeds).
         let (status_tx, _) = broadcast::channel(1);
         let (queue_tx, _) = broadcast::channel(1);
-        let db = sqlx::postgres::PgPoolOptions::new()
-            .connect_lazy("postgres://surcast:surcast@localhost:5433/surcast")
-            .unwrap();
+        let db = unavailable_db();
         let pipeline = Arc::new(FakePipeline {
             replacements: AtomicUsize::new(0),
             state_changes: AtomicUsize::new(0),
@@ -676,9 +678,7 @@ mod tests {
         let successor = song(2);
         let (status_tx, _) = broadcast::channel(1);
         let (queue_tx, _) = broadcast::channel(1);
-        let db = sqlx::postgres::PgPoolOptions::new()
-            .connect_lazy("postgres://surcast:surcast@localhost:5433/surcast")
-            .unwrap();
+        let db = unavailable_db();
         let station_id = Uuid::new_v4();
         let queue = Arc::new(QueueManager::new(
             db,
@@ -748,10 +748,7 @@ mod tests {
         };
         let (status_tx, _) = broadcast::channel(1);
         let (queue_tx, _) = broadcast::channel(1);
-        let db = sqlx::postgres::PgPoolOptions::new()
-            .acquire_timeout(Duration::from_millis(10))
-            .connect_lazy("postgres://surcast:surcast@localhost:5433/surcast")
-            .unwrap();
+        let db = unavailable_db();
         let station_id = Uuid::new_v4();
         let queue = Arc::new(QueueManager::new(db.clone(), station_id, String::new(), vec![song.clone()], 0));
         let pipeline = Arc::new(FakePipeline {
@@ -813,10 +810,7 @@ mod tests {
         };
         let (status_tx, _) = broadcast::channel(1);
         let (queue_tx, _) = broadcast::channel(1);
-        let db = sqlx::postgres::PgPoolOptions::new()
-            .acquire_timeout(Duration::from_millis(10))
-            .connect_lazy("postgres://surcast:surcast@localhost:5433/surcast")
-            .unwrap();
+        let db = unavailable_db();
         let station_id = Uuid::new_v4();
         let current = StationController::track(song.clone()).key;
         let queue = Arc::new(QueueManager::new(db, station_id, String::new(), vec![song], 0));
@@ -912,9 +906,7 @@ mod tests {
     async fn playing_controller(songs: Vec<SongInfo>) -> (StationController, Arc<FakePipeline>) {
         let (status_tx, _) = broadcast::channel(1);
         let (queue_tx, _) = broadcast::channel(1);
-        let db = sqlx::postgres::PgPoolOptions::new()
-            .connect_lazy("postgres://surcast:surcast@localhost:5433/surcast")
-            .unwrap();
+        let db = unavailable_db();
         let pipeline = Arc::new(FakePipeline {
             replacements: AtomicUsize::new(0),
             state_changes: AtomicUsize::new(0),
@@ -947,9 +939,7 @@ mod tests {
         let (mut controller, pipeline) = {
             let (status_tx, _) = broadcast::channel(1);
             let (queue_tx, _) = broadcast::channel(1);
-            let db = sqlx::postgres::PgPoolOptions::new()
-                .connect_lazy("postgres://surcast:surcast@localhost:5433/surcast")
-                .unwrap();
+            let db = unavailable_db();
             let pipeline = Arc::new(FakePipeline {
                 replacements: AtomicUsize::new(0),
                 state_changes: AtomicUsize::new(0),
@@ -990,9 +980,7 @@ mod tests {
         let (mut controller, _) = {
             let (status_tx, _) = broadcast::channel(1);
             let (queue_tx, _) = broadcast::channel(1);
-            let db = sqlx::postgres::PgPoolOptions::new()
-                .connect_lazy("postgres://surcast:surcast@localhost:5433/surcast")
-                .unwrap();
+            let db = unavailable_db();
             let pipeline = Arc::new(FakePipeline {
                 replacements: AtomicUsize::new(0),
                 state_changes: AtomicUsize::new(0),
