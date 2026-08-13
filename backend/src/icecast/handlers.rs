@@ -22,7 +22,7 @@ async fn quiesce_streamers(streamers: &StreamersMap) -> Vec<(Arc<StationStreamer
         let was_playing = streamer
             .status_json()
             .await
-            .map_or(false, |status| status["playing"].as_bool().unwrap_or(false));
+            .is_ok_and(|status| status["playing"].as_bool().unwrap_or(false));
         if was_playing {
             if let Err(error) = streamer.pause().await {
                 tracing::warn!(%error, "failed to pause streamer before Icecast restart");

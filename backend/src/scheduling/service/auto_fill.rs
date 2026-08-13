@@ -138,9 +138,8 @@ async fn fill_from_playlist_locked(
         .db_error("failed to find next queue position")?;
 
     let active_song_ids = active_song_ids(db, station_id).await?;
-    let mut added = 0i64;
-    for song_id in song_ids.iter().filter(|song_id| !active_song_ids.contains(song_id)) {
-        if added >= need {
+    for (added, song_id) in song_ids.iter().filter(|song_id| !active_song_ids.contains(song_id)).enumerate() {
+        if added as i64 >= need {
             break;
         }
         sqlx::query(
@@ -155,7 +154,6 @@ async fn fill_from_playlist_locked(
         .db_error("failed to enqueue playlist song")?;
 
         crate::songs::analysis::spawn_analysis(db, *song_id, station_id, upload_dir);
-        added += 1;
     }
 
     Ok(())
