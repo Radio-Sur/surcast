@@ -749,6 +749,7 @@ mod tests {
         let (status_tx, _) = broadcast::channel(1);
         let (queue_tx, _) = broadcast::channel(1);
         let db = sqlx::postgres::PgPoolOptions::new()
+            .acquire_timeout(Duration::from_millis(10))
             .connect_lazy("postgres://surcast:surcast@localhost:5433/surcast")
             .unwrap();
         let station_id = Uuid::new_v4();
@@ -813,6 +814,7 @@ mod tests {
         let (status_tx, _) = broadcast::channel(1);
         let (queue_tx, _) = broadcast::channel(1);
         let db = sqlx::postgres::PgPoolOptions::new()
+            .acquire_timeout(Duration::from_millis(10))
             .connect_lazy("postgres://surcast:surcast@localhost:5433/surcast")
             .unwrap();
         let station_id = Uuid::new_v4();

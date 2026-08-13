@@ -228,6 +228,7 @@ mod tests {
         assert_eq!(successor.queue_item_id, second_item);
     }
 
+    #[test]
     fn state_commits_current_item_and_returns_the_successor() {
         let first = song(Uuid::new_v4(), Uuid::new_v4(), 1);
         let second = song(Uuid::new_v4(), Uuid::new_v4(), 2);
