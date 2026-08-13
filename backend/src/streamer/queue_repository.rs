@@ -117,14 +117,10 @@ impl QueueRepository {
     ) -> Result<(), sqlx::Error> {
         self.persist_cursor_if_current(previous_current_queue_item_id, cursor).await?;
         self.trim_played_items().await;
-        // The cursor was just persisted, so the database count
-        // (position > current_song_index) is the authoritative upcoming
-        // window — the in-memory queue can lag the DB (rows added or removed
-        // by other clients) and would under- or over-fill. A failed fill is
-        // retried, bounded, so a transient DB error cannot leave the queue
-        // short for a whole song.
+        // Refill from the locked database state; the in-memory queue can lag
+        // rows added or removed by other clients.
         let mut attempts = 0;
-        while !self.refill(None).await && attempts < 2 {
+        while !self.refill().await && attempts < 2 {
             attempts += 1;
             tokio::time::sleep(std::time::Duration::from_millis(100 * attempts)).await;
         }
@@ -135,8 +131,8 @@ impl QueueRepository {
     /// completed, `false` when it failed (DB error, lock timeout, ...) — a
     /// failed fill must be retried by the caller, an empty successful fill
     /// means AutoDJ genuinely had nothing to add.
-    pub(crate) async fn refill(&self, upcoming: Option<i64>) -> bool {
-        match crate::scheduling::service::fill_queue_from_schedule(&self.db, self.station_id, upcoming, &self.upload_dir).await {
+    pub(crate) async fn refill(&self) -> bool {
+        match crate::scheduling::service::fill_queue_from_schedule(&self.db, self.station_id, &self.upload_dir).await {
             Ok(()) => true,
             Err(error) => {
                 tracing::warn!(station_id = %self.station_id, %error, "AutoDJ successor refill error");
@@ -146,26 +142,33 @@ impl QueueRepository {
     }
 
     pub(crate) async fn trim_played_items(&self) {
-        let row: Option<(i32, i32)> = sqlx::query_as("SELECT current_song_index, played_limit FROM stations WHERE id = $1")
+        let row: Option<(i32, Vec<Uuid>)> = sqlx::query_as("SELECT played_limit, consumed_queue_item_ids FROM stations WHERE id = $1")
             .bind(self.station_id)
             .fetch_optional(&self.db)
             .await
             .ok()
             .flatten();
-        let Some((current_idx, played_limit)) = row else {
+        let Some((played_limit, consumed_queue_item_ids)) = row else {
             return;
         };
-        if played_limit <= 0 || current_idx <= 0 {
+        if played_limit <= 0 || consumed_queue_item_ids.is_empty() {
             return;
         }
 
-        let played_items: Vec<(Uuid, Option<Uuid>)> =
-            sqlx::query_as("SELECT id, origin_playlist_id FROM station_queue WHERE station_id = $1 AND position < $2 ORDER BY position")
-                .bind(self.station_id)
-                .bind(current_idx)
-                .fetch_all(&self.db)
-                .await
-                .unwrap_or_default();
+        // Queue positions are mutable: insert, reorder, and playlist removal
+        // can all renumber them while a live track is playing. Only durable
+        // cursor identities establish that a row has been played.
+        let played_items: Vec<(Uuid, Option<Uuid>)> = sqlx::query_as(
+            "SELECT id, origin_playlist_id
+                 FROM station_queue
+                 WHERE station_id = $1 AND id = ANY($2)
+                 ORDER BY position",
+        )
+        .bind(self.station_id)
+        .bind(&consumed_queue_item_ids)
+        .fetch_all(&self.db)
+        .await
+        .unwrap_or_default();
         if played_items.is_empty() {
             return;
         }
@@ -202,15 +205,38 @@ impl QueueRepository {
                 }
             }
         }
-        for id in delete_ids {
-            if let Err(error) = sqlx::query("DELETE FROM station_queue WHERE id = $1 AND station_id = $2")
-                .bind(id)
+
+        let deleted_ids: Vec<Uuid> =
+            match sqlx::query_scalar("DELETE FROM station_queue WHERE station_id = $1 AND id = ANY($2) RETURNING id")
                 .bind(self.station_id)
-                .execute(&self.db)
+                .bind(&delete_ids)
+                .fetch_all(&self.db)
                 .await
             {
-                tracing::warn!(station_id = %self.station_id, %error, "failed to clean up queue item");
-            }
+                Ok(ids) => ids,
+                Err(error) => {
+                    tracing::warn!(station_id = %self.station_id, %error, "failed to clean up queue items");
+                    return;
+                }
+            };
+        if deleted_ids.is_empty() {
+            return;
+        }
+        if let Err(error) = sqlx::query(
+            "UPDATE stations
+             SET consumed_queue_item_ids = ARRAY(
+                 SELECT queue_item_id
+                 FROM unnest(consumed_queue_item_ids) AS queue_item_id
+                 WHERE NOT (queue_item_id = ANY($1))
+             )
+             WHERE id = $2",
+        )
+        .bind(&deleted_ids)
+        .bind(self.station_id)
+        .execute(&self.db)
+        .await
+        {
+            tracing::warn!(station_id = %self.station_id, %error, "failed to discard trimmed queue identities");
         }
     }
 

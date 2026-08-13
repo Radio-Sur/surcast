@@ -258,19 +258,22 @@ impl StationCommand {
                 Ok(operation) => PendingPipelineAction::operation(operation, Some(response)).launch(controller.driver()),
                 Err(error) => send(response, Err(error)),
             },
-            Self::Reconnect(response) => {
-                PendingPipelineAction::operation(controller.reconnect(), Some(response)).launch(controller.driver())
-            }
+            Self::Reconnect(response) => match controller.reconnect().await {
+                Ok(operation) => PendingPipelineAction::operation(operation, Some(response)).launch(controller.driver()),
+                Err(error) => send(response, Err(error)),
+            },
             Self::RetryReconnect {
                 generation,
                 output_epoch,
                 attempt,
-            } => {
-                if let Some(super::driver::PipelineOperation::Reconnect(target)) = controller.reconnect_if_current(generation, output_epoch)
-                {
+            } => match controller.reconnect_if_current(generation, output_epoch).await {
+                Ok(Some(super::driver::PipelineOperation::Reconnect(target))) => {
                     PendingPipelineAction::reconnect(target, retries, generation, output_epoch, attempt).launch(controller.driver());
                 }
-            }
+                Ok(Some(operation)) => PendingPipelineAction::operation(operation, None).launch(controller.driver()),
+                Ok(None) => {}
+                Err(error) => tracing::warn!(%error, generation, output_epoch, "failed to refresh Icecast reconnect target"),
+            },
             Self::Reload {
                 songs,
                 align_next,

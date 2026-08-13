@@ -24,6 +24,7 @@ pub(crate) struct QueueState {
 }
 
 impl QueueState {
+    #[cfg(test)]
     pub(crate) fn new(items: Vec<SongInfo>, current_index: usize) -> Self {
         let current = items.get(current_index).cloned();
         let consumed = items.iter().take(current_index).map(|song| song.queue_item_id).collect();
@@ -118,6 +119,12 @@ impl QueueState {
         self.current = Some(song);
         self.peek_next_song()
     }
+    pub(crate) fn finish_current(&mut self) -> Option<(Uuid, QueueCursor)> {
+        let current = self.current.take()?;
+        self.consumed.insert(current.queue_item_id);
+        self.legacy_position = current.position;
+        Some((current.queue_item_id, self.persistence_cursor()))
+    }
 
     pub(crate) fn persistence_cursor(&self) -> QueueCursor {
         let mut consumed_queue_item_ids: Vec<_> = self.consumed.iter().copied().collect();
@@ -127,19 +134,6 @@ impl QueueState {
             consumed_queue_item_ids,
             legacy_position: self.legacy_position,
         }
-    }
-
-    pub(crate) fn upcoming(&self) -> i64 {
-        self.items
-            .iter()
-            .filter(|song| {
-                !self.consumed.contains(&song.queue_item_id)
-                    && self
-                        .current
-                        .as_ref()
-                        .is_none_or(|current| current.queue_item_id != song.queue_item_id)
-            })
-            .count() as i64
     }
 
     fn first_unconsumed(&self) -> Option<SongInfo> {
@@ -207,7 +201,24 @@ mod tests {
                 legacy_position: b.position,
             }
         );
-        assert_eq!(state.upcoming(), 1);
+    }
+    #[test]
+    fn finishing_current_clears_it_and_persists_consumed_identity() {
+        let a = song(Uuid::new_v4(), 0);
+        let mut state = QueueState::new(vec![a.clone()], 0);
+
+        let (previous, cursor) = state.finish_current().unwrap();
+
+        assert_eq!(previous, a.queue_item_id);
+        assert!(state.current_song_info().is_none());
+        assert_eq!(
+            cursor,
+            QueueCursor {
+                current_queue_item_id: None,
+                consumed_queue_item_ids: vec![a.queue_item_id],
+                legacy_position: 0,
+            }
+        );
     }
 
     #[test]

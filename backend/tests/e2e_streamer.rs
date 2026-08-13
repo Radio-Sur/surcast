@@ -110,6 +110,7 @@ async fn managed_icecast_serves_gstreamer_encoded_mp3() {
     let files = TempDir::new().unwrap();
     let icecast_dir = TempDir::new().unwrap();
     let port = free_port();
+    let restarted_port = free_port();
     let icecast = IcecastManager::new(icecast_dir.path().into());
     icecast.start(port.into(), "surcast", "admin", "surcast").await.unwrap();
     let mut config = api_common::test_config();
@@ -241,7 +242,7 @@ async fn managed_icecast_serves_gstreamer_encoded_mp3() {
         let restarted_icecast = server
             .patch("/api/admin/icecast")
             .add_header("Authorization", &auth)
-            .json(&serde_json::json!({"enabled":true}))
+            .json(&serde_json::json!({"enabled":true, "port": restarted_port}))
             .await;
         if restarted_icecast.status_code() != 200 {
             return Err(failure(format!("Icecast restart failed: {}", restarted_icecast.text())));
@@ -255,7 +256,8 @@ async fn managed_icecast_serves_gstreamer_encoded_mp3() {
                 "Icecast reconnect changed the active track: {checkpoint} -> {reconnected}"
             )));
         }
-        let mut response = open_mount(&client, &url).await?;
+        let restarted_url = format!("http://127.0.0.1:{restarted_port}/e2e-stream.mp3");
+        let mut response = open_mount(&client, &restarted_url).await?;
         let chunk = tokio::time::timeout(Duration::from_secs(15), response.chunk()).await??;
         if chunk.is_none() {
             return Err(failure("reconnected mount returned EOF before an MP3 chunk"));
@@ -349,7 +351,7 @@ async fn managed_icecast_serves_gstreamer_encoded_mp3() {
         if streamers.lock().unwrap().len() != 1 {
             return Err(failure("stream restart created more than one station pipeline"));
         }
-        let mut response = open_mount(&client, &url).await?;
+        let mut response = open_mount(&client, &restarted_url).await?;
         if tokio::time::timeout(Duration::from_secs(15), response.chunk()).await??.is_none() {
             return Err(failure("restarted stream returned EOF before an MP3 chunk"));
         }
@@ -1383,6 +1385,22 @@ async fn repro_ws_feed_reports_stopped_after_queue_exhaustion() {
                 )));
             }
         }
+        let station_uuid = uuid::Uuid::parse_str(&station_id)?;
+        let queue_item_id: uuid::Uuid = sqlx::query_scalar("SELECT id FROM station_queue WHERE station_id = $1")
+            .bind(station_uuid)
+            .fetch_one(&db)
+            .await?;
+        let (current_queue_item_id, consumed_queue_item_ids): (Option<uuid::Uuid>, Vec<uuid::Uuid>) =
+            sqlx::query_as("SELECT current_queue_item_id, consumed_queue_item_ids FROM stations WHERE id = $1")
+                .bind(station_uuid)
+                .fetch_one(&db)
+                .await?;
+        if current_queue_item_id.is_some() || !consumed_queue_item_ids.contains(&queue_item_id) {
+            return Err(failure(format!(
+                "queue exhaustion was not persisted: current={current_queue_item_id:?}, consumed={consumed_queue_item_ids:?}"
+            )));
+        }
+
         Ok(())
     }
     .await;

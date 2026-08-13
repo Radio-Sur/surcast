@@ -1,6 +1,7 @@
 mod common;
 
 use chrono::{Datelike, NaiveDate, NaiveTime};
+use std::time::Duration;
 use surcast_backend::auth::models::Role;
 use surcast_backend::auth::repository as auth_repo;
 use surcast_backend::playlists::repository as playlists_repo;
@@ -40,6 +41,23 @@ async fn make_station(db: &sqlx::PgPool, user_id: Uuid) -> Uuid {
     .await
     .unwrap();
     id
+}
+async fn make_auto_dj_schedule(db: &sqlx::PgPool, station_id: Uuid) {
+    repository::insert_schedule(
+        db,
+        station_id,
+        chrono::Local::now().weekday().num_days_from_monday() as i16,
+        NaiveTime::MIN,
+        NaiveTime::from_hms_opt(23, 59, 59).unwrap(),
+        &SourceType::StationLibrary,
+        None,
+        Some(AutoDjMode::Sequential),
+        Some(false),
+        Some(0),
+        Some(2),
+    )
+    .await
+    .unwrap();
 }
 
 #[tokio::test]
@@ -339,19 +357,9 @@ async fn test_auto_fill_excludes_durable_current_and_upcoming_songs() {
     .await
     .unwrap();
 
-    let weekday = chrono::Local::now().weekday().num_days_from_monday() as i16;
-    sqlx::query(
-        "INSERT INTO station_schedules
-         (station_id, day_of_week, start_time, end_time, source_type, auto_dj_mode, auto_dj_avoid_repeat, auto_dj_min_gap, auto_dj_songs_ahead)
-         VALUES ($1, $2, '00:00', '23:59:59', 'station_library', 'sequential', false, 0, 2)",
-    )
-    .bind(station_id)
-    .bind(weekday)
-    .execute(&db)
-    .await
-    .unwrap();
+    make_auto_dj_schedule(&db, station_id).await;
 
-    service::fill_queue_from_schedule(&db, station_id, Some(1), "/tmp").await.unwrap();
+    service::fill_queue_from_schedule(&db, station_id, "/tmp").await.unwrap();
 
     let queued_song_ids: Vec<Uuid> = sqlx::query_scalar("SELECT song_id FROM station_queue WHERE station_id = $1 ORDER BY position")
         .bind(station_id)
@@ -359,4 +367,96 @@ async fn test_auto_fill_excludes_durable_current_and_upcoming_songs() {
         .await
         .unwrap();
     assert_eq!(queued_song_ids, vec![songs[0], songs[1], songs[2]]);
+}
+
+#[tokio::test]
+async fn concurrent_auto_dj_refills_do_not_overfill_queue() {
+    let db = common::setup_db().await;
+    let user_id = make_user(&db).await;
+    let station_id = make_station(&db, user_id).await;
+    for position in 0..8 {
+        let song_id = Uuid::new_v4();
+        sqlx::query(
+            "INSERT INTO songs (id, title, artist, file_path, uploaded_by)
+             VALUES ($1, $2, 'test', $3, $4)",
+        )
+        .bind(song_id)
+        .bind(format!("song-{position}"))
+        .bind(format!("/tmp/song-{position}.mp3"))
+        .bind(user_id)
+        .execute(&db)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO station_songs (station_id, song_id, position) VALUES ($1, $2, $3)")
+            .bind(station_id)
+            .bind(song_id)
+            .bind(position)
+            .execute(&db)
+            .await
+            .unwrap();
+    }
+
+    make_auto_dj_schedule(&db, station_id).await;
+
+    let (first, second) = tokio::join!(
+        service::fill_queue_from_schedule(&db, station_id, "/tmp"),
+        service::fill_queue_from_schedule(&db, station_id, "/tmp"),
+    );
+    first.unwrap();
+    second.unwrap();
+
+    let rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM station_queue WHERE station_id = $1")
+        .bind(station_id)
+        .fetch_one(&db)
+        .await
+        .unwrap();
+    assert_eq!(rows, 3, "one current row plus songs_ahead=2");
+}
+
+#[tokio::test]
+async fn cancelled_auto_dj_refill_releases_the_station_lock() {
+    let db = common::setup_db().await;
+    let user_id = make_user(&db).await;
+    let station_id = make_station(&db, user_id).await;
+    make_auto_dj_schedule(&db, station_id).await;
+
+    let mut table_lock = db.begin().await.unwrap();
+    sqlx::query("LOCK TABLE station_queue IN ACCESS EXCLUSIVE MODE")
+        .execute(&mut *table_lock)
+        .await
+        .unwrap();
+
+    let fill_db = db.clone();
+    let fill = tokio::spawn(async move { service::fill_queue_from_schedule(&fill_db, station_id, "/tmp").await });
+
+    let mut probe = db.acquire().await.unwrap();
+    let mut held = false;
+    for _ in 0..100 {
+        let acquired: bool = sqlx::query_scalar("SELECT pg_try_advisory_lock(hashtextextended($1, 0))")
+            .bind(station_id.to_string())
+            .fetch_one(&mut *probe)
+            .await
+            .unwrap();
+        if acquired {
+            sqlx::query("SELECT pg_advisory_unlock(hashtextextended($1, 0))")
+                .bind(station_id.to_string())
+                .execute(&mut *probe)
+                .await
+                .unwrap();
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        } else {
+            held = true;
+            break;
+        }
+    }
+    assert!(held, "the refill never acquired the station lock");
+
+    fill.abort();
+    let _ = fill.await;
+    table_lock.rollback().await.unwrap();
+
+    tokio::time::timeout(Duration::from_secs(2), service::fill_queue_from_schedule(&db, station_id, "/tmp"))
+        .await
+        .expect("cancelled refill left the station lock held")
+        .unwrap();
 }

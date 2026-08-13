@@ -37,7 +37,8 @@ async fn reconnect_streamers(active: Vec<(Arc<StationStreamer>, bool)>) {
     futures::future::join_all(active.into_iter().map(|(streamer, was_playing)| async move {
         if let Err(error) = streamer.reconnect().await {
             tracing::warn!(%error, "failed to reconnect streamer after Icecast restart");
-        } else if was_playing {
+        }
+        if was_playing {
             if let Err(error) = streamer.play().await {
                 tracing::warn!(%error, "failed to resume streamer after Icecast restart");
             }
@@ -66,13 +67,18 @@ pub async fn patch_settings(
     Json(update): Json<IcecastSettingsUpdate>,
 ) -> Result<impl IntoResponse, AppError> {
     let settings = models::update_settings(&db, &update).await?;
+    let active = if settings.mode == IcecastMode::External || settings.enabled {
+        quiesce_streamers(&streamers).await
+    } else {
+        Vec::new()
+    };
 
     if settings.mode == IcecastMode::External {
-        if let Err(e) = icecast_manager.stop().await {
-            tracing::warn!("Failed to stop icecast during patch: {e}");
+        if let Err(error) = icecast_manager.stop().await {
+            tracing::warn!(%error, "failed to stop managed Icecast during patch");
         }
+        reconnect_streamers(active).await;
     } else if settings.enabled {
-        let active = quiesce_streamers(&streamers).await;
         if let Err(error) = icecast_manager
             .restart(
                 settings.port,
@@ -83,13 +89,21 @@ pub async fn patch_settings(
             .await
         {
             tracing::warn!(%error, "failed to restart Icecast during patch");
+            // `quiesce_streamers` recorded the pre-restart intent. Restoring
+            // it here keeps a failed settings update from permanently pausing
+            // a station; output recovery will retry its target asynchronously.
+            for (streamer, was_playing) in active {
+                if was_playing {
+                    if let Err(error) = streamer.play().await {
+                        tracing::warn!(%error, "failed to restore streamer after Icecast restart failure");
+                    }
+                }
+            }
         } else {
             reconnect_streamers(active).await;
         }
-    } else {
-        if let Err(e) = icecast_manager.stop().await {
-            tracing::warn!("Failed to stop icecast during patch: {e}");
-        }
+    } else if let Err(error) = icecast_manager.stop().await {
+        tracing::warn!(%error, "failed to stop Icecast during patch");
     }
 
     let running = if settings.mode == IcecastMode::External {

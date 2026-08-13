@@ -1,3 +1,4 @@
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use gst::prelude::*;
@@ -12,6 +13,7 @@ pub(super) fn install(
     clock_gate: &gst::Element,
     active: Arc<Mutex<Option<ActivePlan>>>,
     replacing: Arc<Mutex<Option<ReplaceCancellation>>>,
+    output_reconnecting: Arc<AtomicBool>,
     events: mpsc::UnboundedSender<PipelineEvent>,
 ) -> Result<(), PipelineError> {
     let handover_active = active.clone();
@@ -75,12 +77,14 @@ pub(super) fn install(
         .ok_or_else(|| PipelineError::Pipeline("pipeline has no bus".into()))?;
     bus.set_sync_handler(move |_, message| {
         if let gst::MessageView::Error(error) = message.view() {
-            if let Some(active) = active.lock().unwrap_or_else(|error| error.into_inner()).as_ref() {
-                let _ = events.send(PipelineEvent::SinkDisconnected {
-                    generation: active.generation,
-                    output_epoch: active.output_epoch,
-                    message: error.error().to_string(),
-                });
+            if !output_reconnecting.load(Ordering::Acquire) {
+                if let Some(active) = active.lock().unwrap_or_else(|error| error.into_inner()).as_ref() {
+                    let _ = events.send(PipelineEvent::SinkDisconnected {
+                        generation: active.generation,
+                        output_epoch: active.output_epoch,
+                        message: error.error().to_string(),
+                    });
+                }
             }
         }
         gst::BusSyncReply::Pass

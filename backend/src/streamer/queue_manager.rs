@@ -58,31 +58,17 @@ impl QueueManager {
         }
     }
 
-    /// Ask AutoDJ / schedule fill to top the queue up. `None` counts the
-    /// upcoming rows from the database, so the in-memory queue does not need
-    /// to be in sync with the DB for the fill to target the right number of
-    /// songs. `Some(count)` uses the caller's count — the controller passes
-    /// the in-memory count at EOS, where the DB count would include the
-    /// just-finished (uncommitted) current track and the fill would stop the
-    /// station with songs still available. Returns `false` only when the
-    /// fill call itself failed.
-    pub(crate) async fn refill(&self, upcoming: Option<i64>) -> bool {
-        self.repository.refill(upcoming).await
-    }
-
-    pub(crate) fn upcoming(&self) -> i64 {
-        self.state.lock().unwrap_or_else(|error| error.into_inner()).upcoming()
+    /// Ask AutoDJ / schedule fill to top the queue up from the locked database
+    /// state. Returns `false` only when the fill call itself failed.
+    pub(crate) async fn refill(&self) -> bool {
+        self.repository.refill().await
     }
 
     pub async fn reload_from_db(&self) {
         self.retry_dirty_cursor().await;
-        let (songs, current_index) = self.repository.load().await;
+        let (songs, _current_index) = self.repository.load().await;
         let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
-        if state.current_song_info().is_none() {
-            *state = QueueState::new(songs, current_index);
-        } else {
-            state.replace(songs, true);
-        }
+        state.replace(songs, true);
     }
 
     pub fn reload_songs(&self, songs: Vec<SongInfo>, retain_missing_current: bool) {
@@ -90,6 +76,25 @@ impl QueueManager {
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .replace(songs, retain_missing_current);
+    }
+
+    pub async fn finish_current(&self) {
+        let Some((previous_current_queue_item_id, cursor)) = ({
+            let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+            state.finish_current()
+        }) else {
+            return;
+        };
+        if let Err(error) = self
+            .repository
+            .persist_cursor_if_current(Some(previous_current_queue_item_id), &cursor)
+            .await
+        {
+            tracing::warn!(station_id = %self.station_id(), %error, "deferring terminal queue cursor persistence");
+            *self.dirty_cursor.lock().unwrap_or_else(|error| error.into_inner()) = Some((Some(previous_current_queue_item_id), cursor));
+        } else {
+            *self.dirty_cursor.lock().unwrap_or_else(|error| error.into_inner()) = None;
+        }
     }
 
     pub async fn trim_played_items(&self) {

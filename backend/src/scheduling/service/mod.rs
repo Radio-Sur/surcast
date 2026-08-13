@@ -107,7 +107,6 @@ async fn fill_from_schedule_entry(
     auto_dj_avoid_repeat: Option<bool>,
     auto_dj_min_gap: Option<i32>,
     auto_dj_songs_ahead: Option<i32>,
-    upcoming_count: Option<i64>,
     upload_dir: &str,
 ) -> Result<(), AppError> {
     match source_type {
@@ -122,7 +121,7 @@ async fn fill_from_schedule_entry(
                         min_gap: auto_dj_min_gap.unwrap_or(3),
                         songs_ahead: auto_dj_songs_ahead.unwrap_or(5),
                     };
-                    self::auto_fill::fill_from_auto_dj_source(db, station_id, &config, upcoming_count, upload_dir).await?;
+                    self::auto_fill::fill_from_auto_dj_source(db, station_id, &config, upload_dir).await?;
                 } else {
                     self::auto_fill::fill_from_playlist(db, station_id, pid, auto_dj_songs_ahead, upload_dir).await?;
                 }
@@ -137,18 +136,13 @@ async fn fill_from_schedule_entry(
                 min_gap: auto_dj_min_gap.unwrap_or(3),
                 songs_ahead: auto_dj_songs_ahead.unwrap_or(5),
             };
-            self::auto_fill::fill_from_auto_dj_source(db, station_id, &config, upcoming_count, upload_dir).await?;
+            self::auto_fill::fill_from_auto_dj_source(db, station_id, &config, upload_dir).await?;
         }
     }
     Ok(())
 }
 
-pub async fn fill_queue_from_schedule(
-    db: &PgPool,
-    station_id: Uuid,
-    upcoming_count: Option<i64>,
-    upload_dir: &str,
-) -> Result<(), AppError> {
+pub async fn fill_queue_from_schedule(db: &PgPool, station_id: Uuid, upload_dir: &str) -> Result<(), AppError> {
     let now = Local::now();
     let current_day = now.weekday().num_days_from_monday() as i16;
     let current_time = now.time();
@@ -174,7 +168,6 @@ pub async fn fill_queue_from_schedule(
             active.auto_dj_avoid_repeat,
             active.auto_dj_min_gap,
             active.auto_dj_songs_ahead,
-            upcoming_count,
             upload_dir,
         )
         .await?;
@@ -222,7 +215,6 @@ pub async fn fill_queue_from_schedule(
                 event.auto_dj_avoid_repeat,
                 event.auto_dj_min_gap,
                 event.auto_dj_songs_ahead,
-                upcoming_count,
                 upload_dir,
             )
             .await?;
@@ -230,7 +222,7 @@ pub async fn fill_queue_from_schedule(
         }
     }
 
-    self::auto_fill::fill_from_auto_config(db, station_id, upcoming_count, upload_dir).await?;
+    self::auto_fill::fill_from_auto_config(db, station_id, upload_dir).await?;
 
     Ok(())
 }

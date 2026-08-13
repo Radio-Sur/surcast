@@ -15,6 +15,7 @@ use crate::stations::repository;
 
 pub(crate) struct StationController {
     queue: Arc<QueueManager>,
+    db: PgPool,
     station_id: uuid::Uuid,
     playback: StationPlaybackConfig,
     driver: PipelineDriver,
@@ -56,8 +57,9 @@ impl StationController {
         let instance = factory.create(playback.pipeline_config(target.clone())).await?;
         Ok((
             Self {
-                station_id,
                 queue,
+                db,
+                station_id,
                 playback,
                 driver: PipelineDriver::spawn(instance.pipeline),
                 target,
@@ -158,8 +160,8 @@ impl StationController {
                 message,
             } => {
                 tracing::error!(station_id = %self.station_id, generation, output_epoch, %message, "GStreamer output disconnected");
-                if generation == self.generation && output_epoch == self.output_epoch && self.state == PipelineState::Playing {
-                    return Some(Ok(self.reconnect()));
+                if self.output_is_current(generation, output_epoch) {
+                    return Some(self.reconnect().await);
                 }
             }
         }
@@ -225,7 +227,7 @@ impl StationController {
                 // cannot leave the station dead.
                 let mut attempts = 0u32;
                 loop {
-                    let ran = self.queue.refill(None).await;
+                    let ran = self.queue.refill().await;
                     self.queue.reload_from_db().await;
                     if self.queue.current_song_info().is_some() || ran || attempts >= 2 {
                         break;
@@ -245,7 +247,7 @@ impl StationController {
                 // is missing. The in-memory copy is not reloaded here — the
                 // first commit (handover or skip) reloads it, and the panel
                 // queue view reads the database directly.
-                self.queue.refill(None).await;
+                self.queue.refill().await;
                 self.push_queue_update().await;
             }
             let operation = self.replace_current(ReplaceMode::InitialReplaceFromStopped);
@@ -267,36 +269,51 @@ impl StationController {
         PipelineOperation::Stop
     }
 
-    pub(crate) fn reconnect(&self) -> PipelineOperation {
-        PipelineOperation::Reconnect(self.target.clone())
+    pub(crate) async fn reconnect(&mut self) -> Result<PipelineOperation, PipelineError> {
+        let (endpoint, password) = crate::icecast::models::get_connection_config(&self.db)
+            .await
+            .map_err(|error| PipelineError::Pipeline(error.to_string()))?;
+        self.target = IcecastTarget::parse(&endpoint, password, &self.target.mount, self.target.stream_name.clone())?;
+        Ok(PipelineOperation::Reconnect(self.target.clone()))
     }
-    pub(crate) fn reconnect_if_current(&self, generation: u64, output_epoch: u64) -> Option<PipelineOperation> {
-        (generation == self.generation && output_epoch == self.output_epoch && self.state == PipelineState::Playing)
-            .then(|| self.reconnect())
+    fn output_is_current(&self, generation: u64, output_epoch: u64) -> bool {
+        generation == self.generation && output_epoch == self.output_epoch && self.state == PipelineState::Playing
     }
 
-    fn stop_after_current(&mut self) -> PipelineOperation {
+    pub(crate) async fn reconnect_if_current(
+        &mut self,
+        generation: u64,
+        output_epoch: u64,
+    ) -> Result<Option<PipelineOperation>, PipelineError> {
+        if self.output_is_current(generation, output_epoch) {
+            self.reconnect().await.map(Some)
+        } else {
+            Ok(None)
+        }
+    }
+
+    async fn stop_after_current(&mut self) -> PipelineOperation {
+        self.queue.finish_current().await;
         self.generation += 1;
         self.state = PipelineState::Stopped;
         // No StatusEvent is pushed anywhere else on this path; without this
         // the panel live feed keeps the last playing state forever and shows
         // an exhausted station as still broadcasting.
-        let song = self.queue.current_song_info();
         let _ = self.status_tx.send(StatusEvent::State {
             playing: false,
             song_index: self.queue.current_song_index(),
             total: self.queue.song_count(),
             elapsed: 0,
-            title: song.as_ref().map_or_else(String::new, |song| song.title.clone()),
-            artist: song.as_ref().map_or_else(String::new, |song| song.artist.clone()),
-            duration: song.map_or(0, |song| song.duration),
+            title: String::new(),
+            artist: String::new(),
+            duration: 0,
         });
         PipelineOperation::Stop
     }
 
     pub(crate) async fn skip(&mut self) -> Result<PipelineOperation, PipelineError> {
         let Some(current) = self.queue.current_song_info() else {
-            return Ok(self.stop_after_current());
+            return Ok(self.stop_after_current().await);
         };
         let current_key = TrackKey {
             queue_item_id: current.queue_item_id,
@@ -319,12 +336,7 @@ impl StationController {
             // transient DB error cannot kill the radio for good.
             let mut attempts = 0u32;
             loop {
-                // The in-memory queue was just reloaded from the DB, so its
-                // upcoming count is authoritative — and unlike the DB count
-                // (rows with position > the persisted cursor index) it does
-                // not include the just-finished current track when the cursor
-                // was never committed (e.g. the first track of a session).
-                let ran = self.queue.refill(Some(self.queue.upcoming())).await;
+                let ran = self.queue.refill().await;
                 self.queue.reload_from_db().await;
                 next = self.queue.successor_after(&current_key);
                 if next.is_some() || ran || attempts >= 2 {
@@ -335,7 +347,7 @@ impl StationController {
             }
         }
         let Some(next) = next else {
-            return Ok(self.stop_after_current());
+            return Ok(self.stop_after_current().await);
         };
         let next_key = TrackKey {
             queue_item_id: next.queue_item_id,
@@ -594,6 +606,7 @@ mod tests {
         });
         let mut controller = StationController {
             queue,
+            db: unavailable_db(),
             station_id,
             playback: StationPlaybackConfig::from_persisted("off", 0, 0, 0).unwrap(),
             driver: PipelineDriver::spawn(pipeline.clone()),
@@ -615,15 +628,12 @@ mod tests {
         assert_eq!(pipeline.replacements.load(Ordering::Acquire), 0);
         controller.state = PipelineState::Playing;
         controller.output_epoch = 3;
-        assert!(matches!(
-            controller.reconnect_if_current(1, 3),
-            Some(PipelineOperation::Reconnect(_))
-        ));
-        assert!(controller.reconnect_if_current(0, 3).is_none());
+        assert!(controller.output_is_current(1, 3));
+        assert!(!controller.output_is_current(0, 3));
         controller.state = PipelineState::Paused;
-        assert!(controller.reconnect_if_current(1, 3).is_none());
+        assert!(!controller.output_is_current(1, 3));
         controller.stop();
-        assert!(controller.reconnect_if_current(1, 3).is_none());
+        assert!(!controller.output_is_current(1, 3));
     }
 
     #[tokio::test]
@@ -641,6 +651,7 @@ mod tests {
         });
         let mut controller = StationController {
             queue: Arc::new(QueueManager::new(db, Uuid::new_v4(), String::new(), Vec::new(), 0)),
+            db: unavailable_db(),
             station_id: Uuid::new_v4(),
             playback: StationPlaybackConfig::from_persisted("off", 0, 0, 0).unwrap(),
             driver: PipelineDriver::spawn(pipeline.clone()),
@@ -695,6 +706,7 @@ mod tests {
         let failed_key = StationController::track(failed).key;
         let mut controller = StationController {
             queue: queue.clone(),
+            db: unavailable_db(),
             station_id,
             playback: StationPlaybackConfig::from_persisted("off", 0, 0, 0).unwrap(),
             driver: PipelineDriver::spawn(pipeline),
@@ -758,6 +770,7 @@ mod tests {
         });
         let controller = StationController {
             queue,
+            db: unavailable_db(),
             station_id,
             playback: StationPlaybackConfig::from_persisted("off", 0, 0, 0).unwrap(),
             driver: PipelineDriver::spawn(pipeline.clone()),
@@ -821,6 +834,7 @@ mod tests {
         });
         let controller = StationController {
             queue,
+            db: unavailable_db(),
             station_id,
             playback: StationPlaybackConfig::from_persisted("off", 0, 0, 0).unwrap(),
             driver: PipelineDriver::spawn(pipeline.clone()),
@@ -914,6 +928,7 @@ mod tests {
         });
         let mut controller = StationController {
             queue: Arc::new(QueueManager::new(db, Uuid::new_v4(), String::new(), songs, 0)),
+            db: unavailable_db(),
             station_id: Uuid::new_v4(),
             playback: StationPlaybackConfig::from_persisted("off", 0, 0, 0).unwrap(),
             driver: PipelineDriver::spawn(pipeline.clone()),
@@ -947,6 +962,7 @@ mod tests {
             });
             let mut controller = StationController {
                 queue: Arc::new(QueueManager::new(db, Uuid::new_v4(), String::new(), Vec::new(), 0)),
+                db: unavailable_db(),
                 station_id: Uuid::new_v4(),
                 playback: StationPlaybackConfig::from_persisted("off", 0, 0, 0).unwrap(),
                 driver: PipelineDriver::spawn(pipeline.clone()),
@@ -988,6 +1004,7 @@ mod tests {
             });
             let mut controller = StationController {
                 queue: Arc::new(QueueManager::new(db, Uuid::new_v4(), String::new(), Vec::new(), 0)),
+                db: unavailable_db(),
                 station_id: Uuid::new_v4(),
                 playback: StationPlaybackConfig::from_persisted("off", 0, 0, 0).unwrap(),
                 driver: PipelineDriver::spawn(pipeline.clone()),

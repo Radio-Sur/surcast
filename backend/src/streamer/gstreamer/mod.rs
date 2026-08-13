@@ -84,6 +84,13 @@ impl Drop for ReplacementCleanup {
     }
 }
 
+struct OutputReconnectGuard(Arc<AtomicBool>);
+
+impl Drop for OutputReconnectGuard {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
+    }
+}
 enum SinkSlot {
     Active(gst::Element),
     Replacing { _old_sink: gst::Element, _candidate: gst::Element },
@@ -101,6 +108,7 @@ pub(crate) struct GStreamerPipeline {
     branches: Mutex<Vec<Branch>>,
     active: Arc<Mutex<Option<ActivePlan>>>,
     replacing: Arc<Mutex<Option<ReplaceCancellation>>>,
+    output_reconnecting: Arc<AtomicBool>,
     snapshot: Mutex<PipelineSnapshot>,
     events: mpsc::UnboundedSender<PipelineEvent>,
 }
@@ -260,6 +268,44 @@ impl GStreamerPipeline {
             return Err(error);
         }
         Ok(())
+    }
+    fn rollback_sink_replacement(
+        &self,
+        old_sink: &gst::Element,
+        candidate: &gst::Element,
+        previous_state: PipelineState,
+    ) -> Result<(), PipelineError> {
+        self.clock_gate.unlink(candidate);
+        let mut failures = Vec::new();
+        if let Err(error) = candidate.set_state(gst::State::Null) {
+            failures.push(format!("could not stop candidate sink: {error}"));
+        }
+        if let Err(error) = self.pipeline.remove(candidate) {
+            failures.push(format!("could not remove candidate sink: {error}"));
+        }
+        if let Err(error) = self.clock_gate.link(old_sink) {
+            failures.push(format!("could not relink previous sink: {error}"));
+        }
+        if failures.is_empty() {
+            if let Err(error) = self.restore_state(previous_state) {
+                failures.push(format!("could not restore pipeline state: {error}"));
+            }
+        }
+        if failures.is_empty() {
+            *self.sink.lock().unwrap_or_else(|error| error.into_inner()) = SinkSlot::Active(old_sink.clone());
+            Ok(())
+        } else {
+            self.force_stopped();
+            *self.sink.lock().unwrap_or_else(|error| error.into_inner()) = SinkSlot::Active(old_sink.clone());
+            Err(PipelineError::Pipeline(format!(
+                "sink replacement rollback failed: {}",
+                failures.join("; ")
+            )))
+        }
+    }
+    fn suppress_output_events(&self) -> OutputReconnectGuard {
+        self.output_reconnecting.store(true, Ordering::Release);
+        OutputReconnectGuard(self.output_reconnecting.clone())
     }
 }
 
@@ -508,6 +554,7 @@ impl PlaybackPipeline for GStreamerPipeline {
     }
 
     async fn reconnect(&self, target: IcecastTarget) -> Result<(), PipelineError> {
+        let _reconnect_guard = self.suppress_output_events();
         let previous_state = self.snapshot.lock().unwrap_or_else(|error| error.into_inner()).state;
         if previous_state == PipelineState::Stopped {
             let sink = self.sink.lock().unwrap_or_else(|error| error.into_inner());
@@ -524,15 +571,31 @@ impl PlaybackPipeline for GStreamerPipeline {
             PipelineState::Paused => gst::State::Paused,
             PipelineState::Stopped => unreachable!("stopped reconnect returned above"),
         };
-        // A paused pipeline has no active output to preserve. Cycling it through Ready
-        // forces a newly inserted sink to complete its later preroll before resume.
+        // Settings changes quiesce the stream first. `shout2send` applies its
+        // endpoint properties only from Null, so fully reset the graph before
+        // changing the active sink and then restore Paused for the caller to
+        // resume.
         if previous_state == PipelineState::Paused {
-            // Reassert Paused before the Ready cycle so every newly inserted child
-            // participates in the same state transition when playback resumes.
-            self.set_state(PipelineState::Paused)?;
             self.pipeline
-                .set_state(gst::State::Ready)
+                .set_state(gst::State::Null)
                 .map_err(|error| PipelineError::Pipeline(error.to_string()))?;
+            let (result, current, pending) = self.pipeline.state(gst::ClockTime::from_seconds(5));
+            result.map_err(|error| PipelineError::Pipeline(error.to_string()))?;
+            if current != gst::State::Null {
+                return Err(PipelineError::Pipeline(format!(
+                    "output reset stalled at {current:?} with {pending:?} pending"
+                )));
+            }
+            {
+                let sink = self.sink.lock().unwrap_or_else(|error| error.into_inner());
+                let SinkSlot::Active(sink) = &*sink else {
+                    return Err(PipelineError::StalePlan);
+                };
+                if self.sink_factory == sink::DEFAULT_FACTORY {
+                    sink::configure(sink, &target);
+                }
+            }
+            return self.restore_state(PipelineState::Paused);
         }
 
         let old_sink = match &*self.sink.lock().unwrap_or_else(|error| error.into_inner()) {
@@ -548,39 +611,38 @@ impl PlaybackPipeline for GStreamerPipeline {
             _candidate: candidate.clone(),
         };
 
-        self.clock_gate.unlink(&old_sink);
-        if let Err(error) = self.clock_gate.link(&candidate) {
-            let _ = candidate.set_state(gst::State::Null);
-            let _ = self.pipeline.remove(&candidate);
-            let _ = self.clock_gate.link(&old_sink);
-            *self.sink.lock().unwrap_or_else(|error| error.into_inner()) = SinkSlot::Active(old_sink);
-            return Err(PipelineError::Pipeline(error.to_string()));
-        }
-        self.pipeline
-            .set_state(expected_state)
-            .map_err(|error| PipelineError::Pipeline(error.to_string()))?;
-        let (result, current, pending) = self.pipeline.state(gst::ClockTime::from_seconds(5));
-        result.map_err(|error| PipelineError::Pipeline(error.to_string()))?;
-        if current != expected_state {
-            self.clock_gate.unlink(&candidate);
-            let _ = candidate.set_state(gst::State::Null);
-            let _ = self.pipeline.remove(&candidate);
-            if self.clock_gate.link(&old_sink).is_err() {
-                let _ = self.set_state(PipelineState::Stopped);
-                *self.active.lock().unwrap_or_else(|poison| poison.into_inner()) = None;
-                return Err(PipelineError::Pipeline("sink replacement and rollback failed".into()));
+        let replacement = (|| -> Result<(), PipelineError> {
+            self.clock_gate.unlink(&old_sink);
+            self.clock_gate
+                .link(&candidate)
+                .map_err(|error| PipelineError::Pipeline(error.to_string()))?;
+            candidate
+                .sync_state_with_parent()
+                .map_err(|error| PipelineError::Pipeline(error.to_string()))?;
+            self.pipeline
+                .set_state(expected_state)
+                .map_err(|error| PipelineError::Pipeline(error.to_string()))?;
+            let (result, current, pending) = self.pipeline.state(gst::ClockTime::from_seconds(5));
+            result.map_err(|error| PipelineError::Pipeline(error.to_string()))?;
+            if current != expected_state {
+                return Err(PipelineError::Pipeline(format!(
+                    "reconnect transition to {expected_state:?} stalled at {current:?} with {pending:?} pending"
+                )));
             }
-            *self.sink.lock().unwrap_or_else(|error| error.into_inner()) = SinkSlot::Active(old_sink);
-            return Err(PipelineError::Pipeline(format!(
-                "reconnect transition to {expected_state:?} stalled at {current:?} with {pending:?} pending"
-            )));
+            old_sink
+                .set_state(gst::State::Null)
+                .map_err(|error| PipelineError::Pipeline(error.to_string()))?;
+            self.pipeline
+                .remove(&old_sink)
+                .map_err(|error| PipelineError::Pipeline(error.to_string()))?;
+            Ok(())
+        })();
+
+        if let Err(error) = replacement {
+            self.rollback_sink_replacement(&old_sink, &candidate, previous_state)?;
+            return Err(error);
         }
-        old_sink
-            .set_state(gst::State::Null)
-            .map_err(|error| PipelineError::Pipeline(error.to_string()))?;
-        self.pipeline
-            .remove(&old_sink)
-            .map_err(|error| PipelineError::Pipeline(error.to_string()))?;
+
         *self.sink.lock().unwrap_or_else(|error| error.into_inner()) = SinkSlot::Active(candidate);
         Ok(())
     }
@@ -617,7 +679,16 @@ impl PlaybackPipelineFactory for GStreamerPipelineFactory {
         let (events, receiver) = mpsc::unbounded_channel();
         let active: Arc<Mutex<Option<ActivePlan>>> = Arc::new(Mutex::new(None));
         let replacing: Arc<Mutex<Option<ReplaceCancellation>>> = Arc::new(Mutex::new(None));
-        bus::install(&pipeline, &clock_gate, active.clone(), replacing.clone(), events.clone()).expect("bus installed");
+        let output_reconnecting = Arc::new(AtomicBool::new(false));
+        bus::install(
+            &pipeline,
+            &clock_gate,
+            active.clone(),
+            replacing.clone(),
+            output_reconnecting.clone(),
+            events.clone(),
+        )
+        .expect("bus installed");
         Ok(PipelineInstance {
             pipeline: Arc::new(GStreamerPipeline {
                 pipeline,
@@ -631,6 +702,7 @@ impl PlaybackPipelineFactory for GStreamerPipelineFactory {
                 branches: Mutex::new(Vec::new()),
                 active,
                 replacing,
+                output_reconnecting,
                 snapshot: Mutex::new(PipelineSnapshot {
                     state: PipelineState::Stopped,
                     elapsed: Duration::ZERO,
@@ -1290,7 +1362,16 @@ mod tests {
         let (events, receiver) = mpsc::unbounded_channel();
         let active: Arc<Mutex<Option<ActivePlan>>> = Arc::new(Mutex::new(None));
         let replacing: Arc<Mutex<Option<ReplaceCancellation>>> = Arc::new(Mutex::new(None));
-        bus::install(&pipeline, &clock_gate, active.clone(), replacing.clone(), events.clone()).expect("bus installed");
+        let output_reconnecting = Arc::new(AtomicBool::new(false));
+        bus::install(
+            &pipeline,
+            &clock_gate,
+            active.clone(),
+            replacing.clone(),
+            output_reconnecting.clone(),
+            events.clone(),
+        )
+        .expect("bus installed");
         let pipeline = GStreamerPipeline {
             pipeline,
             mixer,
@@ -1303,6 +1384,7 @@ mod tests {
             branches: Mutex::new(Vec::new()),
             active,
             replacing,
+            output_reconnecting,
             snapshot: Mutex::new(PipelineSnapshot {
                 state: PipelineState::Stopped,
                 elapsed: Duration::ZERO,
