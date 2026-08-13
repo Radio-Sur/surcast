@@ -13,7 +13,7 @@ use std::{
 use surcast_backend::{
     api::router::{self, StreamersMap},
     icecast::IcecastManager,
-    listeners::ListenersState,
+    listeners::{ListenerUpdate, ListenersState},
 };
 use tempfile::TempDir;
 
@@ -116,6 +116,7 @@ async fn managed_icecast_serves_gstreamer_encoded_mp3() {
     let mut config = api_common::test_config();
     config.upload_dir = files.path().display().to_string();
     let streamers: StreamersMap = Arc::new(Mutex::new(HashMap::new()));
+    let listeners = ListenersState::new();
 
     let result: Result<(), Box<dyn std::error::Error>> = async {
         let server = TestServer::new(router::create_router(
@@ -123,7 +124,7 @@ async fn managed_icecast_serves_gstreamer_encoded_mp3() {
             config,
             streamers.clone(),
             icecast.clone(),
-            ListenersState::new(),
+            listeners.clone(),
         ));
         server
             .post("/api/setup/init")
@@ -217,6 +218,22 @@ async fn managed_icecast_serves_gstreamer_encoded_mp3() {
             status["playing"] == true && status["title"] == "first tone"
         })
         .await?;
+        let station_uuid = uuid::Uuid::parse_str(&station_id)?;
+        surcast_backend::listeners::spawn_poller(db.clone(), listeners.clone());
+        let initial_poll_deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            if listeners
+                .live(station_uuid)
+                .await
+                .is_some_and(|live| live.online && live.listeners == 0)
+            {
+                break;
+            }
+            if Instant::now() >= initial_poll_deadline {
+                return Err(failure("listener poller did not publish its initial zero count"));
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
 
         let url = format!("http://127.0.0.1:{port}/e2e-stream.mp3");
         let client = reqwest::Client::builder().timeout(Duration::from_secs(5)).build()?;
@@ -232,6 +249,29 @@ async fn managed_icecast_serves_gstreamer_encoded_mp3() {
         let chunk = tokio::time::timeout(Duration::from_secs(15), response.chunk()).await??;
         if chunk.is_none() {
             return Err(failure("Icecast mount returned EOF before an MP3 chunk"));
+        }
+        let listener_deadline = Instant::now() + Duration::from_secs(8);
+        loop {
+            if listeners
+                .live(station_uuid)
+                .await
+                .is_some_and(|live| live.online && live.listeners == 1)
+            {
+                break;
+            }
+            if Instant::now() >= listener_deadline {
+                return Err(failure("live listener count did not reach one within 8 seconds"));
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+        let persisted_samples: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM listener_stats WHERE station_id = $1")
+            .bind(station_uuid)
+            .fetch_one(&db)
+            .await?;
+        if persisted_samples != 1 {
+            return Err(failure(format!(
+                "rapid live polls persisted {persisted_samples} history samples instead of one"
+            )));
         }
         drop(response);
 
@@ -1249,6 +1289,7 @@ async fn repro_ws_feed_reports_stopped_after_queue_exhaustion() {
     let mut config = api_common::test_config();
     config.upload_dir = files.path().display().to_string();
     let streamers: StreamersMap = Arc::new(Mutex::new(HashMap::new()));
+    let listeners = ListenersState::new();
 
     let result: Result<(), Box<dyn std::error::Error>> = async {
         let server = TestServer::builder().http_transport().build(router::create_router(
@@ -1256,7 +1297,7 @@ async fn repro_ws_feed_reports_stopped_after_queue_exhaustion() {
             config.clone(),
             streamers.clone(),
             icecast.clone(),
-            ListenersState::new(),
+            listeners.clone(),
         ));
         server
             .post("/api/setup/init")
@@ -1297,6 +1338,19 @@ async fn repro_ws_feed_reports_stopped_after_queue_exhaustion() {
             .as_str()
             .ok_or_else(|| failure("station response has no id"))?
             .to_owned();
+        let station_uuid = uuid::Uuid::parse_str(&station_id)?;
+        sqlx::query("UPDATE station_auto_fill SET enabled = false WHERE station_id = $1")
+            .bind(station_uuid)
+            .execute(&db)
+            .await?;
+        listeners
+            .publish(ListenerUpdate {
+                station_id: station_uuid,
+                listeners: 1,
+                updated_at: chrono::Utc::now(),
+                online: true,
+            })
+            .await;
         let admin: (uuid::Uuid,) = sqlx::query_as("SELECT id FROM users WHERE username='admin'").fetch_one(&db).await?;
 
         std::fs::create_dir(files.path().join("audio"))?;
@@ -1354,20 +1408,32 @@ async fn repro_ws_feed_reports_stopped_after_queue_exhaustion() {
             ))
             .await?;
         let _auth_ok = ws_recv_text(&mut socket, 10).await?;
-        // Drain the initial snapshot (status + queue_update); the first
-        // status must report the station as playing.
+        // A station subscription must include the cached listener count along
+        // with status and queue snapshots. Otherwise a reconnect shows zero
+        // until Icecast is polled again.
         let mut saw_playing = false;
+        let mut saw_queue = false;
+        let mut saw_listener = false;
         for _ in 0..8 {
             let msg: serde_json::Value = serde_json::from_str(&ws_recv_text(&mut socket, 10).await?)?;
             if msg["type"] == "status" && msg["data"]["data"]["playing"] == true {
                 saw_playing = true;
             }
             if msg["type"] == "queue_update" {
+                saw_queue = true;
+            }
+            if msg["type"] == "listeners" && msg["station_id"] == station_id && msg["listeners"] == 1 && msg["online"] == true {
+                saw_listener = true;
+            }
+            if saw_playing && saw_queue && saw_listener {
                 break;
             }
         }
         if !saw_playing {
             return Err(failure("initial live status did not report playing"));
+        }
+        if !saw_listener {
+            return Err(failure("initial live feed did not report the cached listener count"));
         }
 
         // The single track ends: no Auto DJ is configured, so the controller

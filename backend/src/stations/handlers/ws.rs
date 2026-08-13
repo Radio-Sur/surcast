@@ -17,7 +17,7 @@ use uuid::Uuid;
 use crate::api::StreamersMap;
 use crate::config::Config;
 use crate::errors::AppError;
-use crate::listeners::{ListenerUpdate, ListenersState};
+use crate::listeners::ListenersState;
 use crate::streamer::{StationStreamer, StatusEvent};
 
 use super::stream::{get_or_create_streamer_for_station, resolve_station_id};
@@ -106,7 +106,7 @@ async fn handle_connection(
 
     let (out_tx, out_rx) = mpsc::unbounded_channel();
     let mut send_task = tokio::spawn(ws_send_task(sender, out_rx));
-    let mut listeners_task = tokio::spawn(forward_listeners(listeners.subscribe(), out_tx.clone()));
+    let mut listeners_task = tokio::spawn(forward_listeners(listeners, out_tx.clone()));
     let mut recv_task = tokio::spawn(ws_recv_task(receiver, db, streamers, upload_dir, jwt_secret, out_tx));
 
     tokio::select! {
@@ -202,11 +202,41 @@ async fn ws_send_task(mut sender: SplitSink<WebSocket, Message>, mut out_rx: mps
     }
 }
 
-/// Forwards global listener-count updates to a single connection.
-async fn forward_listeners(mut rx: broadcast::Receiver<ListenerUpdate>, out_tx: mpsc::UnboundedSender<Outbound>) {
+/// Sends the cached listener snapshot, then forwards newer listener-count updates.
+///
+/// Subscribing before reading the cache closes the reconnect race: updates
+/// published during the snapshot read remain queued. Timestamps suppress any
+/// queued update already represented by that snapshot.
+async fn forward_listeners(listeners: Arc<ListenersState>, out_tx: mpsc::UnboundedSender<Outbound>) {
+    let mut rx = listeners.subscribe();
+    let snapshot = listeners.live_all().await;
+    let mut latest = HashMap::with_capacity(snapshot.len());
+
+    for (station_id, live) in snapshot {
+        latest.insert(station_id, live.updated_at);
+        if out_tx
+            .send(Outbound::Listeners {
+                station_id,
+                listeners: live.listeners,
+                updated_at: live.updated_at,
+                online: live.online,
+            })
+            .is_err()
+        {
+            return;
+        }
+    }
+
     loop {
         match rx.recv().await {
             Ok(update) => {
+                if latest
+                    .get(&update.station_id)
+                    .is_some_and(|updated_at| *updated_at >= update.updated_at)
+                {
+                    continue;
+                }
+                latest.insert(update.station_id, update.updated_at);
                 if out_tx
                     .send(Outbound::Listeners {
                         station_id: update.station_id,
