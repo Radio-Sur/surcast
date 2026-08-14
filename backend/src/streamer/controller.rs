@@ -26,6 +26,10 @@ pub(crate) struct StationController {
     generation: u64,
     output_epoch: u64,
     planned_next: Option<(TrackKey, super::queue_state::QueueAnchor)>,
+    /// The queue drained and the station stopped waiting for new content
+    /// (AutoDJ / schedule fill), as opposed to a manual stop. Only this
+    /// state may auto-resume playback once the queue fills again.
+    idle: bool,
 }
 impl StationController {
     pub(crate) async fn new(
@@ -69,6 +73,7 @@ impl StationController {
                 generation: 0,
                 output_epoch: 0,
                 planned_next: None,
+                idle: false,
             },
             instance.events,
         ))
@@ -240,6 +245,7 @@ impl StationController {
                     tokio::time::sleep(Duration::from_millis(250 * u64::from(attempts))).await;
                 }
                 if self.queue.current_song_info().is_none() {
+                    self.idle = true;
                     return PipelineOperation::Stop;
                 }
                 self.push_queue_update().await;
@@ -255,9 +261,11 @@ impl StationController {
                 self.push_queue_update().await;
             }
             let operation = self.replace_current(ReplaceMode::InitialReplaceFromStopped);
+            self.idle = false;
             self.state = PipelineState::Playing;
             operation
         } else {
+            self.idle = false;
             self.state = PipelineState::Playing;
             PipelineOperation::SetPlaying(true)
         }
@@ -269,8 +277,33 @@ impl StationController {
     }
 
     pub(crate) fn stop(&mut self) -> PipelineOperation {
+        self.idle = false;
         self.state = PipelineState::Stopped;
         PipelineOperation::Stop
+    }
+
+    pub(crate) fn idle(&self) -> bool {
+        self.idle
+    }
+
+    /// Periodic auto-resume hook for a station that stopped because its
+    /// queue drained (idle), never after a manual stop. Asks AutoDJ /
+    /// schedule fill for new content and, once the queue holds a current
+    /// song again, starts playback exactly like an initial play(). Returns
+    /// no operation while the queue stays empty, so the runtime keeps
+    /// polling on the next tick without touching the stopped pipeline.
+    pub(crate) async fn resume_from_idle(&mut self) -> Option<PipelineOperation> {
+        if !self.idle {
+            return None;
+        }
+        self.queue.refill().await;
+        self.queue.reload_from_db().await;
+        self.queue.current_song_info()?;
+        self.idle = false;
+        self.push_queue_update().await;
+        let operation = self.replace_current(ReplaceMode::InitialReplaceFromStopped);
+        self.state = PipelineState::Playing;
+        Some(operation)
     }
 
     pub(crate) async fn reconnect(&mut self) -> Result<PipelineOperation, PipelineError> {
@@ -299,6 +332,9 @@ impl StationController {
     async fn stop_after_current(&mut self) -> PipelineOperation {
         self.queue.finish_current().await;
         self.generation += 1;
+        // The queue drained on its own: this is an idle wait for new content,
+        // not a manual stop, so the runtime may auto-resume later.
+        self.idle = true;
         self.state = PipelineState::Stopped;
         // No StatusEvent is pushed anywhere else on this path; without this
         // the panel live feed keeps the last playing state forever and shows
@@ -621,6 +657,7 @@ mod tests {
             generation: 1,
             output_epoch: 0,
             planned_next: None,
+            idle: false,
         };
         let _ = controller
             .handle_event(PipelineEvent::DecodeFailed {
@@ -666,6 +703,7 @@ mod tests {
             generation: 0,
             output_epoch: 0,
             planned_next: None,
+            idle: false,
         };
 
         assert!(matches!(controller.play().await, PipelineOperation::Stop));
@@ -721,6 +759,7 @@ mod tests {
             generation: 1,
             output_epoch: 1,
             planned_next: Some((failed_key.clone(), queue.anchor_after_current())),
+            idle: false,
         };
 
         let operation = controller
@@ -785,6 +824,7 @@ mod tests {
             generation: 1,
             output_epoch: 0,
             planned_next: None,
+            idle: false,
         };
         let (events, receiver) = mpsc::unbounded_channel();
         let runtime = StationRuntime::spawn(controller, receiver);
@@ -849,6 +889,7 @@ mod tests {
             generation: 0,
             output_epoch: 0,
             planned_next: None,
+            idle: false,
         };
         let (events, receiver) = mpsc::unbounded_channel();
         let runtime = StationRuntime::spawn(controller, receiver);
@@ -943,6 +984,7 @@ mod tests {
             generation: 0,
             output_epoch: 0,
             planned_next: None,
+            idle: false,
         };
         assert!(matches!(controller.play().await, PipelineOperation::Replace(_)));
         assert_eq!(controller.state, PipelineState::Playing);
@@ -977,6 +1019,7 @@ mod tests {
                 generation: 0,
                 output_epoch: 0,
                 planned_next: None,
+                idle: false,
             };
             // Play with an empty queue is a no-op that leaves the controller stopped.
             assert!(matches!(controller.play().await, PipelineOperation::Stop));
@@ -1019,6 +1062,7 @@ mod tests {
                 generation: 0,
                 output_epoch: 0,
                 planned_next: None,
+                idle: false,
             };
             assert!(matches!(controller.play().await, PipelineOperation::Stop));
             (controller, pipeline)
@@ -1125,5 +1169,104 @@ mod tests {
         assert!(operation.is_none(), "stale handover must be ignored");
         assert_eq!(controller.queue.current_song_info().unwrap().queue_item_id, a.queue_item_id);
         assert_eq!(controller.planned_next.as_ref().unwrap().0.queue_item_id, x.queue_item_id);
+    }
+
+    #[tokio::test]
+    async fn idle_controller_resumes_when_the_queue_fills_without_a_command() {
+        let song = song_at(0, "A");
+        let fresh = song_at(1, "B");
+        let (mut controller, _pipeline) = playing_controller(vec![song.clone()]).await;
+
+        // The last track ends: skip() exhausts the queue (the unreachable DB
+        // makes the fill retries fail) and the controller becomes idle —
+        // stopped, but marked for auto-resume, unlike a manual stop.
+        let operation = controller.skip().await.unwrap();
+        assert!(matches!(operation, PipelineOperation::Stop));
+        assert_eq!(controller.state, PipelineState::Stopped);
+        assert!(controller.idle());
+
+        // AutoDJ / schedule fill inserts a row. No API command arrives; the
+        // periodic idle tick must start playback on its own.
+        controller.queue.reload_songs(vec![fresh], false);
+        let operation = controller
+            .resume_from_idle()
+            .await
+            .expect("an idle station must resume once the queue fills");
+        let PipelineOperation::Replace(plan) = operation else {
+            panic!("idle resume must issue an initial replace");
+        };
+        assert!(matches!(plan.mode, ReplaceMode::InitialReplaceFromStopped));
+        assert_eq!(controller.state, PipelineState::Playing);
+        assert!(!controller.idle());
+
+        // A manual stop must never be auto-resumed, even with songs queued.
+        controller.stop();
+        assert!(!controller.idle());
+        assert!(controller.resume_from_idle().await.is_none());
+        assert_eq!(controller.state, PipelineState::Stopped);
+    }
+
+    #[tokio::test]
+    async fn idle_runtime_auto_starts_when_content_arrives_without_an_api_command() {
+        let song = song_at(0, "A");
+        let fresh = song_at(1, "B");
+        let (status_tx, _) = broadcast::channel(1);
+        let (queue_tx, _) = broadcast::channel(1);
+        let db = unavailable_db();
+        let station_id = Uuid::new_v4();
+        let queue = Arc::new(QueueManager::new(db, station_id, String::new(), vec![song.clone()], 0));
+        let pipeline = Arc::new(FakePipeline {
+            replacements: AtomicUsize::new(0),
+            state_changes: AtomicUsize::new(0),
+            stops: AtomicUsize::new(0),
+        });
+        let controller = StationController {
+            queue: queue.clone(),
+            db: unavailable_db(),
+            station_id,
+            playback: StationPlaybackConfig::from_persisted("off", 0, 0, 0).unwrap(),
+            driver: PipelineDriver::spawn(pipeline.clone()),
+            target: IcecastTarget::parse("localhost:8000", "secret".into(), "test", "test".into()).unwrap(),
+            state: PipelineState::Stopped,
+            status_tx,
+            queue_tx,
+            generation: 0,
+            output_epoch: 0,
+            planned_next: None,
+            idle: false,
+        };
+        let (events, receiver) = mpsc::unbounded_channel();
+        let runtime = StationRuntime::spawn(controller, receiver);
+        runtime.play().await.unwrap();
+        events
+            .send(PipelineEvent::CurrentEos {
+                generation: 1,
+                current: StationController::track(song).key,
+            })
+            .unwrap();
+        // With no database reachable the exhaustion refill fails and is
+        // retried (bounded, ~750ms of backoff) before the controller stops.
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while pipeline.stops.load(Ordering::Acquire) == 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(pipeline.replacements.load(Ordering::Acquire), 1);
+
+        // Content arrives in the queue (AutoDJ / schedule fill writing rows),
+        // with NO API command: only the runtime's idle tick polls. The next
+        // tick must replace the plan and start playback.
+        queue.reload_songs(vec![fresh], false);
+        tokio::time::timeout(Duration::from_secs(4), async {
+            while pipeline.replacements.load(Ordering::Acquire) < 2 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("the idle runtime must start playback once the queue fills");
+        assert_eq!(pipeline.replacements.load(Ordering::Acquire), 2);
+        runtime.shutdown().await.unwrap();
     }
 }

@@ -116,6 +116,13 @@ impl StationRuntime {
     pub(crate) fn spawn(mut controller: StationController, mut events: mpsc::UnboundedReceiver<PipelineEvent>) -> Self {
         let (commands, mut receiver) = mpsc::channel::<StationCommand>(32);
         let retries = commands.clone();
+        // One per-station ticker wakes the runtime only while the controller
+        // is idle (queue drained, waiting for AutoDJ / schedule fill), so a
+        // future schedule entry starts playback without any API interaction.
+        // The guard keeps the branch unregistered everywhere else: no wakeups
+        // and no polling while playing, paused, or manually stopped.
+        let mut idle_poll = tokio::time::interval(Duration::from_secs(1));
+        idle_poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         tokio::spawn(async move {
             loop {
                 tokio::select! {
@@ -143,6 +150,11 @@ impl StationRuntime {
                             None => {}
                         },
                         None => break,
+                    },
+                    _ = idle_poll.tick(), if controller.idle() => {
+                        if let Some(operation) = controller.resume_from_idle().await {
+                            PendingPipelineAction::operation(operation, None).launch(controller.driver());
+                        }
                     },
                 }
             }
