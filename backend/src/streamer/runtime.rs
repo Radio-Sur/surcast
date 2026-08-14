@@ -6,7 +6,7 @@ use super::controller::StationController;
 use super::pipeline::{PipelineError, PipelineEvent, StationPlaybackConfig};
 use super::{SongInfo, StatusEvent};
 
-enum StationCommand {
+pub(crate) enum StationCommand {
     Play(oneshot::Sender<Result<(), PipelineError>>),
     Pause(oneshot::Sender<Result<(), PipelineError>>),
     Shutdown(oneshot::Sender<Result<(), PipelineError>>),
@@ -16,6 +16,19 @@ enum StationCommand {
         generation: u64,
         output_epoch: u64,
         attempt: u32,
+        token: u64,
+    },
+    /// The pipeline executor finished a reconnect chain: the controller
+    /// ends its lifecycle (active token, output binding, shared completion)
+    /// so a later disconnect for the same output starts a fresh chain. Sent
+    /// after an automatic reconnect succeeded AND after a manual one-shot
+    /// attempt finished either way — the chain is done, not necessarily the
+    /// reconnect. `succeeded` tells the controller whether the reconnect
+    /// actually succeeded, which is the only signal allowed to clear the
+    /// known-disconnected marker.
+    ReconnectFinished {
+        token: u64,
+        succeeded: bool,
     },
     Reload {
         songs: Vec<SongInfo>,
@@ -30,21 +43,34 @@ enum StationCommand {
     TrimPlayedItems(oneshot::Sender<()>),
     Status(oneshot::Sender<Result<StatusEvent, PipelineError>>),
     /// Acknowledgment for an automatic idle resume: the executor answered
-    /// after the replace ran, so the controller can move to `Playing` on
-    /// success or stay idle/retryable on failure.
+    /// after the replace ran. `attempt_id` correlates the outcome with the
+    /// exact resume attempt; the controller ignores completions for
+    /// attempts that a newer user decision (or a newer resume) superseded.
     ResumeResult {
+        attempt_id: u64,
         result: Result<(), PipelineError>,
     },
 }
 
-struct ReconnectRetry {
+pub(crate) struct ReconnectRetry {
     commands: mpsc::Sender<StationCommand>,
     generation: u64,
     output_epoch: u64,
     attempt: u32,
+    /// Token of the reconnect retry chain that scheduled this retry; the
+    /// runtime only proceeds while it still matches the active chain.
+    token: u64,
+    /// Shared view of the active chain token: the operation checks it right
+    /// before touching the pipeline and skips itself when its chain was
+    /// superseded (or invalidated by a stop) after being enqueued.
+    token_shared: std::sync::Arc<crate::streamer::controller::ReconnectShared>,
+    /// Whether the chain auto-retries after a pipeline failure. Automatic
+    /// chains retry with exponential backoff; a manual reconnect is
+    /// one-shot and its chain ends after the attempt either way.
+    retry_on_failure: bool,
 }
 
-struct PendingPipelineAction {
+pub(crate) struct PendingPipelineAction {
     operation: super::driver::PipelineOperation,
     response: Option<oneshot::Sender<Result<(), PipelineError>>>,
     reconnect_retry: Option<ReconnectRetry>,
@@ -54,7 +80,7 @@ struct PendingPipelineAction {
 /// barrier: everything buffered before it is discarded, the pipeline is
 /// stopped, and the executor goes terminal — no operation can ever run after
 /// the stop.
-enum ExecutorTask {
+pub(crate) enum ExecutorTask {
     Operation(PendingPipelineAction),
     Shutdown {
         stop: super::driver::PipelineOperation,
@@ -63,7 +89,7 @@ enum ExecutorTask {
 }
 
 impl ExecutorTask {
-    fn submit(self, operations: &mpsc::UnboundedSender<ExecutorTask>) {
+    pub(crate) fn submit(self, operations: &mpsc::UnboundedSender<ExecutorTask>) {
         let _ = operations.send(self);
     }
 }
@@ -116,7 +142,7 @@ async fn run_task(
 /// (reload realigns, replace restarts). A closed lane must not lose what the
 /// other lane still buffers: on `None` the executor switches to draining the
 /// remaining lane before exiting.
-async fn run_executor(
+pub(crate) async fn run_executor(
     mut urgent: mpsc::UnboundedReceiver<ExecutorTask>,
     mut regular: mpsc::UnboundedReceiver<ExecutorTask>,
     driver: super::driver::PipelineDriver,
@@ -155,7 +181,10 @@ async fn run_executor(
 }
 
 impl PendingPipelineAction {
-    fn operation(operation: super::driver::PipelineOperation, response: Option<oneshot::Sender<Result<(), PipelineError>>>) -> Self {
+    pub(crate) fn operation(
+        operation: super::driver::PipelineOperation,
+        response: Option<oneshot::Sender<Result<(), PipelineError>>>,
+    ) -> Self {
         Self {
             operation,
             response,
@@ -163,21 +192,28 @@ impl PendingPipelineAction {
         }
     }
 
-    fn reconnect(
+    pub(crate) fn reconnect(
         target: super::pipeline::IcecastTarget,
         commands: mpsc::Sender<StationCommand>,
         generation: u64,
         output_epoch: u64,
         attempt: u32,
+        token: u64,
+        token_shared: std::sync::Arc<super::controller::ReconnectShared>,
+        response: Option<oneshot::Sender<Result<(), PipelineError>>>,
+        retry_on_failure: bool,
     ) -> Self {
         Self {
             operation: super::driver::PipelineOperation::Reconnect(target),
-            response: None,
+            response,
             reconnect_retry: Some(ReconnectRetry {
                 commands,
                 generation,
                 output_epoch,
                 attempt,
+                token,
+                token_shared,
+                retry_on_failure,
             }),
         }
     }
@@ -189,41 +225,136 @@ impl PendingPipelineAction {
             reconnect_retry,
         } = self;
         let operation_description = format!("{operation:?}");
-        let result = driver.execute(operation).await.map(|_| ());
-        if let Some(response) = response {
-            send(response, result);
-            return;
+        // A queued reconnect checks its chain token right before touching
+        // the pipeline: if the chain was superseded (a newer reconnect) or
+        // invalidated (stop/shutdown) after this operation was enqueued,
+        // the stale reconnect must never modify the pipeline — and a caller
+        // waiting on a manual reconnect response gets a controlled error
+        // instead of a dropped channel.
+        if let Some(retry) = &reconnect_retry {
+            if retry.token_shared.token() != retry.token {
+                tracing::debug!(token = retry.token, "skipping stale queued reconnect; chain superseded");
+                if let Some(response) = response {
+                    send(
+                        response,
+                        Err(PipelineError::Pipeline("reconnect superseded before execution".to_owned())),
+                    );
+                }
+                return;
+            }
         }
-        if let Err(error) = result {
-            if let Some(retry) = reconnect_retry {
-                let delay = Duration::from_secs(1_u64 << retry.attempt.min(5));
-                tracing::warn!(%error, generation = retry.generation, output_epoch = retry.output_epoch, ?delay, "retrying GStreamer output reconnect");
+        let result = driver.execute(operation).await.map(|_| ());
+        // Ordering contract for reconnect-aware actions: the manual
+        // response must never be delivered before the internal reconnect
+        // lifecycle is finished. The caller's wake-up is the signal that
+        // `mark_completed` ran and `ReconnectFinished` was enqueued (the
+        // bounded command channel guarantees the enqueue happened before
+        // the response, and the FIFO queue places the completion ahead of
+        // any command the caller sends next). Without this ordering a
+        // failed manual reconnect could wake the caller while the
+        // controller still shows an active, uncompleted chain X — a
+        // following Play would then refuse to start the recovery
+        // (`resume_reconnect_for_break` sees "recovery already in
+        // progress") and the output would stay disconnected with no future
+        // work. Plain pipeline operations answer immediately (the `None`
+        // arms); reconnect arms deliver the response after their lifecycle.
+        match (result, reconnect_retry) {
+            (Ok(()), None) => {
+                if let Some(response) = response {
+                    send(response, Ok(()));
+                }
+            }
+            (Err(error), None) => {
+                tracing::error!(error = %error, operation = %operation_description, "pipeline operation failed");
+                if let Some(response) = response {
+                    send(response, Err(error));
+                }
+            }
+            (Ok(()), Some(retry)) => {
+                // Mark the chain completed in the shared state BEFORE the
+                // runtime processes ReconnectFinished: a disconnect landing
+                // in this window must be treated as a fresh event, never
+                // coalesced into the finished chain. The completion carries
+                // the chain token, so an old in-flight reconnect can never
+                // mark a newer chain as completed.
+                retry.token_shared.mark_completed(retry.token);
+                let _ = retry
+                    .commands
+                    .send(StationCommand::ReconnectFinished {
+                        token: retry.token,
+                        succeeded: true,
+                    })
+                    .await;
+                // The manual caller learns about the outcome only AFTER
+                // the lifecycle is complete (see the ordering note above):
+                // the response must never overtake the completion event.
+                if let Some(response) = response {
+                    send(response, Ok(()));
+                }
+            }
+            (Err(error), Some(retry)) if retry.retry_on_failure => {
+                tracing::warn!(%error, generation = retry.generation, output_epoch = retry.output_epoch, token = retry.token, "retrying GStreamer output reconnect");
                 // The backoff timer runs outside the pipeline executor:
                 // sleeping here would block every other pipeline operation
                 // (pause, skip, manual reconnect) for the whole backoff
-                // window. The timer re-queues a single RetryReconnect; the
-                // runtime rejects it via `reconnect_if_current` once the
-                // generation/epoch is stale (successful reconnect, stop,
-                // shutdown), so at most one retry chain is ever live.
-                let commands = retry.commands;
-                let generation = retry.generation;
-                let output_epoch = retry.output_epoch;
-                let attempt = retry.attempt.saturating_add(1);
-                tokio::spawn(async move {
-                    tokio::time::sleep(delay).await;
-                    let _ = commands
-                        .send(StationCommand::RetryReconnect {
-                            generation,
-                            output_epoch,
-                            attempt,
-                        })
-                        .await;
-                });
-            } else {
-                tracing::error!(error = %error, operation = %operation_description, "pipeline operation failed");
+                // window. The timer re-queues a single RetryReconnect with
+                // the SAME chain token; the runtime drops it unless the
+                // token still matches the active chain (a newer reconnect,
+                // a stop, or a shutdown invalidates it) and
+                // `reconnect_if_current` rejects it once the
+                // generation/epoch is stale, so at most one retry chain is
+                // ever live.
+                schedule_reconnect_retry(retry.commands, retry.generation, retry.output_epoch, retry.attempt, retry.token);
+                if let Some(response) = response {
+                    send(response, Err(error));
+                }
+            }
+            (Err(error), Some(retry)) => {
+                // One-shot chain (manual reconnect): it ends here without a
+                // retry timer; a future disconnect starts a fresh automatic
+                // chain. The reconnect did NOT succeed: the known-disconnected
+                // marker must survive so a later Play can recover.
+                tracing::warn!(%error, token = retry.token, "manual reconnect failed; ending the chain");
+                retry.token_shared.mark_completed(retry.token);
+                let _ = retry
+                    .commands
+                    .send(StationCommand::ReconnectFinished {
+                        token: retry.token,
+                        succeeded: false,
+                    })
+                    .await;
+                // The manual caller learns about the failure only after
+                // the chain is completed and the completion event is
+                // enqueued ahead of any command the caller may send next
+                // (the command channel is FIFO).
+                if let Some(response) = response {
+                    send(response, Err(error));
+                }
             }
         }
     }
+}
+
+/// Schedules the next attempt of a reconnect retry chain after the backoff
+/// window (`1 << failed_attempt` seconds, capped). The timer runs outside
+/// the pipeline executor and re-queues a single `RetryReconnect` carrying
+/// the SAME chain token — a chain is identified by its token, not by its
+/// attempts. A stale chain (superseded by a newer reconnect or invalidated
+/// by a stop) is dropped by the runtime when the timer fires.
+fn schedule_reconnect_retry(commands: mpsc::Sender<StationCommand>, generation: u64, output_epoch: u64, failed_attempt: u32, token: u64) {
+    let delay = Duration::from_secs(1_u64 << failed_attempt.min(5));
+    let attempt = failed_attempt.saturating_add(1);
+    tokio::spawn(async move {
+        tokio::time::sleep(delay).await;
+        let _ = commands
+            .send(StationCommand::RetryReconnect {
+                generation,
+                output_epoch,
+                attempt,
+                token,
+            })
+            .await;
+    });
 }
 
 #[derive(Clone)]
@@ -268,11 +399,32 @@ impl StationRuntime {
                         Some(PipelineEvent::SinkDisconnected { generation, output_epoch, message }) => {
                             match controller.handle_event(PipelineEvent::SinkDisconnected { generation, output_epoch, message }).await {
                                 Some(Ok(super::driver::PipelineOperation::Reconnect(target))) => {
-                                    ExecutorTask::Operation(PendingPipelineAction::reconnect(target, retries.clone(), generation, output_epoch, 0))
-                                        .submit(&operations_urgent);
+                                    let token = controller.current_reconnect_token();
+                                    let token_shared = controller.reconnect_token_shared();
+                                    ExecutorTask::Operation(PendingPipelineAction::reconnect(
+                                        target,
+                                        retries.clone(),
+                                        generation,
+                                        output_epoch,
+                                        0,
+                                        token,
+                                        token_shared,
+                                        None,
+                                        true,
+                                    ))
+                                    .submit(&operations_urgent);
                                 }
                                 Some(Ok(operation)) => ExecutorTask::Operation(PendingPipelineAction::operation(operation, None)).submit(&operations_urgent),
-                                Some(Err(error)) => tracing::error!(error = %error, "failed to apply pipeline event"),
+                                Some(Err(error)) => {
+                                    // The chain just started (its token is
+                                    // already active), but the target refresh
+                                    // failed. A transient config/DB failure
+                                    // must not kill the chain: schedule its
+                                    // first retry.
+                                    tracing::error!(%error, "failed to prepare reconnect after output drop; scheduling a retry");
+                                    let token = controller.current_reconnect_token();
+                                    schedule_reconnect_retry(retries.clone(), generation, output_epoch, 0, token);
+                                }
                                 None => {}
                             }
                         },
@@ -284,7 +436,11 @@ impl StationRuntime {
                         None => break,
                     },
                     _ = idle_poll.tick(), if controller.idle() => {
-                        if let Some(operation) = controller.resume_from_idle().await {
+                        // The controller only yields a resume while no
+                        // attempt is already in flight, so at most one
+                        // automatic resume replace is ever queued per
+                        // station.
+                        if let Some((operation, attempt_id)) = controller.resume_from_idle().await {
                             let (completion, receiver) = tokio::sync::oneshot::channel();
                             ExecutorTask::Operation(PendingPipelineAction::operation(operation, Some(completion)))
                                 .submit(&operations_regular);
@@ -292,10 +448,13 @@ impl StationRuntime {
                             // The idle controller state is only advanced once
                             // the resume replace has actually succeeded (or
                             // kept retryable after a failure); the executor
-                            // answers through the completion channel.
+                            // answers through the completion channel. The
+                            // attempt id lets the controller drop stale
+                            // completions that a newer user decision
+                            // superseded.
                             tokio::spawn(async move {
                                 if let Ok(result) = receiver.await {
-                                    let _ = commands.send(StationCommand::ResumeResult { result }).await;
+                                    let _ = commands.send(StationCommand::ResumeResult { attempt_id, result }).await;
                                 }
                             });
                         }
@@ -411,6 +570,43 @@ impl StationCommand {
         match self {
             Self::Play(response) => {
                 ExecutorTask::Operation(PendingPipelineAction::operation(controller.play().await, Some(response))).submit(operations);
+                // The pipeline does not restore a connection that broke
+                // while paused: after the resume is queued, queue the
+                // reconnect for the remembered break (full automatic chain:
+                // token, output binding, retry on failure).
+                if controller.is_output_known_disconnected() {
+                    let generation = controller.generation();
+                    let output_epoch = controller.output_epoch();
+                    match controller.resume_reconnect_for_break().await {
+                        Some(Ok(super::driver::PipelineOperation::Reconnect(target))) => {
+                            let token = controller.current_reconnect_token();
+                            let token_shared = controller.reconnect_token_shared();
+                            ExecutorTask::Operation(PendingPipelineAction::reconnect(
+                                target,
+                                retries,
+                                generation,
+                                output_epoch,
+                                0,
+                                token,
+                                token_shared,
+                                None,
+                                true,
+                            ))
+                            .submit(operations);
+                        }
+                        Some(Ok(operation)) => {
+                            ExecutorTask::Operation(PendingPipelineAction::operation(operation, None)).submit(operations);
+                        }
+                        Some(Err(error)) => {
+                            // Target refresh failed: retryable like a
+                            // disconnect-time refresh failure.
+                            let token = controller.current_reconnect_token();
+                            tracing::warn!(%error, generation, output_epoch, "failed to prepare reconnect after pause; scheduling a retry");
+                            schedule_reconnect_retry(retries, generation, output_epoch, 0, token);
+                        }
+                        None => {}
+                    }
+                }
             }
             Self::Pause(response) => {
                 ExecutorTask::Operation(PendingPipelineAction::operation(controller.pause(), Some(response))).submit(operations);
@@ -432,6 +628,30 @@ impl StationCommand {
                 Err(error) => send(response, Err(error)),
             },
             Self::Reconnect(response) => match controller.reconnect().await {
+                Ok(super::driver::PipelineOperation::Reconnect(target)) => {
+                    // One-shot manual reconnect: the operation carries the
+                    // chain token and shared state so a successful attempt
+                    // ends the chain (ReconnectFinished) and a failed
+                    // attempt also ends it without a retry timer — the
+                    // controller never keeps an active token with no
+                    // operation or timer behind it. The response reports the
+                    // actual pipeline result to the caller.
+                    let token = controller.current_reconnect_token();
+                    let token_shared = controller.reconnect_token_shared();
+                    controller.bind_reconnect_to_output(controller.generation(), controller.output_epoch());
+                    ExecutorTask::Operation(PendingPipelineAction::reconnect(
+                        target,
+                        retries,
+                        controller.generation(),
+                        controller.output_epoch(),
+                        0,
+                        token,
+                        token_shared,
+                        Some(response),
+                        false,
+                    ))
+                    .submit(operations);
+                }
                 Ok(operation) => ExecutorTask::Operation(PendingPipelineAction::operation(operation, Some(response))).submit(operations),
                 Err(error) => send(response, Err(error)),
             },
@@ -439,15 +659,55 @@ impl StationCommand {
                 generation,
                 output_epoch,
                 attempt,
-            } => match controller.reconnect_if_current(generation, output_epoch).await {
-                Ok(Some(super::driver::PipelineOperation::Reconnect(target))) => {
-                    ExecutorTask::Operation(PendingPipelineAction::reconnect(target, retries, generation, output_epoch, attempt))
+                token,
+            } => {
+                // A stale chain (superseded by a newer reconnect or
+                // invalidated by a stop) is dropped without touching the
+                // pipeline; the token/epoch checks live in the controller.
+                match controller.reconnect_if_current(generation, output_epoch, token).await {
+                    Ok(Some(super::driver::PipelineOperation::Reconnect(target))) => {
+                        let token_shared = controller.reconnect_token_shared();
+                        ExecutorTask::Operation(PendingPipelineAction::reconnect(
+                            target,
+                            retries,
+                            generation,
+                            output_epoch,
+                            attempt,
+                            token,
+                            token_shared,
+                            None,
+                            true,
+                        ))
                         .submit(operations);
+                    }
+                    Ok(Some(operation)) => ExecutorTask::Operation(PendingPipelineAction::operation(operation, None)).submit(operations),
+                    Ok(None) => {
+                        // The chain is no longer eligible (its token was
+                        // superseded, the output/generation went stale, or
+                        // the station is no longer Playing): end it
+                        // explicitly so no active token is ever left without
+                        // future work. The token guard inside
+                        // `end_reconnect_chain` protects a newer chain.
+                        controller.end_reconnect_chain(token);
+                    }
+                    Err(error) => {
+                        // A transient config/DB failure while refreshing the
+                        // target is as retryable as a pipeline reconnect
+                        // failure: schedule the next attempt of THIS chain
+                        // (same token) after the backoff, outside the
+                        // executor.
+                        tracing::warn!(%error, generation, output_epoch, token, attempt, "failed to refresh Icecast reconnect target; retrying");
+                        schedule_reconnect_retry(retries, generation, output_epoch, attempt, token);
+                    }
                 }
-                Ok(Some(operation)) => ExecutorTask::Operation(PendingPipelineAction::operation(operation, None)).submit(operations),
-                Ok(None) => {}
-                Err(error) => tracing::warn!(%error, generation, output_epoch, "failed to refresh Icecast reconnect target"),
-            },
+            }
+            Self::ReconnectFinished { token, succeeded } => {
+                if succeeded {
+                    controller.on_reconnect_succeeded(token);
+                } else {
+                    controller.end_reconnect_chain(token);
+                }
+            }
             Self::Reload {
                 songs,
                 align_next,
@@ -480,8 +740,8 @@ impl StationCommand {
             Self::Status(response) => {
                 let _ = response.send(controller.status().await);
             }
-            Self::ResumeResult { result } => {
-                controller.on_resume_result(result);
+            Self::ResumeResult { attempt_id, result } => {
+                controller.on_resume_result(attempt_id, result);
             }
         }
         true
@@ -495,6 +755,7 @@ fn send(response: oneshot::Sender<Result<(), PipelineError>>, result: Result<(),
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use tokio::sync::Notify;
 
     use async_trait::async_trait;
 
@@ -645,12 +906,18 @@ mod tests {
         let executor = tokio::spawn(run_executor(urgent, regular, driver));
 
         // A reconnect that fails, scheduling the backoff retry.
+        let token_shared = std::sync::Arc::new(crate::streamer::controller::ReconnectShared::default());
+        token_shared.set_token(7);
         ExecutorTask::Operation(PendingPipelineAction::reconnect(
             IcecastTarget::parse("localhost:8000", "secret".into(), "test", "test".into()).unwrap(),
             commands_tx.clone(),
             1,
             1,
             0,
+            7,
+            token_shared,
+            None,
+            true,
         ))
         .submit(&urgent_tx);
         // While the backoff timer runs, the executor must still serve
@@ -658,22 +925,24 @@ mod tests {
         set_playing_action(false).submit(&regular_tx);
 
         // The single retry is re-queued on the command channel after the
-        // backoff window (1 << 0 = 1s), with the next attempt number.
+        // backoff window (1 << 0 = 1s), with the next attempt number and the
+        // chain token it belongs to.
         let retry = tokio::time::timeout(Duration::from_secs(3), async {
             loop {
                 if let Some(StationCommand::RetryReconnect {
                     generation,
                     output_epoch,
                     attempt,
+                    token,
                 }) = commands_rx.recv().await
                 {
-                    return (generation, output_epoch, attempt);
+                    return (generation, output_epoch, attempt, token);
                 }
             }
         })
         .await
         .expect("the reconnect retry must be re-queued after the backoff");
-        assert_eq!(retry, (1, 1, 1));
+        assert_eq!(retry, (1, 1, 1, 7));
 
         // The executor never slept: the regular operation ran during the
         // backoff, and exactly one reconnect attempt happened so far.
@@ -683,6 +952,833 @@ mod tests {
         drop(urgent_tx);
         drop(regular_tx);
         executor.await.unwrap();
+    }
+
+    /// A reconnect operation queued BEFORE its chain was superseded must
+    /// not execute: the token check happens right before the pipeline call,
+    /// so only the operation belonging to the current chain touches the
+    /// pipeline.
+    #[tokio::test]
+    async fn superseded_queued_reconnect_is_skipped_before_the_pipeline() {
+        struct CountingReconnectPipeline {
+            reconnects: AtomicUsize,
+        }
+
+        #[async_trait]
+        impl PlaybackPipeline for CountingReconnectPipeline {
+            async fn replace(&self, _: PairPlan) -> Result<(), PipelineError> {
+                Ok(())
+            }
+            async fn roll(&self, _: RollingPlan) -> Result<(), PipelineError> {
+                Ok(())
+            }
+            async fn apply_output(&self, _: OutputConfig) -> Result<(), PipelineError> {
+                Ok(())
+            }
+            async fn set_playing(&self, _: bool) -> Result<(), PipelineError> {
+                Ok(())
+            }
+            async fn reconnect(&self, _: IcecastTarget) -> Result<(), PipelineError> {
+                self.reconnects.fetch_add(1, Ordering::Release);
+                Ok(())
+            }
+            async fn snapshot(&self) -> Result<PipelineSnapshot, PipelineError> {
+                Ok(PipelineSnapshot {
+                    state: PipelineState::Stopped,
+                    elapsed: Duration::ZERO,
+                })
+            }
+            async fn stop(&self) -> Result<(), PipelineError> {
+                Ok(())
+            }
+        }
+
+        let (commands_tx, mut commands_rx) = mpsc::channel::<StationCommand>(32);
+        let pipeline = std::sync::Arc::new(CountingReconnectPipeline {
+            reconnects: AtomicUsize::new(0),
+        });
+        let driver = PipelineDriver::spawn(pipeline.clone());
+        let (urgent_tx, urgent) = mpsc::unbounded_channel::<ExecutorTask>();
+        let (regular_tx, regular) = mpsc::unbounded_channel::<ExecutorTask>();
+        let executor = tokio::spawn(run_executor(urgent, regular, driver));
+
+        // Reconnect A (chain token 10) is queued...
+        let shared = std::sync::Arc::new(crate::streamer::controller::ReconnectShared::default());
+        shared.set_token(10);
+        ExecutorTask::Operation(PendingPipelineAction::reconnect(
+            IcecastTarget::parse("localhost:8000", "secret".into(), "test", "test".into()).unwrap(),
+            commands_tx.clone(),
+            1,
+            1,
+            0,
+            10,
+            shared.clone(),
+            None,
+            true,
+        ))
+        .submit(&urgent_tx);
+        // ...but before the executor runs it, a newer reconnect supersedes
+        // the chain (token 11).
+        shared.set_token(11);
+        ExecutorTask::Operation(PendingPipelineAction::reconnect(
+            IcecastTarget::parse("localhost:8000", "secret".into(), "test", "test".into()).unwrap(),
+            commands_tx.clone(),
+            1,
+            1,
+            0,
+            11,
+            shared.clone(),
+            None,
+            true,
+        ))
+        .submit(&urgent_tx);
+        drop(urgent_tx);
+        drop(regular_tx);
+
+        executor.await.unwrap();
+
+        // Only the current chain's reconnect touched the pipeline.
+        assert_eq!(pipeline.reconnects.load(Ordering::Acquire), 1);
+        // A successful reconnect ends the chain: the runtime tells the
+        // controller (the command is observed here).
+        let succeeded = tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if let Some(StationCommand::ReconnectFinished { token, succeeded: true }) = commands_rx.recv().await {
+                    return token;
+                }
+            }
+        })
+        .await
+        .expect("a successful reconnect must report the finished chain");
+        assert_eq!(succeeded, 11);
+    }
+
+    /// A queued reconnect must never run after a shutdown barrier discarded
+    /// it: the executor stops the pipeline and nothing else touches it.
+    #[tokio::test]
+    async fn shutdown_discards_a_queued_reconnect() {
+        struct StopCountingPipeline {
+            reconnects: AtomicUsize,
+            stops: AtomicUsize,
+        }
+
+        #[async_trait]
+        impl PlaybackPipeline for StopCountingPipeline {
+            async fn replace(&self, _: PairPlan) -> Result<(), PipelineError> {
+                Ok(())
+            }
+            async fn roll(&self, _: RollingPlan) -> Result<(), PipelineError> {
+                Ok(())
+            }
+            async fn apply_output(&self, _: OutputConfig) -> Result<(), PipelineError> {
+                Ok(())
+            }
+            async fn set_playing(&self, _: bool) -> Result<(), PipelineError> {
+                Ok(())
+            }
+            async fn reconnect(&self, _: IcecastTarget) -> Result<(), PipelineError> {
+                self.reconnects.fetch_add(1, Ordering::Release);
+                Ok(())
+            }
+            async fn snapshot(&self) -> Result<PipelineSnapshot, PipelineError> {
+                Ok(PipelineSnapshot {
+                    state: PipelineState::Stopped,
+                    elapsed: Duration::ZERO,
+                })
+            }
+            async fn stop(&self) -> Result<(), PipelineError> {
+                self.stops.fetch_add(1, Ordering::Release);
+                Ok(())
+            }
+        }
+
+        let (commands_tx, _commands_rx) = mpsc::channel::<StationCommand>(32);
+        let pipeline = std::sync::Arc::new(StopCountingPipeline {
+            reconnects: AtomicUsize::new(0),
+            stops: AtomicUsize::new(0),
+        });
+        let driver = PipelineDriver::spawn(pipeline.clone());
+        let (urgent_tx, urgent) = mpsc::unbounded_channel::<ExecutorTask>();
+        let (regular_tx, regular) = mpsc::unbounded_channel::<ExecutorTask>();
+        let executor = tokio::spawn(run_executor(urgent, regular, driver));
+
+        // A reconnect is queued on the regular lane; the shutdown barrier
+        // lands on the urgent lane and must discard it before it can run.
+        let shared = std::sync::Arc::new(crate::streamer::controller::ReconnectShared::default());
+        shared.set_token(10);
+        ExecutorTask::Operation(PendingPipelineAction::reconnect(
+            IcecastTarget::parse("localhost:8000", "secret".into(), "test", "test".into()).unwrap(),
+            commands_tx.clone(),
+            1,
+            1,
+            0,
+            10,
+            shared,
+            None,
+            true,
+        ))
+        .submit(&regular_tx);
+        let (response, receiver) = oneshot::channel();
+        ExecutorTask::Shutdown {
+            stop: PipelineOperation::Stop,
+            response,
+        }
+        .submit(&urgent_tx);
+        drop(urgent_tx);
+        drop(regular_tx);
+
+        executor.await.unwrap();
+
+        assert!(receiver.await.unwrap().is_ok());
+        assert_eq!(
+            pipeline.reconnects.load(Ordering::Acquire),
+            0,
+            "a discarded reconnect must never run"
+        );
+        assert_eq!(pipeline.stops.load(Ordering::Acquire), 1);
+    }
+
+    /// A one-shot (manual) reconnect never schedules a retry: its chain ends
+    /// after the failed attempt (ReconnectFinished) so the controller never
+    /// keeps an active token without an operation or timer behind it, and a
+    /// future disconnect starts a fresh automatic chain.
+    #[tokio::test]
+    async fn manual_one_shot_reconnect_ends_its_chain_after_failure_without_retrying() {
+        struct FailingReconnectPipeline {
+            reconnects: AtomicUsize,
+        }
+
+        #[async_trait]
+        impl PlaybackPipeline for FailingReconnectPipeline {
+            async fn replace(&self, _: PairPlan) -> Result<(), PipelineError> {
+                Ok(())
+            }
+            async fn roll(&self, _: RollingPlan) -> Result<(), PipelineError> {
+                Ok(())
+            }
+            async fn apply_output(&self, _: OutputConfig) -> Result<(), PipelineError> {
+                Ok(())
+            }
+            async fn set_playing(&self, _: bool) -> Result<(), PipelineError> {
+                Ok(())
+            }
+            async fn reconnect(&self, _: IcecastTarget) -> Result<(), PipelineError> {
+                self.reconnects.fetch_add(1, Ordering::Release);
+                Err(PipelineError::Pipeline("icecast unreachable".into()))
+            }
+            async fn snapshot(&self) -> Result<PipelineSnapshot, PipelineError> {
+                Ok(PipelineSnapshot {
+                    state: PipelineState::Stopped,
+                    elapsed: Duration::ZERO,
+                })
+            }
+            async fn stop(&self) -> Result<(), PipelineError> {
+                Ok(())
+            }
+        }
+
+        let (commands_tx, mut commands_rx) = mpsc::channel::<StationCommand>(32);
+        let pipeline = std::sync::Arc::new(FailingReconnectPipeline {
+            reconnects: AtomicUsize::new(0),
+        });
+        let driver = PipelineDriver::spawn(pipeline.clone());
+        let (urgent_tx, urgent) = mpsc::unbounded_channel::<ExecutorTask>();
+        let (regular_tx, regular) = mpsc::unbounded_channel::<ExecutorTask>();
+        let executor = tokio::spawn(run_executor(urgent, regular, driver));
+
+        // One-shot manual reconnect: retry_on_failure = false.
+        let shared = std::sync::Arc::new(crate::streamer::controller::ReconnectShared::default());
+        shared.set_token(5);
+        ExecutorTask::Operation(PendingPipelineAction::reconnect(
+            IcecastTarget::parse("localhost:8000", "secret".into(), "test", "test".into()).unwrap(),
+            commands_tx.clone(),
+            1,
+            1,
+            0,
+            5,
+            shared.clone(),
+            None,
+            false,
+        ))
+        .submit(&urgent_tx);
+        drop(urgent_tx);
+        drop(regular_tx);
+
+        executor.await.unwrap();
+
+        // The failed one-shot attempt ends the chain (ReconnectFinished)...
+        let message = tokio::time::timeout(Duration::from_secs(1), commands_rx.recv())
+            .await
+            .expect("the one-shot chain must report its end")
+            .expect("command channel must stay open");
+        match message {
+            StationCommand::ReconnectFinished { token, succeeded } => {
+                assert_eq!(token, 5);
+                assert!(!succeeded, "a failed one-shot reconnect must report no success");
+            }
+            _other => panic!("expected ReconnectFinished, got an unexpected command"),
+        }
+        // ...and never schedules a retry timer.
+        assert!(
+            tokio::time::timeout(Duration::from_millis(300), commands_rx.recv()).await.is_err(),
+            "a one-shot manual reconnect must not schedule a retry"
+        );
+        assert_eq!(pipeline.reconnects.load(Ordering::Acquire), 1);
+    }
+
+    /// Deterministic ordering contract for a FAILED manual reconnect: the
+    /// response must not be delivered before the internal reconnect
+    /// lifecycle is complete. A bounded command channel with capacity 1 is
+    /// pre-filled with a dummy command, so the executor's
+    /// `send(ReconnectFinished)` blocks; while it is blocked the manual
+    /// caller must stay pending. Only after the channel is drained — and
+    /// the completion is enqueued — may the response arrive.
+    #[tokio::test]
+    async fn manual_failure_response_waits_until_reconnect_finished_is_enqueued() {
+        struct FailingReconnectPipeline {
+            reconnects: AtomicUsize,
+        }
+
+        #[async_trait]
+        impl PlaybackPipeline for FailingReconnectPipeline {
+            async fn replace(&self, _: PairPlan) -> Result<(), PipelineError> {
+                Ok(())
+            }
+            async fn roll(&self, _: RollingPlan) -> Result<(), PipelineError> {
+                Ok(())
+            }
+            async fn apply_output(&self, _: OutputConfig) -> Result<(), PipelineError> {
+                Ok(())
+            }
+            async fn set_playing(&self, _: bool) -> Result<(), PipelineError> {
+                Ok(())
+            }
+            async fn reconnect(&self, _: IcecastTarget) -> Result<(), PipelineError> {
+                self.reconnects.fetch_add(1, Ordering::Release);
+                Err(PipelineError::Pipeline("icecast unreachable".into()))
+            }
+            async fn snapshot(&self) -> Result<PipelineSnapshot, PipelineError> {
+                Ok(PipelineSnapshot {
+                    state: PipelineState::Stopped,
+                    elapsed: Duration::ZERO,
+                })
+            }
+            async fn stop(&self) -> Result<(), PipelineError> {
+                Ok(())
+            }
+        }
+
+        let pipeline = std::sync::Arc::new(FailingReconnectPipeline {
+            reconnects: AtomicUsize::new(0),
+        });
+        let driver = PipelineDriver::spawn(pipeline.clone());
+        let (urgent_tx, urgent) = mpsc::unbounded_channel::<ExecutorTask>();
+        let (regular_tx, regular) = mpsc::unbounded_channel::<ExecutorTask>();
+        let executor = tokio::spawn(run_executor(urgent, regular, driver));
+
+        // Command channel with capacity 1, pre-filled with a dummy command:
+        // `send(ReconnectFinished)` must wait for room.
+        let (commands_tx, mut commands_rx) = mpsc::channel::<StationCommand>(1);
+        let (dummy_tx, _dummy_rx) = oneshot::channel();
+        commands_tx.send(StationCommand::PushQueueUpdate(dummy_tx)).await.unwrap();
+
+        // One-shot manual reconnect that fails in the pipeline.
+        let (response, mut response_rx) = oneshot::channel();
+        let shared = std::sync::Arc::new(crate::streamer::controller::ReconnectShared::default());
+        shared.set_token(7);
+        ExecutorTask::Operation(PendingPipelineAction::reconnect(
+            IcecastTarget::parse("localhost:8000", "secret".into(), "test", "test".into()).unwrap(),
+            commands_tx.clone(),
+            1,
+            1,
+            0,
+            7,
+            shared.clone(),
+            Some(response),
+            false,
+        ))
+        .submit(&urgent_tx);
+
+        // The executor finishes the pipeline reconnect and marks the chain
+        // completed; its `send(ReconnectFinished)` then blocks on the full
+        // channel. The manual response must still be pending — the caller
+        // must never learn the result before the completion is enqueued.
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while !shared.is_current_completed() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("the executor must reach the end of the reconnect lifecycle");
+        assert!(
+            response_rx.try_recv().is_err(),
+            "the manual response must stay pending while ReconnectFinished cannot be enqueued"
+        );
+
+        // Drain the dummy: the completion is enqueued, and only then may
+        // the manual caller observe the failure.
+        let _dummy = commands_rx.recv().await.expect("the dummy command is queued");
+        let result = response_rx.await.expect("the manual caller must be answered");
+        assert!(result.is_err(), "the manual caller must receive the real pipeline error");
+        let finished = tokio::time::timeout(Duration::from_secs(2), commands_rx.recv())
+            .await
+            .expect("ReconnectFinished must arrive")
+            .expect("command channel must stay open");
+        match finished {
+            StationCommand::ReconnectFinished { token, succeeded } => {
+                assert_eq!(token, 7);
+                assert!(!succeeded, "a failed manual reconnect must report no success");
+            }
+            _other => panic!("expected ReconnectFinished, got an unexpected command"),
+        }
+
+        drop(urgent_tx);
+        drop(regular_tx);
+        executor.await.unwrap();
+        assert_eq!(pipeline.reconnects.load(Ordering::Acquire), 1);
+    }
+
+    /// The same ordering contract for a SUCCESSFUL manual reconnect: the
+    /// completion event is enqueued (and the chain marked completed) before
+    /// the caller sees Ok, so a following Play can never run a redundant
+    /// recovery.
+    #[tokio::test]
+    async fn manual_success_response_waits_until_reconnect_finished_is_enqueued() {
+        struct OkReconnectPipeline {
+            reconnects: AtomicUsize,
+        }
+
+        #[async_trait]
+        impl PlaybackPipeline for OkReconnectPipeline {
+            async fn replace(&self, _: PairPlan) -> Result<(), PipelineError> {
+                Ok(())
+            }
+            async fn roll(&self, _: RollingPlan) -> Result<(), PipelineError> {
+                Ok(())
+            }
+            async fn apply_output(&self, _: OutputConfig) -> Result<(), PipelineError> {
+                Ok(())
+            }
+            async fn set_playing(&self, _: bool) -> Result<(), PipelineError> {
+                Ok(())
+            }
+            async fn reconnect(&self, _: IcecastTarget) -> Result<(), PipelineError> {
+                self.reconnects.fetch_add(1, Ordering::Release);
+                Ok(())
+            }
+            async fn snapshot(&self) -> Result<PipelineSnapshot, PipelineError> {
+                Ok(PipelineSnapshot {
+                    state: PipelineState::Stopped,
+                    elapsed: Duration::ZERO,
+                })
+            }
+            async fn stop(&self) -> Result<(), PipelineError> {
+                Ok(())
+            }
+        }
+
+        let pipeline = std::sync::Arc::new(OkReconnectPipeline {
+            reconnects: AtomicUsize::new(0),
+        });
+        let driver = PipelineDriver::spawn(pipeline.clone());
+        let (urgent_tx, urgent) = mpsc::unbounded_channel::<ExecutorTask>();
+        let (regular_tx, regular) = mpsc::unbounded_channel::<ExecutorTask>();
+        let executor = tokio::spawn(run_executor(urgent, regular, driver));
+
+        // Command channel with capacity 1, pre-filled with a dummy command.
+        let (commands_tx, mut commands_rx) = mpsc::channel::<StationCommand>(1);
+        let (dummy_tx, _dummy_rx) = oneshot::channel();
+        commands_tx.send(StationCommand::PushQueueUpdate(dummy_tx)).await.unwrap();
+
+        // One-shot manual reconnect that succeeds in the pipeline.
+        let (response, mut response_rx) = oneshot::channel();
+        let shared = std::sync::Arc::new(crate::streamer::controller::ReconnectShared::default());
+        shared.set_token(8);
+        ExecutorTask::Operation(PendingPipelineAction::reconnect(
+            IcecastTarget::parse("localhost:8000", "secret".into(), "test", "test".into()).unwrap(),
+            commands_tx.clone(),
+            1,
+            1,
+            0,
+            8,
+            shared.clone(),
+            Some(response),
+            false,
+        ))
+        .submit(&urgent_tx);
+
+        // The chain is completed, but `send(ReconnectFinished)` is blocked
+        // on the full channel: the manual response must stay pending.
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while !shared.is_current_completed() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("the executor must reach the end of the reconnect lifecycle");
+        assert!(
+            response_rx.try_recv().is_err(),
+            "the manual response must stay pending while ReconnectFinished cannot be enqueued"
+        );
+
+        // Drain the dummy: completion enqueued, response follows.
+        let _dummy = commands_rx.recv().await.expect("the dummy command is queued");
+        let result = response_rx.await.expect("the manual caller must be answered");
+        assert!(result.is_ok(), "the manual caller must receive Ok on success");
+        let finished = tokio::time::timeout(Duration::from_secs(2), commands_rx.recv())
+            .await
+            .expect("ReconnectFinished must arrive")
+            .expect("command channel must stay open");
+        match finished {
+            StationCommand::ReconnectFinished { token, succeeded } => {
+                assert_eq!(token, 8);
+                assert!(succeeded, "a successful manual reconnect must report success");
+            }
+            _other => panic!("expected ReconnectFinished, got an unexpected command"),
+        }
+
+        drop(urgent_tx);
+        drop(regular_tx);
+        executor.await.unwrap();
+        assert_eq!(pipeline.reconnects.load(Ordering::Acquire), 1);
+    }
+    #[tokio::test]
+    async fn manual_reconnect_returns_the_pipeline_result_on_success() {
+        struct OkReconnectPipeline {
+            reconnects: AtomicUsize,
+        }
+
+        #[async_trait]
+        impl PlaybackPipeline for OkReconnectPipeline {
+            async fn replace(&self, _: PairPlan) -> Result<(), PipelineError> {
+                Ok(())
+            }
+            async fn roll(&self, _: RollingPlan) -> Result<(), PipelineError> {
+                Ok(())
+            }
+            async fn apply_output(&self, _: OutputConfig) -> Result<(), PipelineError> {
+                Ok(())
+            }
+            async fn set_playing(&self, _: bool) -> Result<(), PipelineError> {
+                Ok(())
+            }
+            async fn reconnect(&self, _: IcecastTarget) -> Result<(), PipelineError> {
+                self.reconnects.fetch_add(1, Ordering::Release);
+                Ok(())
+            }
+            async fn snapshot(&self) -> Result<PipelineSnapshot, PipelineError> {
+                Ok(PipelineSnapshot {
+                    state: PipelineState::Stopped,
+                    elapsed: Duration::ZERO,
+                })
+            }
+            async fn stop(&self) -> Result<(), PipelineError> {
+                Ok(())
+            }
+        }
+
+        let (commands_tx, _commands_rx) = mpsc::channel::<StationCommand>(32);
+        let pipeline = std::sync::Arc::new(OkReconnectPipeline {
+            reconnects: AtomicUsize::new(0),
+        });
+        let driver = PipelineDriver::spawn(pipeline.clone());
+        let (urgent_tx, urgent) = mpsc::unbounded_channel::<ExecutorTask>();
+        let (regular_tx, regular) = mpsc::unbounded_channel::<ExecutorTask>();
+        let executor = tokio::spawn(run_executor(urgent, regular, driver));
+
+        // Manual reconnect: response + one-shot.
+        let (response, receiver) = oneshot::channel();
+        let shared = std::sync::Arc::new(crate::streamer::controller::ReconnectShared::default());
+        shared.set_token(5);
+        ExecutorTask::Operation(PendingPipelineAction::reconnect(
+            IcecastTarget::parse("localhost:8000", "secret".into(), "test", "test".into()).unwrap(),
+            commands_tx.clone(),
+            1,
+            1,
+            0,
+            5,
+            shared.clone(),
+            Some(response),
+            false,
+        ))
+        .submit(&urgent_tx);
+        drop(urgent_tx);
+        drop(regular_tx);
+
+        executor.await.unwrap();
+
+        assert_eq!(pipeline.reconnects.load(Ordering::Acquire), 1);
+        assert!(
+            receiver.await.unwrap().is_ok(),
+            "the manual caller must receive the pipeline result"
+        );
+    }
+
+    /// A failed manual reconnect delivers the actual PipelineError — not a
+    /// cancelled channel — runs exactly once, and stays one-shot (no retry
+    /// timer).
+    #[tokio::test]
+    async fn manual_reconnect_returns_the_pipeline_error_on_failure() {
+        struct FailingReconnectPipeline {
+            reconnects: AtomicUsize,
+        }
+
+        #[async_trait]
+        impl PlaybackPipeline for FailingReconnectPipeline {
+            async fn replace(&self, _: PairPlan) -> Result<(), PipelineError> {
+                Ok(())
+            }
+            async fn roll(&self, _: RollingPlan) -> Result<(), PipelineError> {
+                Ok(())
+            }
+            async fn apply_output(&self, _: OutputConfig) -> Result<(), PipelineError> {
+                Ok(())
+            }
+            async fn set_playing(&self, _: bool) -> Result<(), PipelineError> {
+                Ok(())
+            }
+            async fn reconnect(&self, _: IcecastTarget) -> Result<(), PipelineError> {
+                self.reconnects.fetch_add(1, Ordering::Release);
+                Err(PipelineError::Pipeline("icecast unreachable".into()))
+            }
+            async fn snapshot(&self) -> Result<PipelineSnapshot, PipelineError> {
+                Ok(PipelineSnapshot {
+                    state: PipelineState::Stopped,
+                    elapsed: Duration::ZERO,
+                })
+            }
+            async fn stop(&self) -> Result<(), PipelineError> {
+                Ok(())
+            }
+        }
+
+        let (commands_tx, mut commands_rx) = mpsc::channel::<StationCommand>(32);
+        let pipeline = std::sync::Arc::new(FailingReconnectPipeline {
+            reconnects: AtomicUsize::new(0),
+        });
+        let driver = PipelineDriver::spawn(pipeline.clone());
+        let (urgent_tx, urgent) = mpsc::unbounded_channel::<ExecutorTask>();
+        let (regular_tx, regular) = mpsc::unbounded_channel::<ExecutorTask>();
+        let executor = tokio::spawn(run_executor(urgent, regular, driver));
+
+        let (response, receiver) = oneshot::channel();
+        let shared = std::sync::Arc::new(crate::streamer::controller::ReconnectShared::default());
+        shared.set_token(5);
+        ExecutorTask::Operation(PendingPipelineAction::reconnect(
+            IcecastTarget::parse("localhost:8000", "secret".into(), "test", "test".into()).unwrap(),
+            commands_tx.clone(),
+            1,
+            1,
+            0,
+            5,
+            shared.clone(),
+            Some(response),
+            false,
+        ))
+        .submit(&urgent_tx);
+        drop(urgent_tx);
+        drop(regular_tx);
+
+        executor.await.unwrap();
+
+        let result = receiver.await.expect("the manual caller must not get a cancelled channel");
+        match result {
+            Err(PipelineError::Pipeline(message)) => assert!(message.contains("icecast unreachable"), "unexpected error: {message}"),
+            other => panic!("expected the pipeline error, got {other:?}"),
+        }
+        assert_eq!(
+            pipeline.reconnects.load(Ordering::Acquire),
+            1,
+            "the manual reconnect must run exactly once"
+        );
+        // One-shot: the chain ends (ReconnectFinished) and no retry timer is
+        // scheduled.
+        let message = tokio::time::timeout(Duration::from_secs(1), commands_rx.recv())
+            .await
+            .expect("the one-shot chain must report its end")
+            .expect("command channel must stay open");
+        match message {
+            StationCommand::ReconnectFinished { token, succeeded } => {
+                assert_eq!(token, 5);
+                assert!(!succeeded, "a failed one-shot reconnect must report no success");
+            }
+            _other => panic!("expected ReconnectFinished, got an unexpected command"),
+        }
+        assert!(
+            tokio::time::timeout(Duration::from_millis(300), commands_rx.recv()).await.is_err(),
+            "a one-shot manual reconnect must not schedule a retry"
+        );
+    }
+
+    /// A manual reconnect superseded before the pipeline ran still answers
+    /// its caller with a controlled error instead of a dropped channel.
+    #[tokio::test]
+    async fn superseded_manual_reconnect_answers_its_caller_with_an_error() {
+        struct CountingReconnectPipeline {
+            reconnects: AtomicUsize,
+        }
+
+        #[async_trait]
+        impl PlaybackPipeline for CountingReconnectPipeline {
+            async fn replace(&self, _: PairPlan) -> Result<(), PipelineError> {
+                Ok(())
+            }
+            async fn roll(&self, _: RollingPlan) -> Result<(), PipelineError> {
+                Ok(())
+            }
+            async fn apply_output(&self, _: OutputConfig) -> Result<(), PipelineError> {
+                Ok(())
+            }
+            async fn set_playing(&self, _: bool) -> Result<(), PipelineError> {
+                Ok(())
+            }
+            async fn reconnect(&self, _: IcecastTarget) -> Result<(), PipelineError> {
+                self.reconnects.fetch_add(1, Ordering::Release);
+                Ok(())
+            }
+            async fn snapshot(&self) -> Result<PipelineSnapshot, PipelineError> {
+                Ok(PipelineSnapshot {
+                    state: PipelineState::Stopped,
+                    elapsed: Duration::ZERO,
+                })
+            }
+            async fn stop(&self) -> Result<(), PipelineError> {
+                Ok(())
+            }
+        }
+
+        let (commands_tx, _commands_rx) = mpsc::channel::<StationCommand>(32);
+        let pipeline = std::sync::Arc::new(CountingReconnectPipeline {
+            reconnects: AtomicUsize::new(0),
+        });
+        let driver = PipelineDriver::spawn(pipeline.clone());
+        let (urgent_tx, urgent) = mpsc::unbounded_channel::<ExecutorTask>();
+        let (regular_tx, regular) = mpsc::unbounded_channel::<ExecutorTask>();
+        let executor = tokio::spawn(run_executor(urgent, regular, driver));
+
+        // A manual reconnect (token 10) is queued, then superseded by a
+        // newer chain (token 11) before the executor runs it.
+        let (response, receiver) = oneshot::channel();
+        let shared = std::sync::Arc::new(crate::streamer::controller::ReconnectShared::default());
+        shared.set_token(10);
+        ExecutorTask::Operation(PendingPipelineAction::reconnect(
+            IcecastTarget::parse("localhost:8000", "secret".into(), "test", "test".into()).unwrap(),
+            commands_tx.clone(),
+            1,
+            1,
+            0,
+            10,
+            shared.clone(),
+            Some(response),
+            false,
+        ))
+        .submit(&urgent_tx);
+        shared.set_token(11);
+        drop(urgent_tx);
+        drop(regular_tx);
+
+        executor.await.unwrap();
+
+        assert_eq!(
+            pipeline.reconnects.load(Ordering::Acquire),
+            0,
+            "the stale reconnect must not touch the pipeline"
+        );
+        let result = receiver
+            .await
+            .expect("the superseded caller must get a controlled answer, not a dropped channel");
+        assert!(result.is_err(), "the superseded manual reconnect must report an error");
+    }
+
+    /// A stale in-flight reconnect finishing late must not mark a NEWER
+    /// chain as completed: completion is correlated with the token.
+    #[tokio::test]
+    async fn stale_in_flight_completion_cannot_mark_a_newer_chain_completed() {
+        struct BlockingReconnectPipeline {
+            reconnect_started: Notify,
+            release_reconnect: Notify,
+            reconnects: AtomicUsize,
+        }
+
+        #[async_trait]
+        impl PlaybackPipeline for BlockingReconnectPipeline {
+            async fn replace(&self, _: PairPlan) -> Result<(), PipelineError> {
+                Ok(())
+            }
+            async fn roll(&self, _: RollingPlan) -> Result<(), PipelineError> {
+                Ok(())
+            }
+            async fn apply_output(&self, _: OutputConfig) -> Result<(), PipelineError> {
+                Ok(())
+            }
+            async fn set_playing(&self, _: bool) -> Result<(), PipelineError> {
+                Ok(())
+            }
+            async fn reconnect(&self, _: IcecastTarget) -> Result<(), PipelineError> {
+                self.reconnects.fetch_add(1, Ordering::Release);
+                self.reconnect_started.notify_one();
+                self.release_reconnect.notified().await;
+                Ok(())
+            }
+            async fn snapshot(&self) -> Result<PipelineSnapshot, PipelineError> {
+                Ok(PipelineSnapshot {
+                    state: PipelineState::Stopped,
+                    elapsed: Duration::ZERO,
+                })
+            }
+            async fn stop(&self) -> Result<(), PipelineError> {
+                Ok(())
+            }
+        }
+
+        let (commands_tx, _commands_rx) = mpsc::channel::<StationCommand>(32);
+        let pipeline = std::sync::Arc::new(BlockingReconnectPipeline {
+            reconnect_started: Notify::new(),
+            release_reconnect: Notify::new(),
+            reconnects: AtomicUsize::new(0),
+        });
+        let driver = PipelineDriver::spawn(pipeline.clone());
+        let (urgent_tx, urgent) = mpsc::unbounded_channel::<ExecutorTask>();
+        let (regular_tx, regular) = mpsc::unbounded_channel::<ExecutorTask>();
+        let executor = tokio::spawn(run_executor(urgent, regular, driver));
+
+        // Chain X (token 10): its reconnect passes the token guard and
+        // blocks inside the pipeline.
+        let shared = std::sync::Arc::new(crate::streamer::controller::ReconnectShared::default());
+        shared.set_token(10);
+        ExecutorTask::Operation(PendingPipelineAction::reconnect(
+            IcecastTarget::parse("localhost:8000", "secret".into(), "test", "test".into()).unwrap(),
+            commands_tx.clone(),
+            1,
+            1,
+            0,
+            10,
+            shared.clone(),
+            None,
+            true,
+        ))
+        .submit(&urgent_tx);
+        tokio::time::timeout(Duration::from_secs(2), pipeline.reconnect_started.notified())
+            .await
+            .expect("reconnect X must reach the pipeline");
+
+        // While X is in-flight, chain Y starts: the shared current token
+        // moves to 11.
+        shared.set_token(11);
+
+        // X finishes successfully: mark_completed(10) must NOT mark Y as
+        // completed.
+        pipeline.release_reconnect.notify_one();
+        drop(urgent_tx);
+        drop(regular_tx);
+        executor.await.unwrap();
+
+        assert_eq!(pipeline.reconnects.load(Ordering::Acquire), 1);
+        assert_eq!(shared.token(), 11, "the current chain is still Y");
+        assert!(
+            !shared.is_current_completed(),
+            "a stale in-flight completion (token 10) must not mark chain Y (token 11) as completed"
+        );
     }
 
     /// A shutdown barrier on either lane discards everything buffered, stops

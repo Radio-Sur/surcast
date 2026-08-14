@@ -147,14 +147,21 @@ async fn fail_first_delete(db: &sqlx::PgPool, sequence_name: &str, trigger_name:
 /// An active `station_schedule_events` row for today covering the whole day,
 /// so the schedule fill is active regardless of the weekday.
 async fn station_autodj_songs_ahead(db: &sqlx::PgPool, station_id: Uuid, songs_ahead: i32) {
+    // The scheduler matches the event against `Local::now()` (the server's
+    // wall clock), while Postgres' CURRENT_DATE uses the session timezone
+    // (GMT here). Around midnight the two dates can differ, which would
+    // silently disable the event; bind the same local date the scheduler
+    // compares against.
+    let local_today = chrono::Local::now().date_naive();
     sqlx::query(
         "INSERT INTO station_schedule_events (id, station_id, title, start_date, start_time, end_time, source_type,
                                                 auto_dj_mode, auto_dj_songs_ahead, recurrence_type)
-         VALUES ($1, $2, 'AutoDJ', CURRENT_DATE, '00:00:00', '23:59:59', 'global_library', 'random', $3, 'none')",
+         VALUES ($1, $2, 'AutoDJ', $4, '00:00:00', '23:59:59', 'global_library', 'random', $3, 'none')",
     )
     .bind(Uuid::new_v4())
     .bind(station_id)
     .bind(songs_ahead)
+    .bind(local_today)
     .execute(db)
     .await
     .unwrap();

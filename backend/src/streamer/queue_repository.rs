@@ -146,7 +146,7 @@ impl QueueRepository {
         // without the lock the persist could land between another fill's
         // count and insert, over- or under-filling the window.
         let mut transaction = self.db.begin().await?;
-        let outcome: Result<(), sqlx::Error> = async {
+        let outcome: Result<Vec<Uuid>, sqlx::Error> = async {
             crate::scheduling::service::auto_fill::lock_station_queue(&mut transaction, self.station_id)
                 .await
                 .map_err(|error| sqlx::Error::Protocol(error.to_string()))?;
@@ -195,14 +195,24 @@ impl QueueRepository {
             // Refill from the locked database state; the in-memory queue can lag
             // rows added or removed by other clients. Runs inside the same
             // transaction so the fill's upcoming count sees the persisted cursor.
-            crate::scheduling::service::fill_queue_from_schedule_locked(&mut transaction, &self.db, self.station_id, &self.upload_dir)
+            // Newly queued songs are only collected here: their analysis is a
+            // side effect that cannot be rolled back, so it must wait for the
+            // commit below (a rolled-back attempt must not analyze songs that
+            // never made it into the queue, and a retry must not analyze the
+            // same song repeatedly).
+            crate::scheduling::service::fill_queue_from_schedule_locked(&mut transaction, self.station_id)
                 .await
-                .map_err(|error| sqlx::Error::Protocol(error.to_string()))?;
-            Ok(())
+                .map_err(|error| sqlx::Error::Protocol(error.to_string()))
         }
         .await;
         match outcome {
-            Ok(()) => transaction.commit().await,
+            Ok(analyze) => {
+                transaction.commit().await?;
+                for song_id in analyze {
+                    crate::songs::analysis::spawn_analysis(&self.db, song_id, self.station_id, &self.upload_dir);
+                }
+                Ok(())
+            }
             Err(error) => {
                 // Best effort: the transaction may already be aborted, in
                 // which case the rollback itself fails — dropping the

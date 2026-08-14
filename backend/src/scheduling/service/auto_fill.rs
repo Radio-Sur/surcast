@@ -2,7 +2,7 @@ use std::collections::HashSet;
 
 use rand::prelude::IndexedRandom;
 use rand::RngExt;
-use sqlx::{PgConnection, PgPool};
+use sqlx::PgConnection;
 use uuid::Uuid;
 
 use crate::errors::{AppError, DbResult};
@@ -87,11 +87,10 @@ async fn active_song_ids(connection: &mut PgConnection, station_id: Uuid) -> Res
 
 pub(crate) async fn fill_from_playlist_locked(
     connection: &mut PgConnection,
-    db: &PgPool,
     station_id: Uuid,
     playlist_id: Uuid,
     songs_ahead: Option<i32>,
-    upload_dir: &str,
+    analyze: &mut Vec<Uuid>,
 ) -> Result<(), AppError> {
     let song_ids: Vec<Uuid> = sqlx::query_scalar("SELECT ps.song_id FROM playlist_songs ps WHERE ps.playlist_id = $1 ORDER BY ps.position")
         .bind(playlist_id)
@@ -146,7 +145,7 @@ pub(crate) async fn fill_from_playlist_locked(
         .await
         .db_error("failed to enqueue playlist song")?;
 
-        crate::songs::analysis::spawn_analysis(db, *song_id, station_id, upload_dir);
+        analyze.push(*song_id);
     }
 
     Ok(())
@@ -361,11 +360,10 @@ async fn pick_song_for_source(
 
 async fn pick_and_insert_song(
     connection: &mut PgConnection,
-    db: &PgPool,
     station_id: Uuid,
     config: &AutoFillConfig,
-    upload_dir: &str,
     excluded: &mut HashSet<Uuid>,
+    analyze: &mut Vec<Uuid>,
 ) -> Result<bool, AppError> {
     let song_id = match pick_song_for_source(
         &mut *connection,
@@ -401,7 +399,7 @@ async fn pick_and_insert_song(
             .await
             .db_error("failed to insert auto-DJ selection")?;
 
-        crate::songs::analysis::spawn_analysis(db, song_id, station_id, upload_dir);
+        analyze.push(song_id);
         excluded.insert(song_id);
 
         Ok(true)
@@ -412,10 +410,9 @@ async fn pick_and_insert_song(
 
 pub(crate) async fn fill_from_auto_dj_source_locked(
     connection: &mut PgConnection,
-    db: &PgPool,
     station_id: Uuid,
     config: &AutoFillConfig,
-    upload_dir: &str,
+    analyze: &mut Vec<Uuid>,
 ) -> Result<(), AppError> {
     let need = fill_demand(&mut *connection, station_id, i64::from(config.songs_ahead)).await?;
     if need == 0 {
@@ -427,7 +424,7 @@ pub(crate) async fn fill_from_auto_dj_source_locked(
 
     while added < need as i32 && attempts < need * 5 {
         attempts += 1;
-        if pick_and_insert_song(&mut *connection, db, station_id, config, upload_dir, &mut excluded).await? {
+        if pick_and_insert_song(&mut *connection, station_id, config, &mut excluded, analyze).await? {
             added += 1;
         }
     }
@@ -437,9 +434,8 @@ pub(crate) async fn fill_from_auto_dj_source_locked(
 
 pub(crate) async fn fill_from_auto_config_locked(
     connection: &mut PgConnection,
-    db: &PgPool,
     station_id: Uuid,
-    upload_dir: &str,
+    analyze: &mut Vec<Uuid>,
 ) -> Result<(), AppError> {
     let config = sqlx::query_as::<_, (bool, AutoDjMode, SourceType, Option<Uuid>, bool, i32, i32)>(
         "SELECT enabled, mode, source_type, source_playlist_id, avoid_artist_repeat, min_song_gap, songs_ahead FROM station_auto_fill WHERE station_id = $1",
@@ -471,5 +467,5 @@ pub(crate) async fn fill_from_auto_config_locked(
         songs_ahead,
     };
 
-    fill_from_auto_dj_source_locked(&mut *connection, db, station_id, &auto_config, upload_dir).await
+    fill_from_auto_dj_source_locked(&mut *connection, station_id, &auto_config, analyze).await
 }
