@@ -46,7 +46,10 @@ jobs:
 
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
-          working-directory: ./backend
+          # The action has no `working-directory` input; point its built-in
+          # rust-cache at the backend workspace so `cargo metadata` runs there
+          # instead of failing in the repository root.
+          cache-workspaces: ./backend
 
       - uses: actions/cache@v6
         with:
