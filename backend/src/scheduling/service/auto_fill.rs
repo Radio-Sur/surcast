@@ -17,7 +17,7 @@ pub struct AutoFillConfig {
     pub songs_ahead: i32,
 }
 
-async fn lock_station_queue(connection: &mut PgConnection, station_id: Uuid) -> Result<(), AppError> {
+pub(crate) async fn lock_station_queue(connection: &mut PgConnection, station_id: Uuid) -> Result<(), AppError> {
     sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
         .bind(station_id.to_string())
         .execute(connection)
@@ -85,19 +85,7 @@ async fn active_song_ids(connection: &mut PgConnection, station_id: Uuid) -> Res
     .map(|song_ids: Vec<Uuid>| song_ids.into_iter().collect())
 }
 
-pub(crate) async fn fill_from_playlist(
-    db: &PgPool,
-    station_id: Uuid,
-    playlist_id: Uuid,
-    songs_ahead: Option<i32>,
-    upload_dir: &str,
-) -> Result<(), AppError> {
-    let mut transaction = db.begin().await.db_error("failed to begin AutoDJ queue transaction")?;
-    lock_station_queue(&mut transaction, station_id).await?;
-    fill_from_playlist_locked(&mut transaction, db, station_id, playlist_id, songs_ahead, upload_dir).await?;
-    transaction.commit().await.db_error("failed to commit playlist queue fill")
-}
-async fn fill_from_playlist_locked(
+pub(crate) async fn fill_from_playlist_locked(
     connection: &mut PgConnection,
     db: &PgPool,
     station_id: Uuid,
@@ -422,19 +410,7 @@ async fn pick_and_insert_song(
     }
 }
 
-pub(crate) async fn fill_from_auto_dj_source(
-    db: &PgPool,
-    station_id: Uuid,
-    config: &AutoFillConfig,
-    upload_dir: &str,
-) -> Result<(), AppError> {
-    let mut transaction = db.begin().await.db_error("failed to begin AutoDJ queue transaction")?;
-    lock_station_queue(&mut transaction, station_id).await?;
-    fill_from_auto_dj_source_locked(&mut transaction, db, station_id, config, upload_dir).await?;
-    transaction.commit().await.db_error("failed to commit AutoDJ queue fill")
-}
-
-async fn fill_from_auto_dj_source_locked(
+pub(crate) async fn fill_from_auto_dj_source_locked(
     connection: &mut PgConnection,
     db: &PgPool,
     station_id: Uuid,
@@ -459,12 +435,17 @@ async fn fill_from_auto_dj_source_locked(
     Ok(())
 }
 
-pub(crate) async fn fill_from_auto_config(db: &PgPool, station_id: Uuid, upload_dir: &str) -> Result<(), AppError> {
+pub(crate) async fn fill_from_auto_config_locked(
+    connection: &mut PgConnection,
+    db: &PgPool,
+    station_id: Uuid,
+    upload_dir: &str,
+) -> Result<(), AppError> {
     let config = sqlx::query_as::<_, (bool, AutoDjMode, SourceType, Option<Uuid>, bool, i32, i32)>(
         "SELECT enabled, mode, source_type, source_playlist_id, avoid_artist_repeat, min_song_gap, songs_ahead FROM station_auto_fill WHERE station_id = $1",
     )
     .bind(station_id)
-    .fetch_optional(db)
+    .fetch_optional(&mut *connection)
     .await
     .db_error("failed to load auto-fill config")?;
 
@@ -490,5 +471,5 @@ pub(crate) async fn fill_from_auto_config(db: &PgPool, station_id: Uuid, upload_
         songs_ahead,
     };
 
-    fill_from_auto_dj_source(db, station_id, &auto_config, upload_dir).await
+    fill_from_auto_dj_source_locked(&mut *connection, db, station_id, &auto_config, upload_dir).await
 }

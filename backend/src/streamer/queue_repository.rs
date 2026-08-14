@@ -115,14 +115,171 @@ impl QueueRepository {
         previous_current_queue_item_id: Option<Uuid>,
         cursor: &QueueCursor,
     ) -> Result<(), sqlx::Error> {
-        self.persist_cursor_if_current(previous_current_queue_item_id, cursor).await?;
-        self.trim_played_items().await;
+        // The cursor persist and the AutoDJ refill share one transaction and
+        // one advisory lock, so a concurrent fill (manual trigger, idle tick)
+        // can never count the upcoming window from a stale cursor state:
+        // without the lock the persist could land between another fill's
+        // count and insert, over- or under-filling the window.
+        let mut transaction = self.db.begin().await?;
+        crate::scheduling::service::auto_fill::lock_station_queue(&mut transaction, self.station_id)
+            .await
+            .map_err(|error| sqlx::Error::Protocol(error.to_string()))?;
+        let result = sqlx::query(
+            "UPDATE stations
+             SET current_queue_item_id = $1,
+                 consumed_queue_item_ids = $2,
+                 current_song_index = $3,
+                 current_queue_cursor_format = 1
+             WHERE id = $4
+               AND (current_queue_cursor_format = 0
+                    OR current_queue_item_id IS NOT DISTINCT FROM $5
+                    OR current_queue_item_id IS NOT DISTINCT FROM $1)",
+        )
+        .bind(cursor.current_queue_item_id)
+        .bind(&cursor.consumed_queue_item_ids)
+        .bind(cursor.legacy_position)
+        .bind(self.station_id)
+        .bind(previous_current_queue_item_id)
+        .execute(&mut *transaction)
+        .await?;
+        if result.rows_affected() != 1 {
+            // The guard failed: the stored cursor references an id that is
+            // gone (queue cleared, song deleted while stopped) or was left
+            // stale by an older session, so no previous/current id matches.
+            // A single streamer owns this station's cursor (the streamer map
+            // is keyed by station), so heal it unconditionally — a frozen
+            // cursor would otherwise fail every later persist and suppress
+            // the AutoDJ refill until the queue drains.
+            sqlx::query(
+                "UPDATE stations
+                 SET current_queue_item_id = $1,
+                     consumed_queue_item_ids = $2,
+                     current_song_index = $3,
+                     current_queue_cursor_format = 1
+                 WHERE id = $4",
+            )
+            .bind(cursor.current_queue_item_id)
+            .bind(&cursor.consumed_queue_item_ids)
+            .bind(cursor.legacy_position)
+            .bind(self.station_id)
+            .execute(&mut *transaction)
+            .await?;
+        }
+        self.trim_played_items_on(&mut transaction).await?;
         // Refill from the locked database state; the in-memory queue can lag
-        // rows added or removed by other clients.
+        // rows added or removed by other clients. Runs inside the same
+        // transaction so the fill's upcoming count sees the persisted cursor.
         let mut attempts = 0;
-        while !self.refill().await && attempts < 2 {
-            attempts += 1;
-            tokio::time::sleep(std::time::Duration::from_millis(100 * attempts)).await;
+        loop {
+            let fill =
+                crate::scheduling::service::fill_queue_from_schedule_locked(&mut transaction, &self.db, self.station_id, &self.upload_dir)
+                    .await;
+            match fill {
+                Ok(()) => break,
+                Err(error) if attempts < 2 => {
+                    attempts += 1;
+                    tracing::warn!(station_id = %self.station_id, %error, "AutoDJ successor refill error; retrying");
+                    tokio::time::sleep(std::time::Duration::from_millis(100 * attempts)).await;
+                }
+                Err(error) => return Err(sqlx::Error::Protocol(error.to_string())),
+            }
+        }
+        transaction.commit().await
+    }
+
+    async fn trim_played_items_on(&self, connection: &mut sqlx::PgConnection) -> Result<(), sqlx::Error> {
+        let row: Option<(i32, Vec<Uuid>)> = sqlx::query_as("SELECT played_limit, consumed_queue_item_ids FROM stations WHERE id = $1")
+            .bind(self.station_id)
+            .fetch_optional(&mut *connection)
+            .await?;
+        let Some((played_limit, consumed_queue_item_ids)) = row else {
+            return Ok(());
+        };
+        if played_limit <= 0 || consumed_queue_item_ids.is_empty() {
+            return Ok(());
+        }
+
+        // Queue positions are mutable: insert, reorder, and playlist removal
+        // can all renumber them while a live track is playing. Only durable
+        // cursor identities establish that a row has been played.
+        let played_items: Vec<(Uuid, Option<Uuid>)> = sqlx::query_as(
+            "SELECT id, origin_playlist_id
+                 FROM station_queue
+                 WHERE station_id = $1 AND id = ANY($2)
+                 ORDER BY position",
+        )
+        .bind(self.station_id)
+        .bind(&consumed_queue_item_ids)
+        .fetch_all(&mut *connection)
+        .await?;
+        if played_items.is_empty() {
+            return Ok(());
+        }
+
+        let mut visible = 0i32;
+        let mut index = 0;
+        while index < played_items.len() {
+            visible += 1;
+            if let Some(playlist_id) = played_items[index].1 {
+                index += 1;
+                while index < played_items.len() && played_items[index].1 == Some(playlist_id) {
+                    index += 1;
+                }
+            } else {
+                index += 1;
+            }
+        }
+        if visible <= played_limit {
+            return Ok(());
+        }
+
+        let mut removed = 0i32;
+        let mut delete_ids = Vec::new();
+        let mut index = 0;
+        while index < played_items.len() && removed < visible - played_limit {
+            let item = &played_items[index];
+            delete_ids.push(item.0);
+            index += 1;
+            removed += 1;
+            if let Some(playlist_id) = item.1 {
+                while index < played_items.len() && played_items[index].1 == Some(playlist_id) {
+                    delete_ids.push(played_items[index].0);
+                    index += 1;
+                }
+            }
+        }
+
+        let deleted_ids: Vec<Uuid> =
+            match sqlx::query_scalar("DELETE FROM station_queue WHERE station_id = $1 AND id = ANY($2) RETURNING id")
+                .bind(self.station_id)
+                .bind(&delete_ids)
+                .fetch_all(&mut *connection)
+                .await
+            {
+                Ok(ids) => ids,
+                Err(error) => {
+                    tracing::warn!(station_id = %self.station_id, %error, "failed to clean up queue items");
+                    return Ok(());
+                }
+            };
+        if deleted_ids.is_empty() {
+            return Ok(());
+        }
+        if let Err(error) = sqlx::query(
+            "UPDATE stations
+             SET consumed_queue_item_ids = ARRAY(
+                 SELECT queue_item_id
+                 FROM unnest(consumed_queue_item_ids) AS queue_item_id
+                 WHERE NOT (queue_item_id = ANY($1))
+             )
+             WHERE id = $2",
+        )
+        .bind(&deleted_ids)
+        .bind(self.station_id)
+        .execute(&mut *connection)
+        .await
+        {
+            tracing::warn!(station_id = %self.station_id, %error, "failed to update consumed cursor after trim");
         }
         Ok(())
     }

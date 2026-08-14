@@ -38,17 +38,15 @@ struct ReconnectRetry {
     attempt: u32,
 }
 
-enum PendingPipelineAction {
-    Execute {
-        operation: super::driver::PipelineOperation,
-        response: Option<oneshot::Sender<Result<(), PipelineError>>>,
-        reconnect_retry: Option<ReconnectRetry>,
-    },
+struct PendingPipelineAction {
+    operation: super::driver::PipelineOperation,
+    response: Option<oneshot::Sender<Result<(), PipelineError>>>,
+    reconnect_retry: Option<ReconnectRetry>,
 }
 
 impl PendingPipelineAction {
     fn operation(operation: super::driver::PipelineOperation, response: Option<oneshot::Sender<Result<(), PipelineError>>>) -> Self {
-        Self::Execute {
+        Self {
             operation,
             response,
             reconnect_retry: None,
@@ -62,7 +60,7 @@ impl PendingPipelineAction {
         output_epoch: u64,
         attempt: u32,
     ) -> Self {
-        Self::Execute {
+        Self {
             operation: super::driver::PipelineOperation::Reconnect(target),
             response: None,
             reconnect_retry: Some(ReconnectRetry {
@@ -74,36 +72,39 @@ impl PendingPipelineAction {
         }
     }
 
-    fn launch(self, driver: super::driver::PipelineDriver) {
-        tokio::spawn(async move {
-            let Self::Execute {
-                operation,
-                response,
-                reconnect_retry,
-            } = self;
-            let result = driver.execute(operation).await.map(|_| ());
-            if let Some(response) = response {
-                send(response, result);
-                return;
+    fn submit(self, operations: &mpsc::UnboundedSender<PendingPipelineAction>) {
+        let _ = operations.send(self);
+    }
+
+    async fn run(self, driver: super::driver::PipelineDriver) {
+        let Self {
+            operation,
+            response,
+            reconnect_retry,
+        } = self;
+        let operation_description = format!("{operation:?}");
+        let result = driver.execute(operation).await.map(|_| ());
+        if let Some(response) = response {
+            send(response, result);
+            return;
+        }
+        if let Err(error) = result {
+            if let Some(retry) = reconnect_retry {
+                let delay = Duration::from_secs(1_u64 << retry.attempt.min(5));
+                tracing::warn!(%error, generation = retry.generation, output_epoch = retry.output_epoch, ?delay, "retrying GStreamer output reconnect");
+                tokio::time::sleep(delay).await;
+                let _ = retry
+                    .commands
+                    .send(StationCommand::RetryReconnect {
+                        generation: retry.generation,
+                        output_epoch: retry.output_epoch,
+                        attempt: retry.attempt.saturating_add(1),
+                    })
+                    .await;
+            } else {
+                tracing::error!(error = %error, operation = %operation_description, "pipeline operation failed");
             }
-            if let Err(error) = result {
-                if let Some(retry) = reconnect_retry {
-                    let delay = Duration::from_secs(1_u64 << retry.attempt.min(5));
-                    tracing::warn!(%error, generation = retry.generation, output_epoch = retry.output_epoch, ?delay, "retrying GStreamer output reconnect");
-                    tokio::time::sleep(delay).await;
-                    let _ = retry
-                        .commands
-                        .send(StationCommand::RetryReconnect {
-                            generation: retry.generation,
-                            output_epoch: retry.output_epoch,
-                            attempt: retry.attempt.saturating_add(1),
-                        })
-                        .await;
-                } else {
-                    tracing::error!(error = %error, "pipeline operation failed");
-                }
-            }
-        });
+        }
     }
 }
 
@@ -116,6 +117,33 @@ impl StationRuntime {
     pub(crate) fn spawn(mut controller: StationController, mut events: mpsc::UnboundedReceiver<PipelineEvent>) -> Self {
         let (commands, mut receiver) = mpsc::channel::<StationCommand>(32);
         let retries = commands.clone();
+        // Pipeline operations run in a dedicated sequential executor, strictly
+        // in submission order. Spawning one task per operation allowed a newer
+        // plan (e.g. a skip/replace) to overtake an older queued roll, which
+        // then failed as StalePlan after the graph had already been rebuilt.
+        // Two priority lanes keep pipeline-driven operations (handover
+        // attaches) ahead of command-driven ones (reload realigns, replace
+        // restarts): the pipeline crossfades every ~1s, so an attach queued
+        // behind a slow batch of realigns would always arrive after the
+        // handover and stall the station.
+        let (operations_urgent, mut urgent) = mpsc::unbounded_channel::<PendingPipelineAction>();
+        let (operations_regular, mut regular) = mpsc::unbounded_channel::<PendingPipelineAction>();
+        let executor_driver = controller.driver();
+        tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    biased;
+                    action = urgent.recv() => {
+                        let Some(action) = action else { return };
+                        action.run(executor_driver.clone()).await;
+                    }
+                    action = regular.recv() => {
+                        let Some(action) = action else { return };
+                        action.run(executor_driver.clone()).await;
+                    }
+                }
+            }
+        });
         // One per-station ticker wakes the runtime only while the controller
         // is idle (queue drained, waiting for AutoDJ / schedule fill), so a
         // future schedule entry starts playback without any API interaction.
@@ -128,7 +156,7 @@ impl StationRuntime {
                 tokio::select! {
                     command = receiver.recv() => {
                         let Some(command) = command else { break };
-                        if !command.run(&mut controller, retries.clone()).await {
+                        if !command.run(&mut controller, retries.clone(), &operations_regular).await {
                             break;
                         }
                     },
@@ -137,15 +165,15 @@ impl StationRuntime {
                             match controller.handle_event(PipelineEvent::SinkDisconnected { generation, output_epoch, message }).await {
                                 Some(Ok(super::driver::PipelineOperation::Reconnect(target))) => {
                                     PendingPipelineAction::reconnect(target, retries.clone(), generation, output_epoch, 0)
-                                        .launch(controller.driver());
+                                        .submit(&operations_urgent);
                                 }
-                                Some(Ok(operation)) => PendingPipelineAction::operation(operation, None).launch(controller.driver()),
+                                Some(Ok(operation)) => PendingPipelineAction::operation(operation, None).submit(&operations_urgent),
                                 Some(Err(error)) => tracing::error!(error = %error, "failed to apply pipeline event"),
                                 None => {}
                             }
                         },
                         Some(event) => match controller.handle_event(event).await {
-                            Some(Ok(operation)) => PendingPipelineAction::operation(operation, None).launch(controller.driver()),
+                            Some(Ok(operation)) => PendingPipelineAction::operation(operation, None).submit(&operations_urgent),
                             Some(Err(error)) => tracing::error!(error = %error, "failed to apply pipeline event"),
                             None => {}
                         },
@@ -153,7 +181,7 @@ impl StationRuntime {
                     },
                     _ = idle_poll.tick(), if controller.idle() => {
                         if let Some(operation) = controller.resume_from_idle().await {
-                            PendingPipelineAction::operation(operation, None).launch(controller.driver());
+                            PendingPipelineAction::operation(operation, None).submit(&operations_regular);
                         }
                     },
                 }
@@ -257,21 +285,26 @@ impl StationRuntime {
 }
 
 impl StationCommand {
-    async fn run(self, controller: &mut StationController, retries: mpsc::Sender<StationCommand>) -> bool {
+    async fn run(
+        self,
+        controller: &mut StationController,
+        retries: mpsc::Sender<StationCommand>,
+        operations: &mpsc::UnboundedSender<PendingPipelineAction>,
+    ) -> bool {
         match self {
-            Self::Play(response) => PendingPipelineAction::operation(controller.play().await, Some(response)).launch(controller.driver()),
-            Self::Pause(response) => PendingPipelineAction::operation(controller.pause(), Some(response)).launch(controller.driver()),
+            Self::Play(response) => PendingPipelineAction::operation(controller.play().await, Some(response)).submit(operations),
+            Self::Pause(response) => PendingPipelineAction::operation(controller.pause(), Some(response)).submit(operations),
             Self::Shutdown(response) => {
                 let result = controller.driver().execute(controller.stop()).await.map(|_| ());
                 send(response, result);
                 return false;
             }
             Self::Skip(response) => match controller.skip().await {
-                Ok(operation) => PendingPipelineAction::operation(operation, Some(response)).launch(controller.driver()),
+                Ok(operation) => PendingPipelineAction::operation(operation, Some(response)).submit(operations),
                 Err(error) => send(response, Err(error)),
             },
             Self::Reconnect(response) => match controller.reconnect().await {
-                Ok(operation) => PendingPipelineAction::operation(operation, Some(response)).launch(controller.driver()),
+                Ok(operation) => PendingPipelineAction::operation(operation, Some(response)).submit(operations),
                 Err(error) => send(response, Err(error)),
             },
             Self::RetryReconnect {
@@ -280,9 +313,9 @@ impl StationCommand {
                 attempt,
             } => match controller.reconnect_if_current(generation, output_epoch).await {
                 Ok(Some(super::driver::PipelineOperation::Reconnect(target))) => {
-                    PendingPipelineAction::reconnect(target, retries, generation, output_epoch, attempt).launch(controller.driver());
+                    PendingPipelineAction::reconnect(target, retries, generation, output_epoch, attempt).submit(operations);
                 }
-                Ok(Some(operation)) => PendingPipelineAction::operation(operation, None).launch(controller.driver()),
+                Ok(Some(operation)) => PendingPipelineAction::operation(operation, None).submit(operations),
                 Ok(None) => {}
                 Err(error) => tracing::warn!(%error, generation, output_epoch, "failed to refresh Icecast reconnect target"),
             },
@@ -291,20 +324,18 @@ impl StationCommand {
                 align_next,
                 response,
             } => match controller.reload(songs, align_next).await {
+                // The realignment roll runs in the sequential executor; a
+                // lost race is non-fatal (the staged next simply keeps
+                // playing), so a stale roll must not fail the API request.
                 Ok(Some(operation)) => {
-                    // Executed synchronously so a stale handover event cannot
-                    // interleave with the swap; a lost race is non-fatal (the
-                    // staged next simply keeps playing).
-                    if let Err(error) = controller.driver().execute(operation).await {
-                        tracing::warn!(%error, "queue realignment roll failed; keeping the staged next");
-                    }
+                    PendingPipelineAction::operation(operation, None).submit(operations);
                     send(response, Ok(()));
                 }
                 Ok(None) => send(response, Ok(())),
                 Err(error) => send(response, Err(error)),
             },
             Self::UpdateConfig { config, response } => match controller.update_config(config) {
-                Some(operation) => PendingPipelineAction::operation(operation, Some(response)).launch(controller.driver()),
+                Some(operation) => PendingPipelineAction::operation(operation, Some(response)).submit(operations),
                 None => send(response, Ok(())),
             },
             Self::PushQueueUpdate(response) => {

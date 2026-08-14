@@ -129,12 +129,23 @@ impl QueueManager {
     }
 
     pub async fn commit_current(&self, key: &TrackKey, anchor: QueueAnchor) -> Option<TrackKey> {
-        let (previous_current_queue_item_id, cursor) = {
-            let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let (previous_current_queue_item_id, cursor, song) = {
+            let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
             let previous_current_queue_item_id = state.current_song_info().map(|song| song.queue_item_id);
             let song = state.song_by_queue_item_id(key.queue_item_id)?;
-            state.commit_current(song, anchor);
-            (previous_current_queue_item_id, state.persistence_cursor())
+            // Build the cursor without mutating the in-memory state yet: the
+            // database commit (cursor + AutoDJ refill) is atomic, and memory
+            // must not move ahead of it — otherwise a status snapshot could
+            // observe the new song index together with the pre-refill queue
+            // and report a short upcoming window.
+            let mut consumed_queue_item_ids: Vec<_> = anchor.consumed_queue_item_ids.iter().copied().collect();
+            consumed_queue_item_ids.sort_unstable();
+            let cursor = QueueCursor {
+                current_queue_item_id: Some(key.queue_item_id),
+                consumed_queue_item_ids,
+                legacy_position: song.position,
+            };
+            (previous_current_queue_item_id, cursor, song)
         };
         let owns_refill = reserve_refill(
             &mut self.refill_attempted_for.lock().unwrap_or_else(|error| error.into_inner()),
@@ -159,6 +170,12 @@ impl QueueManager {
             tracing::warn!(station_id = %self.station_id(), %error, "deferring queue cursor persistence");
             *self.dirty_cursor.lock().unwrap_or_else(|error| error.into_inner()) = Some((previous_current_queue_item_id, cursor));
             return self.successor_after(key).map(track_key);
+        }
+        // The database cursor and refill are committed: only now advance the
+        // in-memory state so status snapshots never straddle the two.
+        {
+            let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+            state.commit_current(song, anchor);
         }
         *self.dirty_cursor.lock().unwrap_or_else(|error| error.into_inner()) = None;
         if owns_refill {

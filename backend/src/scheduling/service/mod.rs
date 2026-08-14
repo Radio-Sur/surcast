@@ -4,7 +4,7 @@ pub mod recurrence;
 pub use recurrence::*;
 
 use chrono::{Datelike, Local, NaiveDate, NaiveTime, Timelike};
-use sqlx::PgPool;
+use sqlx::{PgConnection, PgPool};
 use uuid::Uuid;
 
 use crate::errors::{AppError, DbResult};
@@ -98,7 +98,8 @@ fn find_active_schedule(schedules: &[StationScheduleRow], current_day: i16, curr
     })
 }
 
-async fn fill_from_schedule_entry(
+async fn fill_from_schedule_entry_locked(
+    connection: &mut PgConnection,
     db: &PgPool,
     station_id: Uuid,
     source_type: &SourceType,
@@ -121,9 +122,10 @@ async fn fill_from_schedule_entry(
                         min_gap: auto_dj_min_gap.unwrap_or(3),
                         songs_ahead: auto_dj_songs_ahead.unwrap_or(5),
                     };
-                    self::auto_fill::fill_from_auto_dj_source(db, station_id, &config, upload_dir).await?;
+                    self::auto_fill::fill_from_auto_dj_source_locked(&mut *connection, db, station_id, &config, upload_dir).await?;
                 } else {
-                    self::auto_fill::fill_from_playlist(db, station_id, pid, auto_dj_songs_ahead, upload_dir).await?;
+                    self::auto_fill::fill_from_playlist_locked(&mut *connection, db, station_id, pid, auto_dj_songs_ahead, upload_dir)
+                        .await?;
                 }
             }
         }
@@ -136,13 +138,30 @@ async fn fill_from_schedule_entry(
                 min_gap: auto_dj_min_gap.unwrap_or(3),
                 songs_ahead: auto_dj_songs_ahead.unwrap_or(5),
             };
-            self::auto_fill::fill_from_auto_dj_source(db, station_id, &config, upload_dir).await?;
+            self::auto_fill::fill_from_auto_dj_source_locked(&mut *connection, db, station_id, &config, upload_dir).await?;
         }
     }
     Ok(())
 }
 
 pub async fn fill_queue_from_schedule(db: &PgPool, station_id: Uuid, upload_dir: &str) -> Result<(), AppError> {
+    // One advisory lock for the whole fill, so a manual trigger and a
+    // streamer commit-fill can never count the queue from interleaved
+    // cursor states (which used to over- and under-fill the window).
+    let mut transaction = db.begin().await.db_error("failed to begin AutoDJ queue transaction")?;
+    self::auto_fill::lock_station_queue(&mut transaction, station_id).await?;
+    fill_queue_from_schedule_locked(&mut transaction, db, station_id, upload_dir).await?;
+    transaction.commit().await.db_error("failed to commit AutoDJ queue fill")
+}
+
+/// Fill variant that runs inside an already locked transaction. The caller
+/// owns the advisory lock; no nested transaction is opened.
+pub(crate) async fn fill_queue_from_schedule_locked(
+    connection: &mut PgConnection,
+    db: &PgPool,
+    station_id: Uuid,
+    upload_dir: &str,
+) -> Result<(), AppError> {
     let now = Local::now();
     let current_day = now.weekday().num_days_from_monday() as i16;
     let current_time = now.time();
@@ -152,14 +171,15 @@ pub async fn fill_queue_from_schedule(db: &PgPool, station_id: Uuid, upload_dir:
         "SELECT id, day_of_week, start_time, end_time, source_type, playlist_id, auto_dj_mode, auto_dj_avoid_repeat, auto_dj_min_gap, auto_dj_songs_ahead FROM station_schedules WHERE station_id = $1 ORDER BY day_of_week, start_time",
     )
     .bind(station_id)
-    .fetch_all(db)
+    .fetch_all(&mut *connection)
     .await
     .db_error("failed to load station schedules")?;
 
     let active = find_active_schedule(&schedules, current_day, current_time);
 
     if let Some(active) = active {
-        fill_from_schedule_entry(
+        fill_from_schedule_entry_locked(
+            &mut *connection,
             db,
             station_id,
             &active.source_type,
@@ -178,7 +198,7 @@ pub async fn fill_queue_from_schedule(db: &PgPool, station_id: Uuid, upload_dir:
         "SELECT id, title, start_date, start_time, end_time, source_type, playlist_id, auto_dj_mode, auto_dj_avoid_repeat, auto_dj_min_gap, auto_dj_songs_ahead, recurrence_type, recurrence_interval, recurrence_days, recurrence_end_date, recurrence_count FROM station_schedule_events WHERE station_id = $1 ORDER BY start_date, start_time",
     )
     .bind(station_id)
-    .fetch_all(db)
+    .fetch_all(&mut *connection)
     .await
     .db_error("failed to load station events")?;
 
@@ -206,7 +226,8 @@ pub async fn fill_queue_from_schedule(db: &PgPool, station_id: Uuid, upload_dir:
         };
 
         if is_active {
-            fill_from_schedule_entry(
+            fill_from_schedule_entry_locked(
+                &mut *connection,
                 db,
                 station_id,
                 &event.source_type,
@@ -222,7 +243,7 @@ pub async fn fill_queue_from_schedule(db: &PgPool, station_id: Uuid, upload_dir:
         }
     }
 
-    self::auto_fill::fill_from_auto_config(db, station_id, upload_dir).await?;
+    self::auto_fill::fill_from_auto_config_locked(&mut *connection, db, station_id, upload_dir).await?;
 
     Ok(())
 }

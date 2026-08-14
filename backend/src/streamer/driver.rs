@@ -4,6 +4,7 @@ use tokio::sync::{mpsc, oneshot};
 
 use super::pipeline::{IcecastTarget, OutputConfig, PairPlan, PipelineError, PipelineSnapshot, PlaybackPipeline, RollingPlan};
 
+#[derive(Debug)]
 pub(crate) enum PipelineOperation {
     Replace(Box<PairPlan>),
     Roll(Box<RollingPlan>),

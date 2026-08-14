@@ -2140,7 +2140,18 @@ async fn autodj_never_overfills_the_upcoming_window() {
             }
         }
         advance(&server, &station_id, &auth, &mut last_index).await?;
-        let reseeded = visible_upcoming(&server, &station_id, &auth).await;
+        // The window is read through two separate HTTP calls (queue, then
+        // status), so a commit+refill can land between them and the count
+        // briefly reads one short. Wait for the refill to settle — the
+        // overfill assertion below still rejects anything above four.
+        let mut reseeded = 0i64;
+        for _ in 0..40 {
+            reseeded = visible_upcoming(&server, &station_id, &auth).await;
+            if reseeded >= 4 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
         if reseeded != 4 {
             let queue = fetch_queue(&server, &station_id, &auth).await;
             let queue = queue.as_array().cloned().unwrap_or_default();
