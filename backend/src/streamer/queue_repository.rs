@@ -4,14 +4,14 @@ use uuid::Uuid;
 use super::{queue_state::QueueCursor, SongInfo};
 use crate::stations::repository;
 
-pub(crate) struct QueueRepository {
+pub struct QueueRepository {
     db: PgPool,
     station_id: Uuid,
     upload_dir: String,
 }
 
 impl QueueRepository {
-    pub(crate) fn new(db: PgPool, station_id: Uuid, upload_dir: String) -> Self {
+    pub fn new(db: PgPool, station_id: Uuid, upload_dir: String) -> Self {
         Self {
             db,
             station_id,
@@ -110,7 +110,32 @@ impl QueueRepository {
         }
     }
 
-    pub(crate) async fn commit_cursor_and_refill(
+    pub async fn commit_cursor_and_refill(
+        &self,
+        previous_current_queue_item_id: Option<Uuid>,
+        cursor: &QueueCursor,
+    ) -> Result<(), sqlx::Error> {
+        // Retries wrap the whole atomic unit (advisory lock + cursor persist +
+        // trim + refill) in a fresh transaction every attempt. A failed
+        // statement inside a PostgreSQL transaction aborts it — retrying on
+        // the same handle is not a retry at all. Rolling the transaction back
+        // also undoes any partial inserts a failed fill already made, so the
+        // next attempt starts from a clean state.
+        let mut attempt = 0u32;
+        loop {
+            match self.commit_cursor_and_refill_once(previous_current_queue_item_id, cursor).await {
+                Ok(()) => return Ok(()),
+                Err(error) if attempt < 2 => {
+                    attempt += 1;
+                    tracing::warn!(station_id = %self.station_id, %error, "queue cursor commit failed; retrying on a fresh transaction");
+                    tokio::time::sleep(std::time::Duration::from_millis(100 * u64::from(attempt))).await;
+                }
+                Err(error) => return Err(error),
+            }
+        }
+    }
+
+    async fn commit_cursor_and_refill_once(
         &self,
         previous_current_queue_item_id: Option<Uuid>,
         cursor: &QueueCursor,
@@ -121,70 +146,71 @@ impl QueueRepository {
         // without the lock the persist could land between another fill's
         // count and insert, over- or under-filling the window.
         let mut transaction = self.db.begin().await?;
-        crate::scheduling::service::auto_fill::lock_station_queue(&mut transaction, self.station_id)
-            .await
-            .map_err(|error| sqlx::Error::Protocol(error.to_string()))?;
-        let result = sqlx::query(
-            "UPDATE stations
-             SET current_queue_item_id = $1,
-                 consumed_queue_item_ids = $2,
-                 current_song_index = $3,
-                 current_queue_cursor_format = 1
-             WHERE id = $4
-               AND (current_queue_cursor_format = 0
-                    OR current_queue_item_id IS NOT DISTINCT FROM $5
-                    OR current_queue_item_id IS NOT DISTINCT FROM $1)",
-        )
-        .bind(cursor.current_queue_item_id)
-        .bind(&cursor.consumed_queue_item_ids)
-        .bind(cursor.legacy_position)
-        .bind(self.station_id)
-        .bind(previous_current_queue_item_id)
-        .execute(&mut *transaction)
-        .await?;
-        if result.rows_affected() != 1 {
-            // The guard failed: the stored cursor references an id that is
-            // gone (queue cleared, song deleted while stopped) or was left
-            // stale by an older session, so no previous/current id matches.
-            // A single streamer owns this station's cursor (the streamer map
-            // is keyed by station), so heal it unconditionally — a frozen
-            // cursor would otherwise fail every later persist and suppress
-            // the AutoDJ refill until the queue drains.
-            sqlx::query(
+        let outcome: Result<(), sqlx::Error> = async {
+            crate::scheduling::service::auto_fill::lock_station_queue(&mut transaction, self.station_id)
+                .await
+                .map_err(|error| sqlx::Error::Protocol(error.to_string()))?;
+            let result = sqlx::query(
                 "UPDATE stations
                  SET current_queue_item_id = $1,
                      consumed_queue_item_ids = $2,
                      current_song_index = $3,
                      current_queue_cursor_format = 1
-                 WHERE id = $4",
+                 WHERE id = $4
+                   AND (current_queue_cursor_format = 0
+                        OR current_queue_item_id IS NOT DISTINCT FROM $5
+                        OR current_queue_item_id IS NOT DISTINCT FROM $1)",
             )
             .bind(cursor.current_queue_item_id)
             .bind(&cursor.consumed_queue_item_ids)
             .bind(cursor.legacy_position)
             .bind(self.station_id)
+            .bind(previous_current_queue_item_id)
             .execute(&mut *transaction)
             .await?;
+            if result.rows_affected() != 1 {
+                // The guard failed: the stored cursor references an id that is
+                // gone (queue cleared, song deleted while stopped) or was left
+                // stale by an older session, so no previous/current id matches.
+                // A single streamer owns this station's cursor (the streamer map
+                // is keyed by station), so heal it unconditionally — a frozen
+                // cursor would otherwise fail every later persist and suppress
+                // the AutoDJ refill until the queue drains.
+                sqlx::query(
+                    "UPDATE stations
+                     SET current_queue_item_id = $1,
+                         consumed_queue_item_ids = $2,
+                         current_song_index = $3,
+                         current_queue_cursor_format = 1
+                     WHERE id = $4",
+                )
+                .bind(cursor.current_queue_item_id)
+                .bind(&cursor.consumed_queue_item_ids)
+                .bind(cursor.legacy_position)
+                .bind(self.station_id)
+                .execute(&mut *transaction)
+                .await?;
+            }
+            self.trim_played_items_on(&mut transaction).await?;
+            // Refill from the locked database state; the in-memory queue can lag
+            // rows added or removed by other clients. Runs inside the same
+            // transaction so the fill's upcoming count sees the persisted cursor.
+            crate::scheduling::service::fill_queue_from_schedule_locked(&mut transaction, &self.db, self.station_id, &self.upload_dir)
+                .await
+                .map_err(|error| sqlx::Error::Protocol(error.to_string()))?;
+            Ok(())
         }
-        self.trim_played_items_on(&mut transaction).await?;
-        // Refill from the locked database state; the in-memory queue can lag
-        // rows added or removed by other clients. Runs inside the same
-        // transaction so the fill's upcoming count sees the persisted cursor.
-        let mut attempts = 0;
-        loop {
-            let fill =
-                crate::scheduling::service::fill_queue_from_schedule_locked(&mut transaction, &self.db, self.station_id, &self.upload_dir)
-                    .await;
-            match fill {
-                Ok(()) => break,
-                Err(error) if attempts < 2 => {
-                    attempts += 1;
-                    tracing::warn!(station_id = %self.station_id, %error, "AutoDJ successor refill error; retrying");
-                    tokio::time::sleep(std::time::Duration::from_millis(100 * attempts)).await;
-                }
-                Err(error) => return Err(sqlx::Error::Protocol(error.to_string())),
+        .await;
+        match outcome {
+            Ok(()) => transaction.commit().await,
+            Err(error) => {
+                // Best effort: the transaction may already be aborted, in
+                // which case the rollback itself fails — dropping the
+                // transaction rolls back either way.
+                let _ = transaction.rollback().await;
+                Err(error)
             }
         }
-        transaction.commit().await
     }
 
     async fn trim_played_items_on(&self, connection: &mut sqlx::PgConnection) -> Result<(), sqlx::Error> {
@@ -249,23 +275,20 @@ impl QueueRepository {
             }
         }
 
-        let deleted_ids: Vec<Uuid> =
-            match sqlx::query_scalar("DELETE FROM station_queue WHERE station_id = $1 AND id = ANY($2) RETURNING id")
-                .bind(self.station_id)
-                .bind(&delete_ids)
-                .fetch_all(&mut *connection)
-                .await
-            {
-                Ok(ids) => ids,
-                Err(error) => {
-                    tracing::warn!(station_id = %self.station_id, %error, "failed to clean up queue items");
-                    return Ok(());
-                }
-            };
+        // Errors propagate: a failed DELETE (or the cursor UPDATE below)
+        // aborts the surrounding transaction, so swallowing them here would
+        // leave the caller running further SQL on an aborted transaction.
+        // The caller (commit_cursor_and_refill) rolls back and retries the
+        // whole atomic unit on a fresh transaction.
+        let deleted_ids: Vec<Uuid> = sqlx::query_scalar("DELETE FROM station_queue WHERE station_id = $1 AND id = ANY($2) RETURNING id")
+            .bind(self.station_id)
+            .bind(&delete_ids)
+            .fetch_all(&mut *connection)
+            .await?;
         if deleted_ids.is_empty() {
             return Ok(());
         }
-        if let Err(error) = sqlx::query(
+        sqlx::query(
             "UPDATE stations
              SET consumed_queue_item_ids = ARRAY(
                  SELECT queue_item_id
@@ -277,10 +300,7 @@ impl QueueRepository {
         .bind(&deleted_ids)
         .bind(self.station_id)
         .execute(&mut *connection)
-        .await
-        {
-            tracing::warn!(station_id = %self.station_id, %error, "failed to update consumed cursor after trim");
-        }
+        .await?;
         Ok(())
     }
 

@@ -10,7 +10,7 @@ pub(crate) struct QueueAnchor {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct QueueCursor {
+pub struct QueueCursor {
     pub current_queue_item_id: Option<Uuid>,
     pub consumed_queue_item_ids: Vec<Uuid>,
     pub legacy_position: i32,

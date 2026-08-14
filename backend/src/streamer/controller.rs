@@ -292,6 +292,12 @@ impl StationController {
     /// song again, starts playback exactly like an initial play(). Returns
     /// no operation while the queue stays empty, so the runtime keeps
     /// polling on the next tick without touching the stopped pipeline.
+    ///
+    /// The controller state is NOT advanced here: the caller (runtime)
+    /// submits the replace to the pipeline executor and reports the outcome
+    /// back through `on_resume_result`. A failed replace must leave the
+    /// station idle/retryable — marking it `Playing` before the pipeline
+    /// actually started would suppress every later automatic retry.
     pub(crate) async fn resume_from_idle(&mut self) -> Option<PipelineOperation> {
         if !self.idle {
             return None;
@@ -299,11 +305,26 @@ impl StationController {
         self.queue.refill().await;
         self.queue.reload_from_db().await;
         self.queue.current_song_info()?;
-        self.idle = false;
         self.push_queue_update().await;
-        let operation = self.replace_current(ReplaceMode::InitialReplaceFromStopped);
-        self.state = PipelineState::Playing;
-        Some(operation)
+        Some(self.replace_current(ReplaceMode::InitialReplaceFromStopped))
+    }
+
+    /// Outcome of an automatic idle resume, reported by the pipeline
+    /// executor after the replace ran. Success moves the controller to
+    /// `Playing`; a failure keeps it idle so the next tick retries instead
+    /// of leaving the radio dead.
+    pub(crate) fn on_resume_result(&mut self, result: Result<(), PipelineError>) {
+        match result {
+            Ok(()) => {
+                self.idle = false;
+                self.state = PipelineState::Playing;
+            }
+            Err(error) => {
+                tracing::warn!(station_id = %self.station_id, %error, "automatic idle resume failed; retrying on the next tick");
+                self.idle = true;
+                self.state = PipelineState::Stopped;
+            }
+        }
     }
 
     pub(crate) async fn reconnect(&mut self) -> Result<PipelineOperation, PipelineError> {
@@ -1200,6 +1221,11 @@ mod tests {
             panic!("idle resume must issue an initial replace");
         };
         assert!(matches!(plan.mode, ReplaceMode::InitialReplaceFromStopped));
+        // The replace has not run yet: the controller must stay idle until
+        // the pipeline executor acknowledges success.
+        assert_eq!(controller.state, PipelineState::Stopped);
+        assert!(controller.idle());
+        controller.on_resume_result(Ok(()));
         assert_eq!(controller.state, PipelineState::Playing);
         assert!(!controller.idle());
 
@@ -1208,6 +1234,43 @@ mod tests {
         assert!(!controller.idle());
         assert!(controller.resume_from_idle().await.is_none());
         assert_eq!(controller.state, PipelineState::Stopped);
+    }
+
+    #[tokio::test]
+    async fn failed_idle_resume_keeps_the_station_retryable_until_a_replace_succeeds() {
+        let song = song_at(0, "A");
+        let fresh = song_at(1, "B");
+        let (mut controller, _pipeline) = playing_controller(vec![song.clone()]).await;
+
+        // Exhaust the queue: the station becomes idle (not manually stopped).
+        let operation = controller.skip().await.unwrap();
+        assert!(matches!(operation, PipelineOperation::Stop));
+        assert!(controller.idle());
+
+        // Content arrives; the first automatic replace fails.
+        controller.queue.reload_songs(vec![fresh], false);
+        let operation = controller
+            .resume_from_idle()
+            .await
+            .expect("an idle station must attempt a resume once the queue fills");
+        assert!(matches!(operation, PipelineOperation::Replace(_)));
+        assert!(controller.idle(), "a pending resume must not clear the idle flag");
+        controller.on_resume_result(Err(PipelineError::Pipeline("boom: replace failed".into())));
+        // A transient pipeline failure must not turn into a manual-stop-like
+        // state: the next tick may retry.
+        assert!(controller.idle(), "a failed resume must stay retryable");
+        assert_eq!(controller.state, PipelineState::Stopped);
+
+        // The next tick retries and succeeds: the controller moves to Playing.
+        let operation = controller
+            .resume_from_idle()
+            .await
+            .expect("an idle station must retry the resume on the next tick");
+        assert!(matches!(operation, PipelineOperation::Replace(_)));
+        assert!(controller.idle());
+        controller.on_resume_result(Ok(()));
+        assert_eq!(controller.state, PipelineState::Playing);
+        assert!(!controller.idle());
     }
 
     #[tokio::test]
@@ -1343,5 +1406,210 @@ mod tests {
             panic!("a failed snapshot must propagate as a pipeline error, got {result:?}");
         };
         assert!(message.contains("boom"), "unexpected error message: {message}");
+    }
+
+    #[tokio::test]
+    async fn shutdown_runs_through_the_executor_and_discards_pending_operations() {
+        let song = song_at(0, "A");
+        let next = song_at(1, "B");
+        let (status_tx, _) = broadcast::channel(1);
+        let (queue_tx, _) = broadcast::channel(1);
+        let db = unavailable_db();
+        let station_id = Uuid::new_v4();
+        let queue = Arc::new(QueueManager::new(db, station_id, String::new(), vec![song, next], 0));
+        let pipeline = Arc::new(BlockingPipeline {
+            replace_started: Notify::new(),
+            release_replace: Notify::new(),
+            calls: Mutex::new(Vec::new()),
+        });
+        let controller = StationController {
+            queue,
+            db: unavailable_db(),
+            station_id,
+            playback: StationPlaybackConfig::from_persisted("off", 0, 0, 0).unwrap(),
+            driver: PipelineDriver::spawn(pipeline.clone()),
+            target: IcecastTarget::parse("localhost:8000", "secret".into(), "test", "test".into()).unwrap(),
+            state: PipelineState::Stopped,
+            status_tx,
+            queue_tx,
+            generation: 0,
+            output_epoch: 0,
+            planned_next: None,
+            idle: false,
+        };
+        let (events, receiver) = mpsc::unbounded_channel();
+        let runtime = StationRuntime::spawn(controller, receiver);
+        let playing = {
+            let runtime = runtime.clone();
+            tokio::spawn(async move { runtime.play().await })
+        };
+        // The first replace blocks the executor; a pause and the shutdown
+        // queue behind it. Pause is a quick synchronous command (no DB), so
+        // the runtime finishes submitting both while the executor is still
+        // blocked inside the first replace.
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while !pipeline.calls.lock().await.contains(&"replace") {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("the first replace must reach the pipeline");
+        let pausing = {
+            let runtime = runtime.clone();
+            tokio::spawn(async move { runtime.pause().await })
+        };
+        let shutting_down = {
+            let runtime = runtime.clone();
+            tokio::spawn(async move { runtime.shutdown().await })
+        };
+        // Let the runtime drain its command queue (play's refill/push spend
+        // ~40ms on the unreachable DB before pause + shutdown are submitted).
+        // The executor is still blocked inside the first replace, so nothing
+        // else can run in the meantime.
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        // Release the first replace: the executor must pick the shutdown
+        // barrier next (urgent lane), discard the pending pause, stop, and go
+        // terminal — nothing may run after the stop.
+        pipeline.release_replace.notify_one();
+        tokio::time::timeout(Duration::from_secs(5), playing)
+            .await
+            .expect("play must complete")
+            .unwrap();
+        let pause_result = tokio::time::timeout(Duration::from_secs(5), pausing)
+            .await
+            .expect("pause must complete")
+            .unwrap();
+        assert!(
+            pause_result.is_err(),
+            "a pending pause must be refused once the shutdown barrier lands (calls: {:?})",
+            pipeline.calls.lock().await
+        );
+        tokio::time::timeout(Duration::from_secs(5), shutting_down)
+            .await
+            .expect("shutdown must complete")
+            .unwrap();
+        assert_eq!(*pipeline.calls.lock().await, ["replace", "stop"]);
+        let _ = events;
+        // The runtime is terminal: further commands are refused.
+        assert!(runtime.play().await.is_err());
+    }
+
+    struct FailOnceReplacePipeline {
+        replacements: AtomicUsize,
+        stops: AtomicUsize,
+    }
+
+    #[async_trait]
+    impl PlaybackPipeline for FailOnceReplacePipeline {
+        async fn replace(&self, _: PairPlan) -> Result<(), PipelineError> {
+            let attempt = self.replacements.fetch_add(1, Ordering::Release);
+            if attempt == 1 {
+                Err(PipelineError::Pipeline("boom: replace failed".into()))
+            } else {
+                Ok(())
+            }
+        }
+        async fn roll(&self, _: super::super::pipeline::RollingPlan) -> Result<(), PipelineError> {
+            Ok(())
+        }
+        async fn apply_output(&self, _: OutputConfig) -> Result<(), PipelineError> {
+            Ok(())
+        }
+        async fn set_playing(&self, _: bool) -> Result<(), PipelineError> {
+            Ok(())
+        }
+        async fn reconnect(&self, _: IcecastTarget) -> Result<(), PipelineError> {
+            Ok(())
+        }
+        async fn snapshot(&self) -> Result<PipelineSnapshot, PipelineError> {
+            Ok(PipelineSnapshot {
+                state: PipelineState::Stopped,
+                elapsed: Duration::ZERO,
+            })
+        }
+        async fn stop(&self) -> Result<(), PipelineError> {
+            self.stops.fetch_add(1, Ordering::Release);
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn idle_runtime_retries_a_failed_auto_resume_on_the_next_tick() {
+        let song = song_at(0, "A");
+        let fresh = song_at(1, "B");
+        let (status_tx, _) = broadcast::channel(1);
+        let (queue_tx, _) = broadcast::channel(1);
+        let db = unavailable_db();
+        let station_id = Uuid::new_v4();
+        let queue = Arc::new(QueueManager::new(db, station_id, String::new(), vec![song.clone()], 0));
+        let pipeline = Arc::new(FailOnceReplacePipeline {
+            replacements: AtomicUsize::new(0),
+            stops: AtomicUsize::new(0),
+        });
+        let controller = StationController {
+            queue: queue.clone(),
+            db: unavailable_db(),
+            station_id,
+            playback: StationPlaybackConfig::from_persisted("off", 0, 0, 0).unwrap(),
+            driver: PipelineDriver::spawn(pipeline.clone()),
+            target: IcecastTarget::parse("localhost:8000", "secret".into(), "test", "test".into()).unwrap(),
+            state: PipelineState::Stopped,
+            status_tx,
+            queue_tx,
+            generation: 0,
+            output_epoch: 0,
+            planned_next: None,
+            idle: false,
+        };
+        let (events, receiver) = mpsc::unbounded_channel();
+        let runtime = StationRuntime::spawn(controller, receiver);
+        runtime.play().await.unwrap();
+        events
+            .send(PipelineEvent::CurrentEos {
+                generation: 1,
+                current: StationController::track(song).key,
+            })
+            .unwrap();
+        // The queue exhausts (DB unreachable, bounded fill retries ~750ms):
+        // the station becomes idle.
+        tokio::time::timeout(Duration::from_secs(3), async {
+            while pipeline.stops.load(Ordering::Acquire) == 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("the exhausted station must stop");
+        assert_eq!(pipeline.replacements.load(Ordering::Acquire), 1);
+
+        // Content arrives; the first automatic resume replace fails. The
+        // controller must stay idle/retryable.
+        queue.reload_songs(vec![fresh], false);
+        tokio::time::timeout(Duration::from_secs(4), async {
+            while pipeline.replacements.load(Ordering::Acquire) < 2 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("the first auto-resume attempt must run");
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert_eq!(
+            pipeline.replacements.load(Ordering::Acquire),
+            2,
+            "a failed resume must not be retried eagerly"
+        );
+
+        // The next idle tick retries and the second replace succeeds: the
+        // station is back in Playing (the pipeline keeps its one stop).
+        tokio::time::timeout(Duration::from_secs(4), async {
+            while pipeline.replacements.load(Ordering::Acquire) < 3 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("the idle tick must retry the failed resume");
+        assert_eq!(pipeline.replacements.load(Ordering::Acquire), 3);
+        assert_eq!(pipeline.stops.load(Ordering::Acquire), 1);
+        runtime.shutdown().await.unwrap();
+        let _ = events;
     }
 }

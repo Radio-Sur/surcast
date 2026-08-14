@@ -45,6 +45,11 @@ enum Inbound {
 enum Outbound {
     AuthOk,
     Error {
+        /// Connection-level errors carry no station; per-station errors
+        /// carry the station the message refers to, so a multi-station
+        /// connection can attribute them.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        station_id: Option<Uuid>,
         data: String,
     },
     Status {
@@ -259,6 +264,7 @@ async fn ws_recv_task(
             Ok(cmd) => cmd,
             Err(_) => {
                 let _ = out_tx.send(Outbound::Error {
+                    station_id: None,
                     data: "invalid message".into(),
                 });
                 continue;
@@ -271,6 +277,7 @@ async fn ws_recv_task(
                     let _ = out_tx.send(Outbound::AuthOk);
                 } else {
                     let _ = out_tx.send(Outbound::Error {
+                        station_id: None,
                         data: "unauthorized".into(),
                     });
                 }
@@ -280,6 +287,7 @@ async fn ws_recv_task(
                     Ok(id) => id,
                     Err(_) => {
                         let _ = out_tx.send(Outbound::Error {
+                            station_id: None,
                             data: "unknown station".into(),
                         });
                         continue;
@@ -292,6 +300,7 @@ async fn ws_recv_task(
                     Ok(s) => s,
                     Err(_) => {
                         let _ = out_tx.send(Outbound::Error {
+                            station_id: None,
                             data: "no active stream".into(),
                         });
                         continue;
@@ -308,6 +317,7 @@ async fn ws_recv_task(
                         // state; the client gets an explicit error instead.
                         tracing::error!(station_id = %station_id, %error, "stream status unavailable on subscribe");
                         let _ = out_tx.send(Outbound::Error {
+                            station_id: Some(station_id),
                             data: format!("stream status unavailable: {error}"),
                         });
                     }
@@ -326,6 +336,7 @@ async fn ws_recv_task(
                     if let Some(s) = get_streamer(&streamers, &id) {
                         if let Err(error) = s.skip().await {
                             let _ = out_tx.send(Outbound::Error {
+                                station_id: Some(id),
                                 data: format!("skip failed: {error}"),
                             });
                         }
@@ -337,6 +348,7 @@ async fn ws_recv_task(
                     if let Some(s) = get_streamer(&streamers, &id) {
                         if let Err(error) = s.play().await {
                             let _ = out_tx.send(Outbound::Error {
+                                station_id: Some(id),
                                 data: format!("play failed: {error}"),
                             });
                         }
@@ -348,6 +360,7 @@ async fn ws_recv_task(
                     if let Some(s) = get_streamer(&streamers, &id) {
                         if let Err(error) = s.pause().await {
                             let _ = out_tx.send(Outbound::Error {
+                                station_id: Some(id),
                                 data: format!("pause failed: {error}"),
                             });
                         }
@@ -388,6 +401,7 @@ async fn forward_station(streamers: StreamersMap, station_id: Uuid, out_tx: mpsc
                 // Never report a pipeline fault as a legal stopped state.
                 tracing::error!(station_id = %station_id, %error, "stream status unavailable on reattach");
                 let _ = out_tx.send(Outbound::Error {
+                    station_id: Some(station_id),
                     data: format!("stream status unavailable: {error}"),
                 });
             }
