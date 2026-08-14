@@ -801,6 +801,19 @@ mod tests {
         }
     }
 
+    fn metadata_song(request: &str) -> String {
+        // The raw request ends with headers, not with the query string, so
+        // parse the request line and compare the *decoded* song parameter
+        // (robust against `+` vs `%20` and header ordering).
+        let request_line = request.split("\r\n").next().expect("request line present");
+        let path = request_line.split_whitespace().nth(1).expect("request target present");
+        let url = reqwest::Url::parse(&format!("http://localhost{path}")).expect("metadata request URL parses");
+        url.query_pairs()
+            .find(|(key, _)| key == "song")
+            .map(|(_, value)| value.into_owned())
+            .expect("metadata request carries a song parameter")
+    }
+
     fn write_wav(file: &std::path::Path, duration: Duration, sample: i16) {
         let frames = (duration.as_secs_f64() * 44_100.0).round() as u32;
         let data_len = frames * 4;
@@ -1560,8 +1573,16 @@ mod tests {
             .await
             .expect("metadata requests")
             .unwrap();
-        assert!(metadata_requests[0].ends_with("song=Artist+0+-+Track+0"));
-        assert!(metadata_requests[1].ends_with("song=Artist+2+-+Track+2"));
+        assert_eq!(
+            metadata_song(&metadata_requests[0]),
+            "Artist 0 - Track 0",
+            "unexpected metadata requests: {metadata_requests:#?}"
+        );
+        assert_eq!(
+            metadata_song(&metadata_requests[1]),
+            "Artist 2 - Track 2",
+            "unexpected metadata requests: {metadata_requests:#?}"
+        );
         tokio::time::sleep(Duration::from_millis(100)).await;
         pipeline.stop().await.unwrap();
 
