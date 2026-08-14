@@ -162,20 +162,6 @@ fn error_msg(data: &str) -> Message {
     Message::Text(serde_json::json!({"type":"error","data":data}).to_string().into())
 }
 
-/// Live-feed fallback: when a streamer's runtime is gone the feed must still
-/// report a coherent stopped state instead of dropping the subscription.
-fn stopped_status() -> crate::streamer::StatusEvent {
-    crate::streamer::StatusEvent::State {
-        playing: false,
-        song_index: 0,
-        total: 0,
-        elapsed: 0,
-        title: String::new(),
-        artist: String::new(),
-        duration: 0,
-    }
-}
-
 /// Drains the per-connection outbound queue and forwards it to the socket,
 /// interleaving heartbeat pings.
 async fn ws_send_task(mut sender: SplitSink<WebSocket, Message>, mut out_rx: mpsc::UnboundedReceiver<Outbound>) {
@@ -313,10 +299,19 @@ async fn ws_recv_task(
                 };
                 let handle = tokio::spawn(forward_station(streamers.clone(), station_id, out_tx.clone()));
                 subs.insert(station_id, handle);
-                let _ = out_tx.send(Outbound::Status {
-                    station_id,
-                    data: streamer.status().await.unwrap_or_else(|_| stopped_status()),
-                });
+                match streamer.status().await {
+                    Ok(status) => {
+                        let _ = out_tx.send(Outbound::Status { station_id, data: status });
+                    }
+                    Err(error) => {
+                        // Never report a pipeline fault as a legal stopped
+                        // state; the client gets an explicit error instead.
+                        tracing::error!(station_id = %station_id, %error, "stream status unavailable on subscribe");
+                        let _ = out_tx.send(Outbound::Error {
+                            data: format!("stream status unavailable: {error}"),
+                        });
+                    }
+                }
                 let _ = streamer.push_queue_update().await;
             }
             Inbound::Unsubscribe { station_id } => {
@@ -385,10 +380,18 @@ async fn forward_station(streamers: StreamersMap, station_id: Uuid, out_tx: mpsc
         let mut status_rx = streamer.subscribe_status();
         let mut queue_rx = streamer.subscribe_queue();
         // Fresh snapshot so the client re-syncs after a streamer replacement.
-        let _ = out_tx.send(Outbound::Status {
-            station_id,
-            data: streamer.status().await.unwrap_or_else(|_| stopped_status()),
-        });
+        match streamer.status().await {
+            Ok(status) => {
+                let _ = out_tx.send(Outbound::Status { station_id, data: status });
+            }
+            Err(error) => {
+                // Never report a pipeline fault as a legal stopped state.
+                tracing::error!(station_id = %station_id, %error, "stream status unavailable on reattach");
+                let _ = out_tx.send(Outbound::Error {
+                    data: format!("stream status unavailable: {error}"),
+                });
+            }
+        }
         let _ = streamer.push_queue_update().await;
 
         let mut recheck = tokio::time::interval(Duration::from_millis(250));

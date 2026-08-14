@@ -489,17 +489,21 @@ impl StationController {
         }
     }
 
-    pub(crate) async fn status(&self) -> StatusEvent {
-        let PipelineSnapshot { state, elapsed } = match self.driver.execute(PipelineOperation::Snapshot).await {
-            Ok(PipelineOperationResult::Snapshot(snapshot)) => snapshot,
-            Ok(PipelineOperationResult::Unit) | Err(_) => PipelineSnapshot {
-                state: PipelineState::Stopped,
-                elapsed: Duration::ZERO,
-            },
+    pub(crate) async fn status(&self) -> Result<StatusEvent, PipelineError> {
+        // A failed or missing snapshot is a pipeline fault, never a legal
+        // `Stopped`: the API and monitoring must be able to tell an unhealthy
+        // streamer apart from a station that is intentionally stopped.
+        let PipelineSnapshot { state, elapsed } = match self.driver.execute(PipelineOperation::Snapshot).await? {
+            PipelineOperationResult::Snapshot(snapshot) => snapshot,
+            PipelineOperationResult::Unit => {
+                return Err(PipelineError::Pipeline(
+                    "pipeline driver returned no snapshot for a status request".into(),
+                ));
+            }
         };
         let idx = self.queue.current_song_index();
         let song = self.queue.current_song_info();
-        StatusEvent::State {
+        Ok(StatusEvent::State {
             playing: state == PipelineState::Playing,
             song_index: idx,
             total: self.queue.song_count(),
@@ -507,7 +511,7 @@ impl StationController {
             title: song.as_ref().map_or_else(String::new, |song| song.title.clone()),
             artist: song.as_ref().map_or_else(String::new, |song| song.artist.clone()),
             duration: song.map_or(0, |song| song.duration),
-        }
+        })
     }
 }
 
@@ -1268,5 +1272,76 @@ mod tests {
         .expect("the idle runtime must start playback once the queue fills");
         assert_eq!(pipeline.replacements.load(Ordering::Acquire), 2);
         runtime.shutdown().await.unwrap();
+    }
+
+    struct FailingSnapshotPipeline;
+
+    #[async_trait]
+    impl PlaybackPipeline for FailingSnapshotPipeline {
+        async fn replace(&self, _: PairPlan) -> Result<(), PipelineError> {
+            Ok(())
+        }
+        async fn roll(&self, _: super::super::pipeline::RollingPlan) -> Result<(), PipelineError> {
+            Ok(())
+        }
+        async fn apply_output(&self, _: OutputConfig) -> Result<(), PipelineError> {
+            Ok(())
+        }
+        async fn set_playing(&self, _: bool) -> Result<(), PipelineError> {
+            Ok(())
+        }
+        async fn reconnect(&self, _: IcecastTarget) -> Result<(), PipelineError> {
+            Ok(())
+        }
+        async fn snapshot(&self) -> Result<PipelineSnapshot, PipelineError> {
+            Err(PipelineError::Pipeline("boom: snapshot unavailable".into()))
+        }
+        async fn stop(&self) -> Result<(), PipelineError> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn status_reports_a_real_stopped_pipeline_as_ok() {
+        let song = song_at(0, "A");
+        let (mut controller, _) = playing_controller(vec![song]).await;
+        controller.stop();
+        let status = controller.status().await.expect("a working pipeline must report status");
+        let StatusEvent::State { playing, elapsed, .. } = status else {
+            panic!("status must be a state event");
+        };
+        assert!(!playing, "a stopped pipeline reports playing=false");
+        assert_eq!(elapsed, 0);
+    }
+
+    #[tokio::test]
+    async fn status_propagates_a_snapshot_pipeline_error() {
+        let (status_tx, _) = broadcast::channel(1);
+        let (queue_tx, _) = broadcast::channel(1);
+        let db = unavailable_db();
+        let station_id = Uuid::new_v4();
+        let controller = StationController {
+            queue: Arc::new(QueueManager::new(db, station_id, String::new(), Vec::new(), 0)),
+            db: unavailable_db(),
+            station_id,
+            playback: StationPlaybackConfig::from_persisted("off", 0, 0, 0).unwrap(),
+            driver: PipelineDriver::spawn(Arc::new(FailingSnapshotPipeline)),
+            target: IcecastTarget::parse("localhost:8000", "secret".into(), "test", "test".into()).unwrap(),
+            state: PipelineState::Stopped,
+            status_tx,
+            queue_tx,
+            generation: 0,
+            output_epoch: 0,
+            planned_next: None,
+            idle: false,
+        };
+        // A failed Snapshot must surface as a pipeline error — never as a
+        // legal `Stopped` status that monitoring would mistake for a healthy
+        // stopped station.
+        let result = controller.status().await;
+        let Err(PipelineError::Pipeline(message)) = result else {
+            panic!("a failed snapshot must propagate as a pipeline error, got {result:?}");
+        };
+        assert!(message.contains("boom"), "unexpected error message: {message}");
     }
 }

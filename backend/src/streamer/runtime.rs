@@ -28,7 +28,7 @@ enum StationCommand {
     },
     PushQueueUpdate(oneshot::Sender<()>),
     TrimPlayedItems(oneshot::Sender<()>),
-    Status(oneshot::Sender<StatusEvent>),
+    Status(oneshot::Sender<Result<StatusEvent, PipelineError>>),
 }
 
 struct ReconnectRetry {
@@ -252,7 +252,7 @@ impl StationRuntime {
             .map_err(|_| PipelineError::Pipeline("station runtime stopped".to_owned()))?;
         receiver
             .await
-            .map_err(|_| PipelineError::Pipeline("station runtime stopped".to_owned()))
+            .map_err(|_| PipelineError::Pipeline("station runtime stopped".to_owned()))?
     }
 }
 
