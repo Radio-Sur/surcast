@@ -954,6 +954,13 @@ mod tests {
             Self::new(db, pipeline, songs)
         }
 
+        /// Consumes the harness and spawns the station runtime task, returning
+        /// the runtime handle and the pipeline-event channel driving it.
+        fn into_runtime(self) -> (StationRuntime, mpsc::UnboundedSender<PipelineEvent>) {
+            let (events, receiver) = mpsc::unbounded_channel();
+            (StationRuntime::spawn(self.controller, receiver), events)
+        }
+
         /// A playing controller: `play()` has run and reported a Replace.
         async fn playing(songs: Vec<SongInfo>) -> Self {
             let mut harness = Self::stopped(songs);
@@ -1051,8 +1058,7 @@ mod tests {
         let pipeline = Arc::new(RecordingPipeline::new());
         let mut harness = Harness::with_pipeline(pipeline.clone(), vec![song.clone()]);
         harness.controller.generation = 1;
-        let (events, receiver) = mpsc::unbounded_channel();
-        let runtime = StationRuntime::spawn(harness.controller, receiver);
+        let (runtime, events) = harness.into_runtime();
         runtime.pause().await.unwrap();
         events
             .send(PipelineEvent::CurrentEos {
@@ -1075,10 +1081,8 @@ mod tests {
         let song = queued_song("current", 0);
         let pipeline = Arc::new(RecordingPipeline::with_gates());
         let harness = Harness::with_pipeline(pipeline.clone(), vec![song.clone()]);
-        let controller = harness.controller;
         let current = StationController::track(song.clone()).key;
-        let (events, receiver) = mpsc::unbounded_channel();
-        let runtime = StationRuntime::spawn(controller, receiver);
+        let (runtime, events) = harness.into_runtime();
         let playing = {
             let runtime = runtime.clone();
             tokio::spawn(async move { runtime.play().await })
@@ -1119,13 +1123,10 @@ mod tests {
         // play() tops up a below-minimum queue through the database, so the
         // stop after the terminal EOS waits on real DB roundtrips; the exact
         // call sequence is asserted below, this is only a wait-for-it window.
-        tokio::time::timeout(Duration::from_secs(5), async {
-            while pipeline.calls().len() < 2 {
-                tokio::task::yield_now().await;
-            }
+        testsupport::wait_for_timeout(Duration::from_secs(5), "the stop sequence to reach the pipeline", || {
+            pipeline.calls().len() >= 2
         })
-        .await
-        .unwrap();
+        .await;
         let mut config = StationPlaybackConfig::from_persisted("crossfade", 1000, 1000, 4096).unwrap();
         config.output.prebuffer_bytes = 8192;
         runtime.update_config(config).await.unwrap();
@@ -1734,13 +1735,11 @@ mod tests {
         let Some(db) = reconnect_test_db().await else { return };
         let pipeline = Arc::new(RecordingPipeline::new());
         let harness = Harness::with_db(db.pool.clone(), pipeline.clone(), queued_songs(&["A", "B"]));
-        let (events, receiver) = mpsc::unbounded_channel();
-        let runtime = StationRuntime::spawn(harness.controller, receiver);
+        let (runtime, _events) = harness.into_runtime();
         let result = runtime.reconnect().await;
         assert!(result.is_ok(), "the manual caller must receive Ok, got {result:?}");
         assert_eq!(pipeline.count(Call::Reconnect), 1);
         runtime.shutdown().await.unwrap();
-        let _ = events;
         db.cleanup().await;
     }
 
@@ -1753,8 +1752,7 @@ mod tests {
         let pipeline = Arc::new(RecordingPipeline::new());
         pipeline.fail_once(Call::Reconnect);
         let harness = Harness::with_db(db.pool.clone(), pipeline.clone(), queued_songs(&["A", "B"]));
-        let (events, receiver) = mpsc::unbounded_channel();
-        let runtime = StationRuntime::spawn(harness.controller, receiver);
+        let (runtime, _events) = harness.into_runtime();
         let result = runtime.reconnect().await;
         match result {
             Err(PipelineError::Pipeline(message)) => assert!(message.contains("injected failure"), "unexpected error: {message}"),
@@ -1766,7 +1764,6 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(1500)).await;
         assert_eq!(pipeline.count(Call::Reconnect), 1, "a manual reconnect must stay one-shot");
         runtime.shutdown().await.unwrap();
-        let _ = events;
         db.cleanup().await;
     }
 
@@ -1819,8 +1816,7 @@ mod tests {
         let pipeline = Arc::new(RecordingPipeline::new());
         pipeline.fail_once(Call::Reconnect);
         let harness = Harness::with_db(db.pool.clone(), pipeline.clone(), queued_songs(&["A", "B"]));
-        let (events, receiver) = mpsc::unbounded_channel();
-        let runtime = StationRuntime::spawn(harness.controller, receiver);
+        let (runtime, events) = harness.into_runtime();
         runtime.play().await.unwrap();
 
         // Playing → output drops → automatic chain X starts; the first
@@ -1832,13 +1828,7 @@ mod tests {
                 message: "output dropped".into(),
             })
             .unwrap();
-        tokio::time::timeout(Duration::from_secs(2), async {
-            while pipeline.count(Call::Reconnect) == 0 {
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .expect("the first reconnect attempt must run");
+        testsupport::wait_for("the first reconnect attempt to run", || pipeline.count(Call::Reconnect) > 0).await;
 
         // The user pauses while the backoff timer is pending. The pause must
         // end the chain immediately: if it stayed active, a disconnect right
@@ -1853,13 +1843,11 @@ mod tests {
                 message: "output dropped again".into(),
             })
             .unwrap();
-        tokio::time::timeout(Duration::from_secs(2), async {
-            while pipeline.count(Call::Reconnect) < 2 {
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .expect("a disconnect after Pause→Play must run a real reconnect, not be coalesced into the dead chain");
+        testsupport::wait_for(
+            "a real reconnect after Pause→Play instead of one coalesced into the dead chain",
+            || pipeline.count(Call::Reconnect) >= 2,
+        )
+        .await;
 
         // The stale retry timer from chain X fires later: it must neither
         // run a third reconnect nor resurrect anything.
@@ -1867,7 +1855,6 @@ mod tests {
         assert_eq!(pipeline.count(Call::Reconnect), 2);
 
         runtime.shutdown().await.unwrap();
-        let _ = events;
         db.cleanup().await;
     }
 
@@ -1907,8 +1894,7 @@ mod tests {
         let Some(db) = reconnect_test_db().await else { return };
         let pipeline = Arc::new(RecordingPipeline::new());
         let harness = Harness::with_db(db.pool.clone(), pipeline.clone(), queued_songs(&["A", "B"]));
-        let (events, receiver) = mpsc::unbounded_channel();
-        let runtime = StationRuntime::spawn(harness.controller, receiver);
+        let (runtime, events) = harness.into_runtime();
         runtime.play().await.unwrap();
 
         // The user pauses; the output breaks WHILE PAUSED. The disconnect
@@ -1932,13 +1918,10 @@ mod tests {
         // Play resumes playback AND restores the broken output — no second
         // disconnect event is sent.
         runtime.play().await.unwrap();
-        tokio::time::timeout(Duration::from_secs(2), async {
-            while pipeline.count(Call::Reconnect) == 0 {
-                tokio::task::yield_now().await;
-            }
+        testsupport::wait_for("Play to restore an output that broke while paused", || {
+            pipeline.count(Call::Reconnect) > 0
         })
-        .await
-        .expect("Play must restore an output that broke while paused");
+        .await;
         assert_eq!(pipeline.count(Call::Reconnect), 1);
 
         // The restored chain finished successfully: no further retries.
@@ -1946,7 +1929,6 @@ mod tests {
         assert_eq!(pipeline.count(Call::Reconnect), 1);
 
         runtime.shutdown().await.unwrap();
-        let _ = events;
         db.cleanup().await;
     }
 
@@ -1958,8 +1940,7 @@ mod tests {
         let pipeline = Arc::new(RecordingPipeline::new());
         pipeline.fail_once(Call::Reconnect);
         let harness = Harness::with_db(db.pool.clone(), pipeline.clone(), queued_songs(&["A", "B"]));
-        let (events, receiver) = mpsc::unbounded_channel();
-        let runtime = StationRuntime::spawn(harness.controller, receiver);
+        let (runtime, events) = harness.into_runtime();
 
         // Playing → output drops → automatic chain X starts → reconnect #1
         // fails → backoff timer pending.
@@ -1971,13 +1952,7 @@ mod tests {
                 message: "output dropped".into(),
             })
             .unwrap();
-        tokio::time::timeout(Duration::from_secs(2), async {
-            while pipeline.count(Call::Reconnect) == 0 {
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .expect("the first reconnect attempt must run");
+        testsupport::wait_for("the first reconnect attempt to run", || pipeline.count(Call::Reconnect) > 0).await;
 
         // Pause: the retry chain is invalidated, but the knowledge that the
         // output is disconnected must survive.
@@ -1985,13 +1960,10 @@ mod tests {
 
         // Play with NO second disconnect event: the marker drives recovery.
         runtime.play().await.unwrap();
-        tokio::time::timeout(Duration::from_secs(2), async {
-            while pipeline.count(Call::Reconnect) < 2 {
-                tokio::task::yield_now().await;
-            }
+        testsupport::wait_for("Play to recover an output that was already disconnected before the pause", || {
+            pipeline.count(Call::Reconnect) >= 2
         })
-        .await
-        .expect("Play must recover an output that was already disconnected before the pause");
+        .await;
         assert_eq!(pipeline.count(Call::Reconnect), 2);
 
         // The stale timer from chain X fires later and does nothing.
@@ -1999,7 +1971,6 @@ mod tests {
         assert_eq!(pipeline.count(Call::Reconnect), 2);
 
         runtime.shutdown().await.unwrap();
-        let _ = events;
         db.cleanup().await;
     }
 
@@ -2011,8 +1982,7 @@ mod tests {
         let pipeline = Arc::new(RecordingPipeline::new());
         pipeline.fail_once(Call::Reconnect);
         let harness = Harness::with_db(db.pool.clone(), pipeline.clone(), queued_songs(&["A", "B"]));
-        let (events, receiver) = mpsc::unbounded_channel();
-        let runtime = StationRuntime::spawn(harness.controller, receiver);
+        let (runtime, events) = harness.into_runtime();
 
         runtime.play().await.unwrap();
         // Output breaks while paused: the marker is recorded.
@@ -2027,30 +1997,20 @@ mod tests {
 
         // Play starts recovery #1, which fails (chain A scheduled a retry).
         runtime.play().await.unwrap();
-        tokio::time::timeout(Duration::from_secs(2), async {
-            while pipeline.count(Call::Reconnect) == 0 {
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .expect("the first recovery attempt must run");
+        testsupport::wait_for("the first recovery attempt to run", || pipeline.count(Call::Reconnect) > 0).await;
 
         // Pause again before recovery succeeded; the marker must survive.
         runtime.pause().await.unwrap();
 
         // Play again — recovery #2 runs, no second disconnect event.
         runtime.play().await.unwrap();
-        tokio::time::timeout(Duration::from_secs(2), async {
-            while pipeline.count(Call::Reconnect) < 2 {
-                tokio::task::yield_now().await;
-            }
+        testsupport::wait_for("a second Play to retry the interrupted recovery", || {
+            pipeline.count(Call::Reconnect) >= 2
         })
-        .await
-        .expect("a second Play must retry the interrupted recovery");
+        .await;
         assert_eq!(pipeline.count(Call::Reconnect), 2);
 
         runtime.shutdown().await.unwrap();
-        let _ = events;
         db.cleanup().await;
     }
 
@@ -2061,8 +2021,7 @@ mod tests {
         let Some(db) = reconnect_test_db().await else { return };
         let pipeline = Arc::new(RecordingPipeline::new());
         let harness = Harness::with_db(db.pool.clone(), pipeline.clone(), queued_songs(&["A", "B"]));
-        let (events, receiver) = mpsc::unbounded_channel();
-        let runtime = StationRuntime::spawn(harness.controller, receiver);
+        let (runtime, events) = harness.into_runtime();
 
         runtime.play().await.unwrap();
         runtime.pause().await.unwrap();
@@ -2095,7 +2054,6 @@ mod tests {
         );
 
         runtime.shutdown().await.unwrap();
-        let _ = events;
         db.cleanup().await;
     }
 
@@ -2106,8 +2064,7 @@ mod tests {
         let Some(db) = reconnect_test_db().await else { return };
         let pipeline = Arc::new(RecordingPipeline::new());
         let harness = Harness::with_db(db.pool.clone(), pipeline.clone(), queued_songs(&["A", "B"]));
-        let (events, receiver) = mpsc::unbounded_channel();
-        let runtime = StationRuntime::spawn(harness.controller, receiver);
+        let (runtime, events) = harness.into_runtime();
 
         runtime.play().await.unwrap();
         runtime.pause().await.unwrap();
@@ -2132,7 +2089,6 @@ mod tests {
         );
 
         runtime.shutdown().await.unwrap();
-        let _ = events;
         db.cleanup().await;
     }
 
@@ -2144,8 +2100,7 @@ mod tests {
         let pipeline = Arc::new(RecordingPipeline::new());
         pipeline.fail_once(Call::Reconnect);
         let harness = Harness::with_db(db.pool.clone(), pipeline.clone(), queued_songs(&["A", "B"]));
-        let (events, receiver) = mpsc::unbounded_channel();
-        let runtime = StationRuntime::spawn(harness.controller, receiver);
+        let (runtime, events) = harness.into_runtime();
 
         runtime.play().await.unwrap();
         runtime.pause().await.unwrap();
@@ -2173,7 +2128,6 @@ mod tests {
         assert_eq!(pipeline.count(Call::Reconnect), 2);
 
         runtime.shutdown().await.unwrap();
-        let _ = events;
         db.cleanup().await;
     }
 
@@ -2533,8 +2487,7 @@ mod tests {
         let pipeline = Arc::new(RecordingPipeline::with_gates());
         let harness = Harness::with_pipeline(pipeline.clone(), vec![song.clone()]);
         let queue = harness.controller.queue.clone();
-        let (events, receiver) = mpsc::unbounded_channel();
-        let runtime = StationRuntime::spawn(harness.controller, receiver);
+        let (runtime, events) = harness.into_runtime();
         let playing = {
             let runtime = runtime.clone();
             tokio::spawn(async move { runtime.play().await })
@@ -2584,7 +2537,6 @@ mod tests {
         );
         assert_eq!(pipeline.count(Call::SetPlaying), 1);
         runtime.shutdown().await.unwrap();
-        let _ = events;
     }
 
     #[tokio::test]
@@ -2663,8 +2615,7 @@ mod tests {
         let pipeline = Arc::new(RecordingPipeline::new());
         let harness = Harness::with_pipeline(pipeline.clone(), vec![song.clone()]);
         let queue = harness.controller.queue.clone();
-        let (events, receiver) = mpsc::unbounded_channel();
-        let runtime = StationRuntime::spawn(harness.controller, receiver);
+        let (runtime, events) = harness.into_runtime();
         runtime.play().await.unwrap();
         events
             .send(PipelineEvent::CurrentEos {
@@ -2725,8 +2676,7 @@ mod tests {
     async fn shutdown_runs_through_the_executor_and_discards_pending_operations() {
         let pipeline = Arc::new(RecordingPipeline::with_gates());
         let harness = Harness::with_pipeline(pipeline.clone(), queued_songs(&["A", "B"]));
-        let (events, receiver) = mpsc::unbounded_channel();
-        let runtime = StationRuntime::spawn(harness.controller, receiver);
+        let (runtime, _events) = harness.into_runtime();
         let playing = {
             let runtime = runtime.clone();
             tokio::spawn(async move { runtime.play().await })
@@ -2774,7 +2724,6 @@ mod tests {
             .unwrap();
         assert!(shutdown_result.is_ok(), "shutdown must succeed: {shutdown_result:?}");
         assert_eq!(pipeline.calls(), [Call::Replace, Call::Stop]);
-        let _ = events;
         // The runtime is terminal: further commands are refused.
         assert!(runtime.play().await.is_err());
     }
@@ -2786,8 +2735,7 @@ mod tests {
         let pipeline = Arc::new(RecordingPipeline::with_gates());
         let harness = Harness::with_pipeline(pipeline.clone(), vec![song.clone()]);
         let queue = harness.controller.queue.clone();
-        let (events, receiver) = mpsc::unbounded_channel();
-        let runtime = StationRuntime::spawn(harness.controller, receiver);
+        let (runtime, events) = harness.into_runtime();
         let playing = {
             let runtime = runtime.clone();
             tokio::spawn(async move { runtime.play().await })
@@ -2837,7 +2785,6 @@ mod tests {
         assert_eq!(pipeline.count(Call::Replace), 2);
         assert_eq!(pipeline.count(Call::Stop), 1);
         runtime.shutdown().await.unwrap();
-        let _ = events;
     }
 
     #[tokio::test]
@@ -2850,8 +2797,7 @@ mod tests {
         pipeline.fail_nth(Call::Replace, 1);
         let harness = Harness::with_pipeline(pipeline.clone(), vec![song.clone()]);
         let queue = harness.controller.queue.clone();
-        let (events, receiver) = mpsc::unbounded_channel();
-        let runtime = StationRuntime::spawn(harness.controller, receiver);
+        let (runtime, events) = harness.into_runtime();
         runtime.play().await.unwrap();
         events
             .send(PipelineEvent::CurrentEos {
@@ -2889,6 +2835,5 @@ mod tests {
         assert_eq!(pipeline.count(Call::Replace), 3);
         assert_eq!(pipeline.count(Call::Stop), 1);
         runtime.shutdown().await.unwrap();
-        let _ = events;
     }
 }

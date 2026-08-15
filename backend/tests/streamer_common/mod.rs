@@ -63,10 +63,12 @@ pub fn free_port() -> u16 {
     std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port()
 }
 
-/// A station created through the API; `id` formats directly into URL paths.
+/// A station created through the API; `id` formats directly into URL paths
+/// and `stream_url` is the mount name the backend serves as `/{stream_url}.mp3`.
 #[derive(Clone, Debug)]
 pub struct TestStation {
     pub id: Uuid,
+    pub stream_url: String,
 }
 
 /// A song inserted into the library; `id` is a real database row id.
@@ -450,6 +452,7 @@ impl StreamerTestApp {
             .to_owned();
         Ok(TestStation {
             id: Uuid::parse_str(&station_id)?,
+            stream_url: stream_url.to_owned(),
         })
     }
 
@@ -819,6 +822,13 @@ impl StreamerTestApp {
         self.wait_status(station, "station playing", |status| status.playing).await
     }
 
+    /// Waits until the station plays a track past `after_index`; returns the
+    /// status that crossed it.
+    pub async fn wait_advance(&self, station: &TestStation, after_index: u64) -> Result<StatusView, Box<dyn std::error::Error>> {
+        self.wait_status(station, "advance", |status| status.playing && status.song_index > after_index)
+            .await
+    }
+
     /// Waits until the station is stopped.
     pub async fn wait_stopped(&self, station: &TestStation) -> Result<StatusView, Box<dyn std::error::Error>> {
         self.wait_status(station, "station stopped", |status| !status.playing).await
@@ -859,6 +869,13 @@ impl StreamerTestApp {
             return Err(failure("mount served no audio"));
         }
         Ok(())
+    }
+
+    /// Asserts the station's own mount (`/{stream_url}.mp3` on the app's
+    /// Icecast port) serves audio.
+    pub async fn assert_station_serves_audio(&self, station: &TestStation) -> Result<(), Box<dyn std::error::Error>> {
+        let url = format!("http://127.0.0.1:{}/{}.mp3", self.port, station.stream_url);
+        self.assert_mount_serves_audio(&url).await
     }
 
     /// Reads raw bytes straight from the Icecast TCP port (bypasses the

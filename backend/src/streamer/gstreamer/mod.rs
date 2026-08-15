@@ -800,6 +800,12 @@ mod tests {
             path
         }
 
+        /// Writes a tone WAV, keeps it alive, and builds the matching track.
+        fn track(&mut self, duration: Duration, sample: i16, position: i32) -> PipelineTrack {
+            let file = self.wav(duration, sample);
+            track(&file, position)
+        }
+
         /// The next pipeline event within the standard bounded timeout.
         async fn next_event(&mut self) -> PipelineEvent {
             tokio::time::timeout(Duration::from_secs(3), self.events.recv())
@@ -884,10 +890,10 @@ mod tests {
     async fn reconnect_preserves_paused_and_playing_state() {
         let target = testsupport::target();
         let mut harness = GstHarness::new().await;
-        let file = harness.wav(Duration::from_secs(5), 0);
+        let current = harness.track(Duration::from_secs(5), 0, 0);
         harness
             .pipeline
-            .replace(initial_plan(1, track(&file, 0), None, TransitionPlan::Cut))
+            .replace(initial_plan(1, current, None, TransitionPlan::Cut))
             .await
             .unwrap();
         harness.pipeline.set_playing(false).await.unwrap();
@@ -898,10 +904,10 @@ mod tests {
         harness.stop().await;
 
         let mut harness = GstHarness::new().await;
-        let file = harness.wav(Duration::from_secs(5), 0);
+        let current = harness.track(Duration::from_secs(5), 0, 0);
         harness
             .pipeline
-            .replace(initial_plan(1, track(&file, 0), None, TransitionPlan::Cut))
+            .replace(initial_plan(1, current, None, TransitionPlan::Cut))
             .await
             .unwrap();
         harness.pipeline.reconnect(target).await.unwrap();
@@ -946,10 +952,8 @@ mod tests {
     #[tokio::test]
     async fn schedules_next_branch_and_handover_on_the_clocked_fade_midpoint() {
         let mut harness = GstHarness::new().await;
-        let current_file = harness.wav(Duration::from_secs(1), 8_000);
-        let next_file = harness.wav(Duration::from_secs(1), -8_000);
-        let current = track(&current_file, 0);
-        let next = track(&next_file, 1);
+        let current = harness.track(Duration::from_secs(1), 8_000, 0);
+        let next = harness.track(Duration::from_secs(1), -8_000, 1);
         let next_key = next.key.clone();
         let started = std::time::Instant::now();
 
@@ -982,14 +986,10 @@ mod tests {
     #[tokio::test]
     async fn schedules_each_replacement_on_its_own_running_time() {
         let mut harness = GstHarness::new().await;
-        let first_file = harness.wav(Duration::from_secs(1), 8_000);
-        let second_file = harness.wav(Duration::from_secs(1), -8_000);
-        let third_file = harness.wav(Duration::from_secs(1), 4_000);
-        let fourth_file = harness.wav(Duration::from_secs(1), -4_000);
-        let first = track(&first_file, 0);
-        let second = track(&second_file, 1);
-        let third = track(&third_file, 2);
-        let fourth = track(&fourth_file, 3);
+        let first = harness.track(Duration::from_secs(1), 8_000, 0);
+        let second = harness.track(Duration::from_secs(1), -8_000, 1);
+        let third = harness.track(Duration::from_secs(1), 4_000, 2);
+        let fourth = harness.track(Duration::from_secs(1), -4_000, 3);
         let third_key = third.key.clone();
         let fourth_key = fourth.key.clone();
         let pipeline = harness.pipeline.clone();
@@ -1056,10 +1056,8 @@ mod tests {
     #[tokio::test]
     async fn applies_autocue_seeks_before_the_clocked_handover() {
         let mut harness = GstHarness::new().await;
-        let current_file = harness.wav(Duration::from_millis(1_500), 8_000);
-        let next_file = harness.wav(Duration::from_millis(1_500), -8_000);
-        let current = track(&current_file, 0);
-        let next = track(&next_file, 1);
+        let current = harness.track(Duration::from_millis(1_500), 8_000, 0);
+        let next = harness.track(Duration::from_millis(1_500), -8_000, 1);
         let next_key = next.key.clone();
         let started = std::time::Instant::now();
 

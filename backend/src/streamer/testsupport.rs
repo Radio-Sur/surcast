@@ -115,16 +115,21 @@ pub(crate) fn pipeline_config() -> PipelineConfig {
 }
 
 /// Polls `cond` (with cooperative yields) until it holds, panicking after
-/// two seconds with a descriptive message. Deterministic: no sleeps, so the
+/// `timeout` with a descriptive message. Deterministic: no sleeps, so the
 /// wait is bounded by actual progress of the condition.
-pub(crate) async fn wait_for(what: &str, mut cond: impl FnMut() -> bool) {
-    tokio::time::timeout(Duration::from_secs(2), async {
+pub(crate) async fn wait_for_timeout(timeout: Duration, what: &str, mut cond: impl FnMut() -> bool) {
+    tokio::time::timeout(timeout, async {
         while !cond() {
             tokio::task::yield_now().await;
         }
     })
     .await
     .unwrap_or_else(|_| panic!("timed out waiting for {what}"));
+}
+
+/// [`wait_for_timeout`] with the standard two-second deadline.
+pub(crate) async fn wait_for(what: &str, cond: impl FnMut() -> bool) {
+    wait_for_timeout(Duration::from_secs(2), what, cond).await
 }
 
 /// A single pipeline call, as recorded by [`RecordingPipeline`].

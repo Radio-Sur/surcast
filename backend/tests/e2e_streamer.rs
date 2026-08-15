@@ -25,6 +25,14 @@ async fn ws_recv_text(socket: &mut TestWs, timeout_secs: u64) -> Result<String, 
     }
 }
 
+/// The frontend's upcoming-queue measure (see `streamer_common::visible_upcoming`),
+/// read through the live API.
+async fn visible_upcoming(app: &StreamerTestApp, station: &TestStation) -> Result<i64, Box<dyn std::error::Error>> {
+    let queue = app.fetch_queue(station).await?;
+    let status = app.status(station).await?;
+    Ok(streamer_common::visible_upcoming(&status, &queue))
+}
+
 #[tokio::test]
 #[serial]
 async fn managed_icecast_serves_gstreamer_encoded_mp3() {
@@ -217,8 +225,7 @@ async fn crossfade_naturally_promotes_each_queued_track_once() {
         app.enqueue_songs(&station, &songs).await?;
 
         app.restart(&station).await?;
-        let url = format!("http://127.0.0.1:{}/natural-crossfade.mp3", app.port);
-        app.assert_mount_serves_audio(&url).await?;
+        app.assert_station_serves_audio(&station).await?;
 
         for (index, song) in songs.iter().enumerate() {
             let status = app
@@ -262,8 +269,7 @@ async fn manual_auto_dj_trigger_keeps_an_exhausted_memory_queue_playing() {
         // as Auto DJ picks.
         app.enqueue(&station, &[songs[0].id]).await?;
         app.restart(&station).await?;
-        let url = format!("http://127.0.0.1:{}/auto-dj-trigger.mp3", app.port);
-        app.assert_mount_serves_audio(&url).await?;
+        app.assert_station_serves_audio(&station).await?;
 
         app.wait_title_playing(&station, "tone A").await?;
 
@@ -326,8 +332,7 @@ async fn play_with_empty_queue_fills_from_auto_dj_and_starts() {
         if !["tone A", "tone B", "tone C"].contains(&playing.title.as_str()) {
             return Err(failure(format!("Auto DJ pick has an unexpected title: {playing:?}")));
         }
-        let url = format!("http://127.0.0.1:{}/empty-play-autodj.mp3", app.port);
-        app.assert_mount_serves_audio(&url).await?;
+        app.assert_station_serves_audio(&station).await?;
         Ok(())
     })
     .await
@@ -355,8 +360,7 @@ async fn natural_queue_exhaustion_refills_from_auto_dj() {
         app.enqueue(&station, &[songs[0].id]).await?;
         app.enable_auto_fill(&station, 2, false).await?;
         app.restart(&station).await?;
-        let url = format!("http://127.0.0.1:{}/natural-exhaustion-autodj.mp3", app.port);
-        app.assert_mount_serves_audio(&url).await?;
+        app.assert_station_serves_audio(&station).await?;
 
         app.wait_title_playing(&station, "tone A").await?;
 
@@ -420,8 +424,7 @@ async fn repro_audio_survives_last_track_refill_after_empty_queue_start() {
             return Err(failure(format!("no first Auto DJ pick: {playing:?}")));
         }
 
-        let url = format!("http://127.0.0.1:{}/empty-start-audio-repro.mp3", app.port);
-        app.assert_mount_serves_audio(&url).await?;
+        app.assert_station_serves_audio(&station).await?;
 
         // The first track ends with nothing staged behind it: the controller
         // must refill from Auto DJ and keep the broadcast alive.
@@ -437,7 +440,7 @@ async fn repro_audio_survives_last_track_refill_after_empty_queue_start() {
 
         // The broadcast itself must survive the transition: the mount has to
         // serve real audio again after the refill, not just report playing.
-        app.assert_mount_serves_audio(&url).await.map_err(|error| {
+        app.assert_station_serves_audio(&station).await.map_err(|error| {
             failure(format!(
                 "mount served no audio after the refill transition; status claimed: {advanced:?} ({error})"
             ))
@@ -590,8 +593,7 @@ async fn mixed_queue_drain_keeps_playing_with_auto_dj_picks() {
         app.enqueue(&station, &[songs[0].id, songs[1].id, songs[2].id]).await?;
         app.enable_auto_fill(&station, 2, false).await?;
         app.restart(&station).await?;
-        let url = format!("http://127.0.0.1:{}/mixed-drain-autodj.mp3", app.port);
-        app.assert_mount_serves_audio(&url).await?;
+        app.assert_station_serves_audio(&station).await?;
 
         // The manual songs play through one by one...
         app.wait_title_playing(&station, "tone A").await?;
@@ -669,7 +671,7 @@ async fn auto_dj_keeps_songs_ahead_with_crossfade_handovers() {
         let mut last_index = 0u64;
         for _ in 0..10 {
             let status = app
-                .wait_status(&station, "handover", |status| status.playing && status.song_index > last_index)
+                .wait_advance(&station, last_index)
                 .await
                 .map_err(|error| failure(format!("playback stalled between handovers: {error}")))?;
             last_index = status.song_index;
@@ -684,7 +686,7 @@ async fn auto_dj_keeps_songs_ahead_with_crossfade_handovers() {
             // splits the queue API rows at song_index % len (played / now /
             // upcoming) — verify the upcoming slice it derives stays >= 4.
             let queue = app.fetch_queue(&station).await?;
-            let visible = visible_upcoming(&status, &queue);
+            let visible = streamer_common::visible_upcoming(&status, &queue);
             if visible < 4 {
                 return Err(failure(format!(
                     "panel queue view shows {visible} upcoming (< 4) after {:?} (queue {} rows, song_index {})",
@@ -707,11 +709,9 @@ async fn auto_dj_keeps_songs_ahead_with_crossfade_handovers() {
         .execute(&app.db)
         .await?;
         app.play(&station).await?;
-        app.wait_status(&station, "resume after trim", |status| {
-            status.playing && status.song_index > last_index
-        })
-        .await
-        .map_err(|error| failure(format!("playback did not resume after the queue was trimmed: {error}")))?;
+        app.wait_advance(&station, last_index)
+            .await
+            .map_err(|error| failure(format!("playback did not resume after the queue was trimmed: {error}")))?;
         let refilled = upcoming_rows(&app.db, &station).await;
         if refilled < 2 {
             return Err(failure(format!(
@@ -744,24 +744,6 @@ async fn autodj_never_overfills_the_upcoming_window() {
         app.enable_auto_fill(&station, 4, false).await?;
         app.restart(&station).await?;
 
-        async fn visible_upcoming(app: &StreamerTestApp, station: &TestStation) -> Result<i64, Box<dyn std::error::Error>> {
-            let queue = app.fetch_queue(station).await?;
-            let status = app.status(station).await?;
-            Ok(streamer_common::visible_upcoming(&status, &queue))
-        }
-
-        async fn advance(
-            app: &StreamerTestApp,
-            station: &TestStation,
-            last_index: &mut u64,
-        ) -> Result<StatusView, Box<dyn std::error::Error>> {
-            let status = app
-                .wait_status(station, "advance", |status| status.playing && status.song_index > *last_index)
-                .await?;
-            *last_index = status.song_index;
-            Ok(status)
-        }
-
         // Seed from an empty queue: exactly four visible upcoming.
         app.wait_playing(&station).await?;
         let seeded = visible_upcoming(app, &station).await?;
@@ -772,7 +754,7 @@ async fn autodj_never_overfills_the_upcoming_window() {
         // Three handovers: the window must stay exactly 4, never grow.
         let mut last_index = 0u64;
         for _ in 0..3 {
-            advance(app, &station, &mut last_index).await?;
+            last_index = app.wait_advance(&station, last_index).await?.song_index;
             let upcoming = visible_upcoming(app, &station).await?;
             if upcoming != 4 {
                 return Err(failure(format!("after a handover the window holds {upcoming}, expected exactly 4")));
@@ -795,7 +777,7 @@ async fn autodj_never_overfills_the_upcoming_window() {
         for item in &queue {
             app.remove_queue_item(&station, &item.id).await?;
         }
-        advance(app, &station, &mut last_index).await?;
+        app.wait_advance(&station, last_index).await?;
         // The window is read through two separate HTTP calls (queue, then
         // status), so a commit+refill can land between them and the count
         // briefly reads one short. Wait for the refill to settle — the
@@ -933,24 +915,6 @@ async fn stale_cursor_heals_and_queue_keeps_refilling() {
         app.enable_auto_fill(&station, 4, false).await?;
         app.restart(&station).await?;
 
-        async fn visible_upcoming(app: &StreamerTestApp, station: &TestStation) -> Result<i64, Box<dyn std::error::Error>> {
-            let queue = app.fetch_queue(station).await?;
-            let status = app.status(station).await?;
-            Ok(streamer_common::visible_upcoming(&status, &queue))
-        }
-
-        async fn advance(
-            app: &StreamerTestApp,
-            station: &TestStation,
-            last_index: &mut u64,
-        ) -> Result<StatusView, Box<dyn std::error::Error>> {
-            let status = app
-                .wait_status(station, "advance", |status| status.playing && status.song_index > *last_index)
-                .await?;
-            *last_index = status.song_index;
-            Ok(status)
-        }
-
         // Seed: five rows (one current + songs_ahead upcoming).
         app.wait_playing(&station).await?;
         if visible_upcoming(app, &station).await? < 4 {
@@ -959,8 +923,8 @@ async fn stale_cursor_heals_and_queue_keeps_refilling() {
 
         let mut last_index = 0u64;
         // Two clean handovers first.
-        advance(app, &station, &mut last_index).await?;
-        advance(app, &station, &mut last_index).await?;
+        last_index = app.wait_advance(&station, last_index).await?.song_index;
+        last_index = app.wait_advance(&station, last_index).await?.song_index;
         if visible_upcoming(app, &station).await? < 4 {
             return Err(failure("queue fell below songs_ahead during clean playback"));
         }
@@ -979,7 +943,7 @@ async fn stale_cursor_heals_and_queue_keeps_refilling() {
         .await?;
 
         for _ in 0..4 {
-            advance(app, &station, &mut last_index).await?;
+            last_index = app.wait_advance(&station, last_index).await?.song_index;
             let upcoming = visible_upcoming(app, &station).await?;
             if upcoming < 4 {
                 return Err(failure(format!(
@@ -1048,8 +1012,7 @@ async fn reorder_during_playback_plays_the_moved_track_next() {
         let b_id = initial[1].id.clone();
         let c_id = initial[2].id.clone();
         app.restart(&station).await?;
-        let url = format!("http://127.0.0.1:{}/reorder-head.mp3", app.port);
-        app.assert_mount_serves_audio(&url).await?;
+        app.assert_station_serves_audio(&station).await?;
 
         let playing = app.wait_title_playing(&station, "tone A").await?;
         if playing.song_index != 0 {
