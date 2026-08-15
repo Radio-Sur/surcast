@@ -897,9 +897,6 @@ mod tests {
         harness.submit_urgent(action);
         harness.set_playing_regular(false);
 
-        // The single retry is re-queued on the command channel after the
-        // backoff window (1 << 0 = 1s), with the next attempt number and the
-        // chain token it belongs to.
         let retry = tokio::time::timeout(Duration::from_secs(3), async {
             loop {
                 if let Some(StationCommand::RetryReconnect {
@@ -1017,8 +1014,6 @@ mod tests {
         let mut harness = ExecutorHarness::new(1);
         harness.pipeline.fail(Call::Reconnect);
 
-        // Command channel with capacity 1, pre-filled with a dummy command:
-        // `send(ReconnectFinished)` must wait for room.
         let (dummy_tx, _dummy_rx) = oneshot::channel();
         harness.commands.send(StationCommand::PushQueueUpdate(dummy_tx)).await.unwrap();
 

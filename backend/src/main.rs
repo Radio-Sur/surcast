@@ -39,7 +39,6 @@ async fn main() {
         listeners_state,
     );
 
-    // Auto-start Icecast if enabled and managed
     let settings = icecast::models::get_settings(&pool).await;
     if let Ok(settings) = settings {
         if settings.enabled && settings.mode == IcecastMode::Managed {

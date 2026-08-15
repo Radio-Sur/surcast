@@ -62,10 +62,8 @@ struct AlbumImage {
 /// Try to extract artist and title from a filename (without extension).
 /// Supports "Artist - Title", "01 - Artist - Title", "01. Artist - Title".
 pub fn parse_filename(name: &str) -> (String, String) {
-    // Replace underscores and multiple spaces with single space
     let cleaned = name.trim().replace('_', " ").split_whitespace().collect::<Vec<_>>().join(" ");
 
-    // Strip leading track number ("01 " or "01.")
     let cleaned = if let Some(space) = cleaned.find(' ') {
         let first_word = &cleaned[..space];
         if first_word.bytes().all(|b| b.is_ascii_digit()) {
@@ -87,7 +85,6 @@ pub fn parse_filename(name: &str) -> (String, String) {
         cleaned
     };
 
-    // Remove parenthesised / bracketed quality tags, edition labels etc.
     let cleaned = {
         let mut s = cleaned;
         for (open, close) in [('(', ')'), ('[', ']')] {

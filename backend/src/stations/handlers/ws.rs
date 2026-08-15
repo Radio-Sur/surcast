@@ -386,13 +386,11 @@ async fn ws_recv_task(
 async fn forward_station(streamers: StreamersMap, station_id: Uuid, out_tx: mpsc::UnboundedSender<Outbound>) {
     loop {
         let Some(streamer) = get_streamer(&streamers, &station_id) else {
-            // Station is stopped; wait for a streamer to appear again.
             tokio::time::sleep(Duration::from_millis(200)).await;
             continue;
         };
         let mut status_rx = streamer.subscribe_status();
         let mut queue_rx = streamer.subscribe_queue();
-        // Fresh snapshot so the client re-syncs after a streamer replacement.
         match streamer.status().await {
             Ok(status) => {
                 let _ = out_tx.send(Outbound::Status { station_id, data: status });
@@ -432,8 +430,6 @@ async fn forward_station(streamers: StreamersMap, station_id: Uuid, out_tx: mpsc
                     Err(broadcast::error::RecvError::Closed) => detach = true,
                 },
                 _ = recheck.tick() => {
-                    // The streamer was replaced or the station stopped:
-                    // re-resolve on the next loop iteration.
                     if !matches!(get_streamer(&streamers, &station_id), Some(current) if Arc::ptr_eq(&current, &streamer)) {
                         detach = true;
                     }

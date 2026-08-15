@@ -1608,7 +1608,6 @@ mod tests {
         let base_db = options.get_database().map(str::to_owned).unwrap_or_else(|| "postgres".to_owned());
         let db_name = format!("{}_test_{}", base_db, Uuid::new_v4().to_string().replace('-', ""));
 
-        // Admin connection to the maintenance database for CREATE/DROP.
         let admin_pool = sqlx::postgres::PgPoolOptions::new()
             .connect_with(options.clone().database("postgres"))
             .await
@@ -1700,8 +1699,6 @@ mod tests {
             other => panic!("expected the pipeline error, got {other:?}"),
         }
         assert_eq!(pipeline.count(Call::Reconnect), 1, "the manual reconnect must run exactly once");
-        // One-shot: no automatic retry timer fires within the first backoff
-        // window.
         tokio::time::sleep(Duration::from_millis(1500)).await;
         assert_eq!(pipeline.count(Call::Reconnect), 1, "a manual reconnect must stay one-shot");
         runtime.shutdown().await.unwrap();
