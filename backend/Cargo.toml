@@ -43,3 +43,4 @@ uuid = { version = "1", features = ["v4"] }
 serial_test = "4"
 id3 = "1"
 tokio-tungstenite = "0.24"
+parking_lot = "0.12"

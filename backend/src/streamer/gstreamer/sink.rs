@@ -127,9 +127,13 @@ async fn send_metadata(client: &reqwest::Client, target: &IcecastTarget, metadat
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::streamer::testsupport::HttpStub;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::{TcpListener, TcpStream};
 
+    /// Reads one full HTTP request (headers + content-length body). Only the
+    /// cancellation test needs this: it must hold the response open until
+    /// `clear()` runs, which the shared [`HttpStub`] does not support.
     async fn read_request(stream: &mut TcpStream) -> String {
         let mut request = Vec::new();
         loop {
@@ -153,18 +157,8 @@ mod tests {
 
     #[tokio::test]
     async fn metadata_update_uses_source_credentials_and_current_artist_title() {
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let port = listener.local_addr().unwrap().port();
-        let server = tokio::spawn(async move {
-            let (mut stream, _) = listener.accept().await.unwrap();
-            let request = read_request(&mut stream).await;
-            stream
-                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
-                .await
-                .unwrap();
-            request
-        });
-        let target = IcecastTarget::parse(&format!("127.0.0.1:{port}"), "secret".into(), "daily mix", "Daily".into()).unwrap();
+        let mut stub = HttpStub::spawn(&[("200 OK", Duration::ZERO)]).await;
+        let target = IcecastTarget::parse(&format!("127.0.0.1:{}", stub.port), "secret".into(), "daily mix", "Daily".into()).unwrap();
 
         send_metadata(
             &reqwest::Client::new(),
@@ -176,8 +170,9 @@ mod tests {
         )
         .await
         .unwrap();
+        stub.join().await;
 
-        let request = server.await.unwrap();
+        let request = &stub.requests()[0];
         assert!(request.starts_with("GET /admin/metadata?mode=updinfo&mount=%2Fdaily%2520mix&song=Current+artist+-+Current+title HTTP/1.1"));
         assert!(!request.contains("content-type: application/x-www-form-urlencoded"));
         assert!(request.contains("\r\nauthorization: Basic c291cmNlOnNlY3JldA==\r\n"));
@@ -185,22 +180,8 @@ mod tests {
 
     #[tokio::test]
     async fn metadata_publisher_retries_until_the_source_mount_is_available() {
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let port = listener.local_addr().unwrap().port();
-        let server = tokio::spawn(async move {
-            let mut requests = Vec::new();
-            for status in ["404 Not Found", "200 OK"] {
-                let (mut stream, _) = listener.accept().await.unwrap();
-                let request = read_request(&mut stream).await;
-                requests.push(request);
-                stream
-                    .write_all(format!("HTTP/1.1 {status}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").as_bytes())
-                    .await
-                    .unwrap();
-            }
-            requests
-        });
-        let target = IcecastTarget::parse(&format!("127.0.0.1:{port}"), "secret".into(), "stream", "Stream".into()).unwrap();
+        let mut stub = HttpStub::spawn(&[("404 Not Found", Duration::ZERO), ("200 OK", Duration::ZERO)]).await;
+        let target = IcecastTarget::parse(&format!("127.0.0.1:{}", stub.port), "secret".into(), "stream", "Stream".into()).unwrap();
         let publisher = MetadataPublisher::spawn();
         publisher.publish(
             target,
@@ -210,10 +191,10 @@ mod tests {
             },
         );
 
-        let requests = tokio::time::timeout(Duration::from_secs(2), server)
+        tokio::time::timeout(Duration::from_secs(2), stub.join())
             .await
-            .expect("metadata retry")
-            .unwrap();
+            .expect("metadata retry");
+        let requests = stub.requests();
         assert_eq!(requests.len(), 2);
         assert!(requests
             .iter()

@@ -7,6 +7,9 @@ pub mod queue_repository;
 pub mod queue_state;
 pub mod runtime;
 
+#[cfg(test)]
+pub(crate) mod testsupport;
+
 use serde::Serialize;
 use sqlx::PgPool;
 use std::sync::Arc;

@@ -3160,6 +3160,7 @@ dependencies = [
  "id3",
  "jsonwebtoken",
  "mime_guess",
+ "parking_lot",
  "quick-xml",
  "rand 0.10.2",
  "reqwest",

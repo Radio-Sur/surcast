@@ -885,176 +885,113 @@ impl StationController {
 #[cfg(test)]
 mod tests {
     use crate::db;
-    use crate::streamer::pipeline::OutputConfig;
     use std::str::FromStr;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-
-    use super::super::pipeline::PlaybackPipeline;
-
-    use async_trait::async_trait;
-    use tokio::sync::{broadcast, mpsc, Mutex, Notify};
-    use uuid::Uuid;
-
-    use crate::streamer::runtime::StationRuntime;
+    use std::sync::Arc;
 
     use super::*;
-    fn unavailable_db() -> PgPool {
-        sqlx::postgres::PgPoolOptions::new()
-            .acquire_timeout(Duration::from_millis(10))
-            .connect_lazy("postgres://surcast:surcast@127.0.0.1:1/surcast")
-            .unwrap()
+    use crate::streamer::driver::{PipelineDriver, PipelineOperation};
+    use crate::streamer::runtime::StationRuntime;
+    use crate::streamer::testsupport::{self, queued_song, queued_songs, Call, RecordingPipeline};
+    use tokio::sync::{broadcast, mpsc};
+    use uuid::Uuid;
+
+    /// Builds a real `StationController` around the shared recording
+    /// pipeline, hiding the recurring broadcast channels, queue manager,
+    /// station id, playback config, driver, target, and reconnect/resume
+    /// defaults. Tests reach the controller through `harness.controller`
+    /// (fields stay private to the controller module) and read pipeline
+    /// effects through `harness.pipeline`.
+    struct Harness {
+        controller: StationController,
+        pipeline: Arc<RecordingPipeline>,
     }
 
-    struct FakePipeline {
-        replacements: AtomicUsize,
-        state_changes: AtomicUsize,
-        stops: AtomicUsize,
-    }
-
-    #[async_trait]
-    impl PlaybackPipeline for FakePipeline {
-        async fn replace(&self, _: PairPlan) -> Result<(), PipelineError> {
-            self.replacements.fetch_add(1, Ordering::Release);
-            Ok(())
-        }
-        async fn roll(&self, _: super::super::pipeline::RollingPlan) -> Result<(), PipelineError> {
-            Ok(())
-        }
-        async fn apply_output(&self, _: OutputConfig) -> Result<(), PipelineError> {
-            Ok(())
-        }
-
-        async fn set_playing(&self, _: bool) -> Result<(), PipelineError> {
-            self.state_changes.fetch_add(1, Ordering::Release);
-            Ok(())
-        }
-
-        async fn reconnect(&self, _: IcecastTarget) -> Result<(), PipelineError> {
-            Ok(())
-        }
-
-        async fn snapshot(&self) -> Result<PipelineSnapshot, PipelineError> {
-            Ok(PipelineSnapshot {
+    impl Harness {
+        fn new(db: PgPool, pipeline: Arc<RecordingPipeline>, songs: Vec<SongInfo>) -> Self {
+            let (status_tx, _) = broadcast::channel(1);
+            let (queue_tx, _) = broadcast::channel(1);
+            let station_id = Uuid::new_v4();
+            let queue = Arc::new(QueueManager::new(db.clone(), station_id, String::new(), songs, 0));
+            let controller = StationController {
+                queue,
+                db,
+                station_id,
+                playback: testsupport::playback_config(),
+                driver: PipelineDriver::spawn(pipeline.clone()),
+                target: testsupport::target(),
                 state: PipelineState::Stopped,
-                elapsed: Duration::ZERO,
-            })
+                status_tx,
+                queue_tx,
+                generation: 0,
+                output_epoch: 0,
+                planned_next: None,
+                idle: false,
+                pending_resume: None,
+                resume_attempt_seq: 0,
+                active_reconnect_retry: None,
+                reconnect_retry_seq: 0,
+                active_reconnect_output: None,
+                reconnect_token_shared: std::sync::Arc::default(),
+                known_disconnected_output: None,
+            };
+            Self { controller, pipeline }
         }
 
-        async fn stop(&self) -> Result<(), PipelineError> {
-            self.stops.fetch_add(1, Ordering::Release);
-            Ok(())
-        }
-    }
-
-    struct BlockingPipeline {
-        replace_started: Notify,
-        release_replace: Notify,
-        calls: Mutex<Vec<&'static str>>,
-    }
-
-    #[async_trait]
-    impl PlaybackPipeline for BlockingPipeline {
-        async fn replace(&self, _: PairPlan) -> Result<(), PipelineError> {
-            self.calls.lock().await.push("replace");
-            self.replace_started.notify_one();
-            self.release_replace.notified().await;
-            Ok(())
-        }
-        async fn roll(&self, _: super::super::pipeline::RollingPlan) -> Result<(), PipelineError> {
-            self.calls.lock().await.push("roll");
-            Ok(())
+        /// A stopped controller with the given queue over the intentionally
+        /// unavailable database.
+        fn stopped(songs: Vec<SongInfo>) -> Self {
+            Self::new(testsupport::unavailable_db(), Arc::new(RecordingPipeline::new()), songs)
         }
 
-        async fn apply_output(&self, _: OutputConfig) -> Result<(), PipelineError> {
-            self.calls.lock().await.push("output");
-            Ok(())
+        /// Like [`Harness::stopped`] but with a pre-configured pipeline
+        /// (gates or failure injection) — the driver is spawned around it.
+        fn with_pipeline(pipeline: Arc<RecordingPipeline>, songs: Vec<SongInfo>) -> Self {
+            Self::new(testsupport::unavailable_db(), pipeline, songs)
         }
 
-        async fn set_playing(&self, _: bool) -> Result<(), PipelineError> {
-            self.calls.lock().await.push("set_playing");
-            Ok(())
+        /// A controller over a real test database (reconnect suite).
+        fn with_db(db: PgPool, pipeline: Arc<RecordingPipeline>, songs: Vec<SongInfo>) -> Self {
+            Self::new(db, pipeline, songs)
         }
 
-        async fn reconnect(&self, _: IcecastTarget) -> Result<(), PipelineError> {
-            Ok(())
+        /// A playing controller: `play()` has run and reported a Replace.
+        async fn playing(songs: Vec<SongInfo>) -> Self {
+            let mut harness = Self::stopped(songs);
+            assert!(matches!(harness.controller.play().await, PipelineOperation::Replace(_)));
+            assert_eq!(harness.controller.state, PipelineState::Playing);
+            harness
         }
 
-        async fn snapshot(&self) -> Result<PipelineSnapshot, PipelineError> {
-            Ok(PipelineSnapshot {
-                state: PipelineState::Stopped,
-                elapsed: Duration::ZERO,
-            })
-        }
-
-        async fn stop(&self) -> Result<(), PipelineError> {
-            self.calls.lock().await.push("stop");
-            Ok(())
+        /// Splits the harness back into its controller and pipeline for
+        /// tests that drive the controller directly.
+        fn into_parts(self) -> (StationController, Arc<RecordingPipeline>) {
+            (self.controller, self.pipeline)
         }
     }
 
     #[tokio::test]
     async fn stale_events_do_not_replace_or_reconnect() {
-        let song = SongInfo {
-            queue_item_id: Uuid::new_v4(),
-            song_id: Uuid::new_v4(),
-            title: "current".into(),
-            artist: String::new(),
-            duration: 1,
-            file_path: String::new(),
-            position: 0,
-            cue_in: 0.0,
-            cue_out: 0.0,
-            cross_start_next: 0.0,
-            analyzed: false,
-        };
-        let (status_tx, _) = broadcast::channel(1);
-        let (queue_tx, _) = broadcast::channel(1);
-        let db = unavailable_db();
-        let station_id = Uuid::new_v4();
-        let queue = Arc::new(QueueManager::new(db.clone(), station_id, String::new(), vec![song.clone()], 0));
-        let pipeline = Arc::new(FakePipeline {
-            replacements: AtomicUsize::new(0),
-            state_changes: AtomicUsize::new(0),
-            stops: AtomicUsize::new(0),
-        });
-        let mut controller = StationController {
-            queue,
-            db: unavailable_db(),
-            station_id,
-            playback: StationPlaybackConfig::from_persisted("off", 0, 0, 0).unwrap(),
-            driver: PipelineDriver::spawn(pipeline.clone()),
-            target: IcecastTarget::parse("localhost:8000", "secret".into(), "test", "test".into()).unwrap(),
-            state: PipelineState::Stopped,
-            status_tx,
-            queue_tx,
-            generation: 1,
-            output_epoch: 0,
-            planned_next: None,
-            idle: false,
-            pending_resume: None,
-            resume_attempt_seq: 0,
-            active_reconnect_retry: None,
-            reconnect_retry_seq: 0,
-            active_reconnect_output: None,
-            reconnect_token_shared: std::sync::Arc::default(),
-            known_disconnected_output: None,
-        };
-        let _ = controller
+        let song = queued_song("current", 0);
+        let pipeline = Arc::new(RecordingPipeline::new());
+        let mut harness = Harness::with_pipeline(pipeline.clone(), vec![song.clone()]);
+        harness.controller.generation = 1;
+        let _ = harness
+            .controller
             .handle_event(PipelineEvent::DecodeFailed {
                 generation: 0,
                 track: StationController::track(song).key,
                 message: "stale".into(),
             })
             .await;
-        assert_eq!(pipeline.replacements.load(Ordering::Acquire), 0);
-        controller.state = PipelineState::Playing;
-        controller.output_epoch = 3;
-        assert!(controller.output_is_current(1, 3));
-        assert!(!controller.output_is_current(0, 3));
-        controller.state = PipelineState::Paused;
-        assert!(!controller.output_is_current(1, 3));
-        controller.stop();
-        assert!(!controller.output_is_current(1, 3));
+        assert_eq!(pipeline.count(Call::Replace), 0);
+        harness.controller.state = PipelineState::Playing;
+        harness.controller.output_epoch = 3;
+        assert!(harness.controller.output_is_current(1, 3));
+        assert!(!harness.controller.output_is_current(0, 3));
+        harness.controller.state = PipelineState::Paused;
+        assert!(!harness.controller.output_is_current(1, 3));
+        harness.controller.stop();
+        assert!(!harness.controller.output_is_current(1, 3));
     }
 
     #[tokio::test]
@@ -1062,99 +999,27 @@ mod tests {
         // No database is reachable here, so the AutoDJ refill attempt inside
         // play() cannot produce songs and the controller must stay Stopped
         // (the E2E suite covers the case where the refill succeeds).
-        let (status_tx, _) = broadcast::channel(1);
-        let (queue_tx, _) = broadcast::channel(1);
-        let db = unavailable_db();
-        let pipeline = Arc::new(FakePipeline {
-            replacements: AtomicUsize::new(0),
-            state_changes: AtomicUsize::new(0),
-            stops: AtomicUsize::new(0),
-        });
-        let mut controller = StationController {
-            queue: Arc::new(QueueManager::new(db, Uuid::new_v4(), String::new(), Vec::new(), 0)),
-            db: unavailable_db(),
-            station_id: Uuid::new_v4(),
-            playback: StationPlaybackConfig::from_persisted("off", 0, 0, 0).unwrap(),
-            driver: PipelineDriver::spawn(pipeline.clone()),
-            target: IcecastTarget::parse("localhost:8000", "secret".into(), "test", "test".into()).unwrap(),
-            state: PipelineState::Stopped,
-            status_tx,
-            queue_tx,
-            generation: 0,
-            output_epoch: 0,
-            planned_next: None,
-            idle: false,
-            pending_resume: None,
-            resume_attempt_seq: 0,
-            active_reconnect_retry: None,
-            reconnect_retry_seq: 0,
-            active_reconnect_output: None,
-            reconnect_token_shared: std::sync::Arc::default(),
-            known_disconnected_output: None,
-        };
+        let harness = Harness::stopped(Vec::new());
+        let mut controller = harness.controller;
+        let pipeline = harness.pipeline;
 
         assert!(matches!(controller.play().await, PipelineOperation::Stop));
         assert_eq!(controller.state, PipelineState::Stopped);
-        assert_eq!(pipeline.replacements.load(Ordering::Acquire), 0);
+        assert_eq!(pipeline.count(Call::Replace), 0);
     }
 
     #[tokio::test]
     async fn next_decode_failure_replaces_only_the_failed_terminal_branch() {
-        let song = |position| SongInfo {
-            queue_item_id: Uuid::new_v4(),
-            song_id: Uuid::new_v4(),
-            title: String::new(),
-            artist: String::new(),
-            duration: 1,
-            file_path: String::new(),
-            position,
-            cue_in: 0.0,
-            cue_out: 0.0,
-            cross_start_next: 0.0,
-            analyzed: false,
-        };
-        let current = song(0);
-        let failed = song(1);
-        let successor = song(2);
-        let (status_tx, _) = broadcast::channel(1);
-        let (queue_tx, _) = broadcast::channel(1);
-        let db = unavailable_db();
-        let station_id = Uuid::new_v4();
-        let queue = Arc::new(QueueManager::new(
-            db,
-            station_id,
-            String::new(),
-            vec![current.clone(), failed.clone(), successor.clone()],
-            0,
-        ));
-        let pipeline = Arc::new(FakePipeline {
-            replacements: AtomicUsize::new(0),
-            state_changes: AtomicUsize::new(0),
-            stops: AtomicUsize::new(0),
-        });
+        let current = queued_song("", 0);
+        let failed = queued_song("", 1);
+        let successor = queued_song("", 2);
+        let harness = Harness::stopped(vec![current.clone(), failed.clone(), successor.clone()]);
+        let mut controller = harness.controller;
         let failed_key = StationController::track(failed).key;
-        let mut controller = StationController {
-            queue: queue.clone(),
-            db: unavailable_db(),
-            station_id,
-            playback: StationPlaybackConfig::from_persisted("off", 0, 0, 0).unwrap(),
-            driver: PipelineDriver::spawn(pipeline),
-            target: IcecastTarget::parse("localhost:8000", "secret".into(), "test", "test".into()).unwrap(),
-            state: PipelineState::Playing,
-            status_tx,
-            queue_tx,
-            generation: 1,
-            output_epoch: 1,
-            planned_next: Some((failed_key.clone(), queue.anchor_after_current())),
-            idle: false,
-            pending_resume: None,
-            resume_attempt_seq: 0,
-            active_reconnect_retry: None,
-            reconnect_retry_seq: 0,
-            active_reconnect_output: None,
-            reconnect_token_shared: std::sync::Arc::default(),
-            known_disconnected_output: None,
-        };
+        controller.state = PipelineState::Playing;
+        controller.generation = 1;
+        controller.output_epoch = 1;
+        controller.planned_next = Some((failed_key.clone(), controller.queue.anchor_after_current()));
 
         let operation = controller
             .handle_event(PipelineEvent::DecodeFailed {
@@ -1182,53 +1047,12 @@ mod tests {
 
     #[tokio::test]
     async fn current_eos_stops_an_exhausted_queue() {
-        let song = SongInfo {
-            queue_item_id: Uuid::new_v4(),
-            song_id: Uuid::new_v4(),
-            title: "current".into(),
-            artist: String::new(),
-            duration: 1,
-            file_path: String::new(),
-            position: 0,
-            cue_in: 0.0,
-            cue_out: 0.0,
-            cross_start_next: 0.0,
-            analyzed: false,
-        };
-        let (status_tx, _) = broadcast::channel(1);
-        let (queue_tx, _) = broadcast::channel(1);
-        let db = unavailable_db();
-        let station_id = Uuid::new_v4();
-        let queue = Arc::new(QueueManager::new(db.clone(), station_id, String::new(), vec![song.clone()], 0));
-        let pipeline = Arc::new(FakePipeline {
-            replacements: AtomicUsize::new(0),
-            state_changes: AtomicUsize::new(0),
-            stops: AtomicUsize::new(0),
-        });
-        let controller = StationController {
-            queue,
-            db: unavailable_db(),
-            station_id,
-            playback: StationPlaybackConfig::from_persisted("off", 0, 0, 0).unwrap(),
-            driver: PipelineDriver::spawn(pipeline.clone()),
-            target: IcecastTarget::parse("localhost:8000", "secret".into(), "test", "test".into()).unwrap(),
-            state: PipelineState::Stopped,
-            status_tx,
-            queue_tx,
-            generation: 1,
-            output_epoch: 0,
-            planned_next: None,
-            idle: false,
-            pending_resume: None,
-            resume_attempt_seq: 0,
-            active_reconnect_retry: None,
-            reconnect_retry_seq: 0,
-            active_reconnect_output: None,
-            reconnect_token_shared: std::sync::Arc::default(),
-            known_disconnected_output: None,
-        };
+        let song = queued_song("current", 0);
+        let pipeline = Arc::new(RecordingPipeline::new());
+        let mut harness = Harness::with_pipeline(pipeline.clone(), vec![song.clone()]);
+        harness.controller.generation = 1;
         let (events, receiver) = mpsc::unbounded_channel();
-        let runtime = StationRuntime::spawn(controller, receiver);
+        let runtime = StationRuntime::spawn(harness.controller, receiver);
         runtime.pause().await.unwrap();
         events
             .send(PipelineEvent::CurrentEos {
@@ -1238,74 +1062,29 @@ mod tests {
             .unwrap();
         // With no database reachable the exhaustion refill fails and is
         // retried (bounded, ~750ms of backoff) before the controller stops.
-        tokio::time::timeout(Duration::from_secs(2), async {
-            while pipeline.stops.load(Ordering::Acquire) == 0 {
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .unwrap();
-        assert_eq!(pipeline.state_changes.load(Ordering::Acquire), 1);
-        assert_eq!(pipeline.stops.load(Ordering::Acquire), 1);
-        assert_eq!(pipeline.replacements.load(Ordering::Acquire), 0);
+        testsupport::wait_for("the exhausted station to stop", || pipeline.count(Call::Stop) > 0).await;
+        assert_eq!(pipeline.count(Call::SetPlaying), 1);
+        assert_eq!(pipeline.count(Call::Stop), 1);
+        assert_eq!(pipeline.count(Call::Replace), 0);
         runtime.shutdown().await.unwrap();
         assert!(runtime.play().await.is_err());
     }
+
     #[tokio::test]
     async fn stale_and_duplicate_events_do_not_supersede_the_current_plan() {
-        let song = SongInfo {
-            queue_item_id: Uuid::new_v4(),
-            song_id: Uuid::new_v4(),
-            title: "current".into(),
-            artist: String::new(),
-            duration: 1,
-            file_path: String::new(),
-            position: 0,
-            cue_in: 0.0,
-            cue_out: 0.0,
-            cross_start_next: 0.0,
-            analyzed: false,
-        };
-        let (status_tx, _) = broadcast::channel(1);
-        let (queue_tx, _) = broadcast::channel(1);
-        let db = unavailable_db();
-        let station_id = Uuid::new_v4();
+        let song = queued_song("current", 0);
+        let pipeline = Arc::new(RecordingPipeline::with_gates());
+        let harness = Harness::with_pipeline(pipeline.clone(), vec![song.clone()]);
+        let controller = harness.controller;
         let current = StationController::track(song.clone()).key;
-        let queue = Arc::new(QueueManager::new(db, station_id, String::new(), vec![song], 0));
-        let pipeline = Arc::new(BlockingPipeline {
-            replace_started: Notify::new(),
-            release_replace: Notify::new(),
-            calls: Mutex::new(Vec::new()),
-        });
-        let controller = StationController {
-            queue,
-            db: unavailable_db(),
-            station_id,
-            playback: StationPlaybackConfig::from_persisted("off", 0, 0, 0).unwrap(),
-            driver: PipelineDriver::spawn(pipeline.clone()),
-            target: IcecastTarget::parse("localhost:8000", "secret".into(), "test", "test".into()).unwrap(),
-            state: PipelineState::Stopped,
-            status_tx,
-            queue_tx,
-            generation: 0,
-            output_epoch: 0,
-            planned_next: None,
-            idle: false,
-            pending_resume: None,
-            resume_attempt_seq: 0,
-            active_reconnect_retry: None,
-            reconnect_retry_seq: 0,
-            active_reconnect_output: None,
-            reconnect_token_shared: std::sync::Arc::default(),
-            known_disconnected_output: None,
-        };
         let (events, receiver) = mpsc::unbounded_channel();
         let runtime = StationRuntime::spawn(controller, receiver);
         let playing = {
             let runtime = runtime.clone();
             tokio::spawn(async move { runtime.play().await })
         };
-        pipeline.replace_started.notified().await;
+        let gate = pipeline.replace_gate.as_ref().expect("gated pipeline");
+        gate.wait_started().await;
         events
             .send(PipelineEvent::DecodeFailed {
                 generation: 0,
@@ -1335,13 +1114,13 @@ mod tests {
         .unwrap()
         .unwrap();
 
-        pipeline.release_replace.notify_one();
+        gate.release();
         playing.await.unwrap().unwrap();
         // play() tops up a below-minimum queue through the database, so the
         // stop after the terminal EOS waits on real DB roundtrips; the exact
         // call sequence is asserted below, this is only a wait-for-it window.
         tokio::time::timeout(Duration::from_secs(5), async {
-            while pipeline.calls.lock().await.len() < 2 {
+            while pipeline.calls().len() < 2 {
                 tokio::task::yield_now().await;
             }
         })
@@ -1351,59 +1130,7 @@ mod tests {
         config.output.prebuffer_bytes = 8192;
         runtime.update_config(config).await.unwrap();
         runtime.shutdown().await.unwrap();
-        assert_eq!(*pipeline.calls.lock().await, ["replace", "stop", "output", "stop"]);
-    }
-
-    fn song_at(position: i32, title: &str) -> SongInfo {
-        SongInfo {
-            queue_item_id: Uuid::new_v4(),
-            song_id: Uuid::new_v4(),
-            title: title.into(),
-            artist: String::new(),
-            duration: 1,
-            file_path: String::new(),
-            position,
-            cue_in: 0.0,
-            cue_out: 0.0,
-            cross_start_next: 0.0,
-            analyzed: false,
-        }
-    }
-
-    async fn playing_controller(songs: Vec<SongInfo>) -> (StationController, Arc<FakePipeline>) {
-        let (status_tx, _) = broadcast::channel(1);
-        let (queue_tx, _) = broadcast::channel(1);
-        let db = unavailable_db();
-        let pipeline = Arc::new(FakePipeline {
-            replacements: AtomicUsize::new(0),
-            state_changes: AtomicUsize::new(0),
-            stops: AtomicUsize::new(0),
-        });
-        let mut controller = StationController {
-            queue: Arc::new(QueueManager::new(db, Uuid::new_v4(), String::new(), songs, 0)),
-            db: unavailable_db(),
-            station_id: Uuid::new_v4(),
-            playback: StationPlaybackConfig::from_persisted("off", 0, 0, 0).unwrap(),
-            driver: PipelineDriver::spawn(pipeline.clone()),
-            target: IcecastTarget::parse("localhost:8000", "secret".into(), "test", "test".into()).unwrap(),
-            state: PipelineState::Stopped,
-            status_tx,
-            queue_tx,
-            generation: 0,
-            output_epoch: 0,
-            planned_next: None,
-            idle: false,
-            pending_resume: None,
-            resume_attempt_seq: 0,
-            active_reconnect_retry: None,
-            reconnect_retry_seq: 0,
-            active_reconnect_output: None,
-            reconnect_token_shared: std::sync::Arc::default(),
-            known_disconnected_output: None,
-        };
-        assert!(matches!(controller.play().await, PipelineOperation::Replace(_)));
-        assert_eq!(controller.state, PipelineState::Playing);
-        (controller, pipeline)
+        assert_eq!(pipeline.calls(), [Call::Replace, Call::Stop, Call::ApplyOutput, Call::Stop]);
     }
 
     #[tokio::test]
@@ -1411,103 +1138,40 @@ mod tests {
         // Start was pressed with an empty queue: the controller sits Stopped
         // with nothing to play. The first reload that brings songs must kick
         // off an InitialReplaceFromStopped, not stay idle.
-        let a = song_at(0, "A");
-        let (mut controller, pipeline) = {
-            let (status_tx, _) = broadcast::channel(1);
-            let (queue_tx, _) = broadcast::channel(1);
-            let db = unavailable_db();
-            let pipeline = Arc::new(FakePipeline {
-                replacements: AtomicUsize::new(0),
-                state_changes: AtomicUsize::new(0),
-                stops: AtomicUsize::new(0),
-            });
-            let mut controller = StationController {
-                queue: Arc::new(QueueManager::new(db, Uuid::new_v4(), String::new(), Vec::new(), 0)),
-                db: unavailable_db(),
-                station_id: Uuid::new_v4(),
-                playback: StationPlaybackConfig::from_persisted("off", 0, 0, 0).unwrap(),
-                driver: PipelineDriver::spawn(pipeline.clone()),
-                target: IcecastTarget::parse("localhost:8000", "secret".into(), "test", "test".into()).unwrap(),
-                state: PipelineState::Stopped,
-                status_tx,
-                queue_tx,
-                generation: 0,
-                output_epoch: 0,
-                planned_next: None,
-                idle: false,
-                pending_resume: None,
-                resume_attempt_seq: 0,
-                active_reconnect_retry: None,
-                reconnect_retry_seq: 0,
-                active_reconnect_output: None,
-                reconnect_token_shared: std::sync::Arc::default(),
-                known_disconnected_output: None,
-            };
-            // Play with an empty queue is a no-op that leaves the controller stopped.
-            assert!(matches!(controller.play().await, PipelineOperation::Stop));
-            assert_eq!(controller.state, PipelineState::Stopped);
-            (controller, pipeline)
-        };
+        let a = queued_song("A", 0);
+        let mut harness = Harness::stopped(Vec::new());
+        // Play with an empty queue is a no-op that leaves the controller stopped.
+        assert!(matches!(harness.controller.play().await, PipelineOperation::Stop));
+        assert_eq!(harness.controller.state, PipelineState::Stopped);
+        let pipeline = harness.pipeline.clone();
 
-        let operation = controller.reload(vec![a], false).await.unwrap();
+        let operation = harness.controller.reload(vec![a], false).await.unwrap();
         let Some(PipelineOperation::Replace(plan)) = operation else {
             panic!("reload into a stopped controller with songs must issue a replace");
         };
         assert!(matches!(plan.mode, ReplaceMode::InitialReplaceFromStopped));
-        assert_eq!(controller.state, PipelineState::Playing);
+        assert_eq!(harness.controller.state, PipelineState::Playing);
         assert_eq!(
-            pipeline.replacements.load(Ordering::Acquire),
+            pipeline.count(Call::Replace),
             0,
             "replace is executed by the runtime, not the controller"
         );
 
         // A reload that still arrives empty must keep the controller stopped.
-        let (mut controller, _) = {
-            let (status_tx, _) = broadcast::channel(1);
-            let (queue_tx, _) = broadcast::channel(1);
-            let db = unavailable_db();
-            let pipeline = Arc::new(FakePipeline {
-                replacements: AtomicUsize::new(0),
-                state_changes: AtomicUsize::new(0),
-                stops: AtomicUsize::new(0),
-            });
-            let mut controller = StationController {
-                queue: Arc::new(QueueManager::new(db, Uuid::new_v4(), String::new(), Vec::new(), 0)),
-                db: unavailable_db(),
-                station_id: Uuid::new_v4(),
-                playback: StationPlaybackConfig::from_persisted("off", 0, 0, 0).unwrap(),
-                driver: PipelineDriver::spawn(pipeline.clone()),
-                target: IcecastTarget::parse("localhost:8000", "secret".into(), "test", "test".into()).unwrap(),
-                state: PipelineState::Stopped,
-                status_tx,
-                queue_tx,
-                generation: 0,
-                output_epoch: 0,
-                planned_next: None,
-                idle: false,
-                pending_resume: None,
-                resume_attempt_seq: 0,
-                active_reconnect_retry: None,
-                reconnect_retry_seq: 0,
-                active_reconnect_output: None,
-                reconnect_token_shared: std::sync::Arc::default(),
-                known_disconnected_output: None,
-            };
-            assert!(matches!(controller.play().await, PipelineOperation::Stop));
-            (controller, pipeline)
-        };
-        let operation = controller.reload(vec![], false).await.unwrap();
+        let mut harness = Harness::stopped(Vec::new());
+        assert!(matches!(harness.controller.play().await, PipelineOperation::Stop));
+        let operation = harness.controller.reload(vec![], false).await.unwrap();
         assert!(operation.is_none(), "an empty reload must not start anything");
-        assert_eq!(controller.state, PipelineState::Stopped);
+        assert_eq!(harness.controller.state, PipelineState::Stopped);
     }
 
     #[tokio::test]
     async fn reload_realigns_staged_next_to_reordered_head() {
-        let a = song_at(0, "A");
-        let b = song_at(1, "B");
-        let c = song_at(2, "C");
-        let x = song_at(3, "X");
-        let (mut controller, _) = playing_controller(vec![a.clone(), b.clone(), c.clone()]).await;
+        let a = queued_song("A", 0);
+        let b = queued_song("B", 1);
+        let c = queued_song("C", 2);
+        let x = queued_song("X", 3);
+        let (mut controller, _) = Harness::playing(vec![a.clone(), b.clone(), c.clone()]).await.into_parts();
         assert_eq!(controller.planned_next.as_ref().unwrap().0.queue_item_id, b.queue_item_id);
 
         // A reorder moved X to the top: the staged next (B) must be replaced by X
@@ -1534,10 +1198,10 @@ mod tests {
 
     #[tokio::test]
     async fn reload_without_align_keeps_the_staged_next() {
-        let a = song_at(0, "A");
-        let b = song_at(1, "B");
-        let x = song_at(3, "X");
-        let (mut controller, _) = playing_controller(vec![a.clone(), b.clone()]).await;
+        let a = queued_song("A", 0);
+        let b = queued_song("B", 1);
+        let x = queued_song("X", 3);
+        let (mut controller, _) = Harness::playing(vec![a.clone(), b.clone()]).await.into_parts();
         let operation = controller.reload(vec![a, x, b.clone()], false).await.unwrap();
         assert!(operation.is_none(), "non-aligning reload must not touch the pipeline");
         assert_eq!(controller.planned_next.as_ref().unwrap().0.queue_item_id, b.queue_item_id);
@@ -1545,11 +1209,11 @@ mod tests {
 
     #[tokio::test]
     async fn reload_with_unchanged_head_does_not_roll() {
-        let a = song_at(0, "A");
-        let b = song_at(1, "B");
-        let c = song_at(2, "C");
-        let x = song_at(3, "X");
-        let (mut controller, _) = playing_controller(vec![a.clone(), b.clone(), c.clone()]).await;
+        let a = queued_song("A", 0);
+        let b = queued_song("B", 1);
+        let c = queued_song("C", 2);
+        let x = queued_song("X", 3);
+        let (mut controller, _) = Harness::playing(vec![a.clone(), b.clone(), c.clone()]).await.into_parts();
         // Append-only change (e.g. a manual add): the head stays B, no swap needed
         let operation = controller.reload(vec![a, b.clone(), c.clone(), x], true).await.unwrap();
         assert!(operation.is_none(), "append-only reload must not roll");
@@ -1558,9 +1222,9 @@ mod tests {
 
     #[tokio::test]
     async fn reload_exhausting_queue_drops_the_staged_next() {
-        let a = song_at(0, "A");
-        let b = song_at(1, "B");
-        let (mut controller, _) = playing_controller(vec![a.clone(), b.clone()]).await;
+        let a = queued_song("A", 0);
+        let b = queued_song("B", 1);
+        let (mut controller, _) = Harness::playing(vec![a.clone(), b.clone()]).await.into_parts();
         let operation = controller.reload(vec![a.clone()], true).await.unwrap();
         let Some(PipelineOperation::Roll(plan)) = operation else {
             panic!("exhausting reload must issue a roll");
@@ -1579,10 +1243,10 @@ mod tests {
 
     #[tokio::test]
     async fn stale_handover_after_realignment_is_ignored() {
-        let a = song_at(0, "A");
-        let b = song_at(1, "B");
-        let x = song_at(3, "X");
-        let (mut controller, _) = playing_controller(vec![a.clone(), b.clone()]).await;
+        let a = queued_song("A", 0);
+        let b = queued_song("B", 1);
+        let x = queued_song("X", 3);
+        let (mut controller, _) = Harness::playing(vec![a.clone(), b.clone()]).await.into_parts();
         let b_key = StationController::track(b.clone()).key;
         controller.reload(vec![a.clone(), x.clone(), b.clone()], true).await.unwrap();
         assert_eq!(controller.planned_next.as_ref().unwrap().0.queue_item_id, x.queue_item_id);
@@ -1602,9 +1266,9 @@ mod tests {
 
     #[tokio::test]
     async fn idle_controller_resumes_when_the_queue_fills_without_a_command() {
-        let song = song_at(0, "A");
-        let fresh = song_at(1, "B");
-        let (mut controller, _pipeline) = playing_controller(vec![song.clone()]).await;
+        let song = queued_song("A", 0);
+        let fresh = queued_song("B", 1);
+        let (mut controller, _) = Harness::playing(vec![song.clone()]).await.into_parts();
 
         // The last track ends: skip() exhausts the queue (the unreachable DB
         // makes the fill retries fail) and the controller becomes idle —
@@ -1642,9 +1306,9 @@ mod tests {
 
     #[tokio::test]
     async fn failed_idle_resume_keeps_the_station_retryable_until_a_replace_succeeds() {
-        let song = song_at(0, "A");
-        let fresh = song_at(1, "B");
-        let (mut controller, _pipeline) = playing_controller(vec![song.clone()]).await;
+        let song = queued_song("A", 0);
+        let fresh = queued_song("B", 1);
+        let (mut controller, _) = Harness::playing(vec![song.clone()]).await.into_parts();
 
         // Exhaust the queue: the station becomes idle (not manually stopped).
         let operation = controller.skip().await.unwrap();
@@ -1679,9 +1343,9 @@ mod tests {
 
     #[tokio::test]
     async fn idle_resume_keeps_at_most_one_replace_in_flight() {
-        let song = song_at(0, "A");
-        let fresh = song_at(1, "B");
-        let (mut controller, _pipeline) = playing_controller(vec![song.clone()]).await;
+        let song = queued_song("A", 0);
+        let fresh = queued_song("B", 1);
+        let (mut controller, _) = Harness::playing(vec![song.clone()]).await.into_parts();
 
         let operation = controller.skip().await.unwrap();
         assert!(matches!(operation, PipelineOperation::Stop));
@@ -1722,9 +1386,9 @@ mod tests {
 
     #[tokio::test]
     async fn stale_failed_resume_does_not_override_a_manual_play() {
-        let song = song_at(0, "A");
-        let fresh = song_at(1, "B");
-        let (mut controller, _pipeline) = playing_controller(vec![song.clone()]).await;
+        let song = queued_song("A", 0);
+        let fresh = queued_song("B", 1);
+        let (mut controller, _) = Harness::playing(vec![song.clone()]).await.into_parts();
 
         let operation = controller.skip().await.unwrap();
         assert!(matches!(operation, PipelineOperation::Stop));
@@ -1753,9 +1417,9 @@ mod tests {
 
     #[tokio::test]
     async fn stale_successful_resume_does_not_override_a_manual_pause() {
-        let song = song_at(0, "A");
-        let fresh = song_at(1, "B");
-        let (mut controller, _pipeline) = playing_controller(vec![song.clone()]).await;
+        let song = queued_song("A", 0);
+        let fresh = queued_song("B", 1);
+        let (mut controller, _) = Harness::playing(vec![song.clone()]).await.into_parts();
 
         let operation = controller.skip().await.unwrap();
         assert!(matches!(operation, PipelineOperation::Stop));
@@ -1781,9 +1445,7 @@ mod tests {
 
     #[tokio::test]
     async fn reconnect_retry_token_is_invalidated_by_a_newer_chain_and_stop() {
-        let song = song_at(0, "A");
-        let next = song_at(1, "B");
-        let (mut controller, _pipeline) = playing_controller(vec![song, next]).await;
+        let (mut controller, _) = Harness::playing(queued_songs(&["A", "B"])).await.into_parts();
 
         // Chain A starts; its retry timers carry token A.
         let token_a = controller.begin_reconnect_chain();
@@ -1809,9 +1471,7 @@ mod tests {
 
     #[tokio::test]
     async fn duplicate_disconnects_for_the_same_output_start_a_single_chain() {
-        let song = song_at(0, "A");
-        let next = song_at(1, "B");
-        let (mut controller, _pipeline) = playing_controller(vec![song, next]).await;
+        let (mut controller, _) = Harness::playing(queued_songs(&["A", "B"])).await.into_parts();
         assert_eq!(controller.state, PipelineState::Playing);
 
         // Three disconnect events for the same output: the first starts the
@@ -1857,9 +1517,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_new_disconnect_after_a_successful_chain_starts_a_fresh_one() {
-        let song = song_at(0, "A");
-        let next = song_at(1, "B");
-        let (mut controller, _pipeline) = playing_controller(vec![song, next]).await;
+        let (mut controller, _) = Harness::playing(queued_songs(&["A", "B"])).await.into_parts();
 
         // A chain runs and finishes successfully: the controller ends it, so
         // a later disconnect for the same output is a fresh event, not a
@@ -1881,9 +1539,7 @@ mod tests {
 
     #[tokio::test]
     async fn failed_manual_reconnect_leaves_the_automatic_chain_untouched() {
-        let song = song_at(0, "A");
-        let next = song_at(1, "B");
-        let (mut controller, _pipeline) = playing_controller(vec![song, next]).await;
+        let (mut controller, _) = Harness::playing(queued_songs(&["A", "B"])).await.into_parts();
 
         // An automatic chain is active (a disconnect just queued its
         // reconnect operation).
@@ -1908,9 +1564,7 @@ mod tests {
 
     #[tokio::test]
     async fn disconnect_after_completed_reconnect_starts_a_fresh_chain_before_reconnect_succeeded() {
-        let song = song_at(0, "A");
-        let next = song_at(1, "B");
-        let (mut controller, _pipeline) = playing_controller(vec![song, next]).await;
+        let (mut controller, _) = Harness::playing(queued_songs(&["A", "B"])).await.into_parts();
 
         // Chain X runs; the pipeline reconnect succeeds. The executor marks
         // the chain completed in the shared state, but ReconnectFinished
@@ -1954,9 +1608,7 @@ mod tests {
 
     #[tokio::test]
     async fn manual_chain_binds_to_the_output_for_duplicate_coalescing() {
-        let song = song_at(0, "A");
-        let next = song_at(1, "B");
-        let (mut controller, _pipeline) = playing_controller(vec![song, next]).await;
+        let (mut controller, _) = Harness::playing(queued_songs(&["A", "B"])).await.into_parts();
 
         // No automatic chain exists; a manual reconnect starts (simulated:
         // the target refresh succeeded, the runtime bound the chain to the
@@ -2073,44 +1725,6 @@ mod tests {
         }
     }
 
-    struct CountingReconnectPipeline {
-        reconnects: AtomicUsize,
-        fail_first: bool,
-    }
-
-    #[async_trait]
-    impl PlaybackPipeline for CountingReconnectPipeline {
-        async fn replace(&self, _: PairPlan) -> Result<(), PipelineError> {
-            Ok(())
-        }
-        async fn roll(&self, _: super::super::pipeline::RollingPlan) -> Result<(), PipelineError> {
-            Ok(())
-        }
-        async fn apply_output(&self, _: OutputConfig) -> Result<(), PipelineError> {
-            Ok(())
-        }
-        async fn set_playing(&self, _: bool) -> Result<(), PipelineError> {
-            Ok(())
-        }
-        async fn reconnect(&self, _: IcecastTarget) -> Result<(), PipelineError> {
-            let attempt = self.reconnects.fetch_add(1, Ordering::Release);
-            if attempt == 0 && self.fail_first {
-                Err(PipelineError::Pipeline("icecast unreachable".into()))
-            } else {
-                Ok(())
-            }
-        }
-        async fn snapshot(&self) -> Result<PipelineSnapshot, PipelineError> {
-            Ok(PipelineSnapshot {
-                state: PipelineState::Stopped,
-                elapsed: Duration::ZERO,
-            })
-        }
-        async fn stop(&self) -> Result<(), PipelineError> {
-            Ok(())
-        }
-    }
-
     /// Test A: a manual reconnect through the full `StationRuntime` path —
     /// `StationCommand::Reconnect(response)` hands the response to the
     /// reconnect-aware action and the caller receives the real pipeline
@@ -2118,43 +1732,13 @@ mod tests {
     #[tokio::test]
     async fn manual_reconnect_through_the_runtime_reports_success() {
         let Some(db) = reconnect_test_db().await else { return };
-        let song = song_at(0, "A");
-        let next = song_at(1, "B");
-        let (status_tx, _) = broadcast::channel(1);
-        let (queue_tx, _) = broadcast::channel(1);
-        let station_id = Uuid::new_v4();
-        let queue = Arc::new(QueueManager::new(db.pool.clone(), station_id, String::new(), vec![song, next], 0));
-        let pipeline = Arc::new(CountingReconnectPipeline {
-            reconnects: AtomicUsize::new(0),
-            fail_first: false,
-        });
-        let controller = StationController {
-            queue,
-            db: db.pool.clone(),
-            station_id,
-            playback: StationPlaybackConfig::from_persisted("off", 0, 0, 0).unwrap(),
-            driver: PipelineDriver::spawn(pipeline.clone()),
-            target: IcecastTarget::parse("localhost:8000", "secret".into(), "test", "test".into()).unwrap(),
-            state: PipelineState::Stopped,
-            status_tx,
-            queue_tx,
-            generation: 0,
-            output_epoch: 0,
-            planned_next: None,
-            idle: false,
-            pending_resume: None,
-            resume_attempt_seq: 0,
-            active_reconnect_retry: None,
-            reconnect_retry_seq: 0,
-            active_reconnect_output: None,
-            reconnect_token_shared: std::sync::Arc::default(),
-            known_disconnected_output: None,
-        };
+        let pipeline = Arc::new(RecordingPipeline::new());
+        let harness = Harness::with_db(db.pool.clone(), pipeline.clone(), queued_songs(&["A", "B"]));
         let (events, receiver) = mpsc::unbounded_channel();
-        let runtime = StationRuntime::spawn(controller, receiver);
+        let runtime = StationRuntime::spawn(harness.controller, receiver);
         let result = runtime.reconnect().await;
         assert!(result.is_ok(), "the manual caller must receive Ok, got {result:?}");
-        assert_eq!(pipeline.reconnects.load(Ordering::Acquire), 1);
+        assert_eq!(pipeline.count(Call::Reconnect), 1);
         runtime.shutdown().await.unwrap();
         let _ = events;
         db.cleanup().await;
@@ -2166,58 +1750,21 @@ mod tests {
     #[tokio::test]
     async fn manual_reconnect_through_the_runtime_reports_failure() {
         let Some(db) = reconnect_test_db().await else { return };
-        let song = song_at(0, "A");
-        let next = song_at(1, "B");
-        let (status_tx, _) = broadcast::channel(1);
-        let (queue_tx, _) = broadcast::channel(1);
-        let station_id = Uuid::new_v4();
-        let queue = Arc::new(QueueManager::new(db.pool.clone(), station_id, String::new(), vec![song, next], 0));
-        let pipeline = Arc::new(CountingReconnectPipeline {
-            reconnects: AtomicUsize::new(0),
-            fail_first: true,
-        });
-        let controller = StationController {
-            queue,
-            db: db.pool.clone(),
-            station_id,
-            playback: StationPlaybackConfig::from_persisted("off", 0, 0, 0).unwrap(),
-            driver: PipelineDriver::spawn(pipeline.clone()),
-            target: IcecastTarget::parse("localhost:8000", "secret".into(), "test", "test".into()).unwrap(),
-            state: PipelineState::Stopped,
-            status_tx,
-            queue_tx,
-            generation: 0,
-            output_epoch: 0,
-            planned_next: None,
-            idle: false,
-            pending_resume: None,
-            resume_attempt_seq: 0,
-            active_reconnect_retry: None,
-            reconnect_retry_seq: 0,
-            active_reconnect_output: None,
-            reconnect_token_shared: std::sync::Arc::default(),
-            known_disconnected_output: None,
-        };
+        let pipeline = Arc::new(RecordingPipeline::new());
+        pipeline.fail_once(Call::Reconnect);
+        let harness = Harness::with_db(db.pool.clone(), pipeline.clone(), queued_songs(&["A", "B"]));
         let (events, receiver) = mpsc::unbounded_channel();
-        let runtime = StationRuntime::spawn(controller, receiver);
+        let runtime = StationRuntime::spawn(harness.controller, receiver);
         let result = runtime.reconnect().await;
         match result {
-            Err(PipelineError::Pipeline(message)) => assert!(message.contains("icecast unreachable"), "unexpected error: {message}"),
+            Err(PipelineError::Pipeline(message)) => assert!(message.contains("injected failure"), "unexpected error: {message}"),
             other => panic!("expected the pipeline error, got {other:?}"),
         }
-        assert_eq!(
-            pipeline.reconnects.load(Ordering::Acquire),
-            1,
-            "the manual reconnect must run exactly once"
-        );
+        assert_eq!(pipeline.count(Call::Reconnect), 1, "the manual reconnect must run exactly once");
         // One-shot: no automatic retry timer fires within the first backoff
         // window.
         tokio::time::sleep(Duration::from_millis(1500)).await;
-        assert_eq!(
-            pipeline.reconnects.load(Ordering::Acquire),
-            1,
-            "a manual reconnect must stay one-shot"
-        );
+        assert_eq!(pipeline.count(Call::Reconnect), 1, "a manual reconnect must stay one-shot");
         runtime.shutdown().await.unwrap();
         let _ = events;
         db.cleanup().await;
@@ -2225,9 +1772,7 @@ mod tests {
 
     #[tokio::test]
     async fn pause_invalidates_the_reconnect_chain() {
-        let song = song_at(0, "A");
-        let next = song_at(1, "B");
-        let (mut controller, _pipeline) = playing_controller(vec![song, next]).await;
+        let (mut controller, _) = Harness::playing(queued_songs(&["A", "B"])).await.into_parts();
 
         // An automatic chain is active with a retry timer pending.
         let token = controller.begin_reconnect_chain();
@@ -2250,9 +1795,7 @@ mod tests {
 
     #[tokio::test]
     async fn stale_chain_cleanup_does_not_end_a_newer_chain() {
-        let song = song_at(0, "A");
-        let next = song_at(1, "B");
-        let (mut controller, _pipeline) = playing_controller(vec![song, next]).await;
+        let (mut controller, _) = Harness::playing(queued_songs(&["A", "B"])).await.into_parts();
 
         // Chain X becomes ineligible (its timer fires while a newer chain Y
         // is active); the runtime ends X through the token-guarded cleanup.
@@ -2273,40 +1816,11 @@ mod tests {
     #[tokio::test]
     async fn pause_then_retry_then_play_does_not_block_future_reconnects() {
         let Some(db) = reconnect_test_db().await else { return };
-        let song = song_at(0, "A");
-        let next = song_at(1, "B");
-        let (status_tx, _) = broadcast::channel(1);
-        let (queue_tx, _) = broadcast::channel(1);
-        let station_id = Uuid::new_v4();
-        let queue = Arc::new(QueueManager::new(db.pool.clone(), station_id, String::new(), vec![song, next], 0));
-        let pipeline = Arc::new(CountingReconnectPipeline {
-            reconnects: AtomicUsize::new(0),
-            fail_first: true,
-        });
-        let controller = StationController {
-            queue,
-            db: db.pool.clone(),
-            station_id,
-            playback: StationPlaybackConfig::from_persisted("off", 0, 0, 0).unwrap(),
-            driver: PipelineDriver::spawn(pipeline.clone()),
-            target: IcecastTarget::parse("localhost:8000", "secret".into(), "test", "test".into()).unwrap(),
-            state: PipelineState::Stopped,
-            status_tx,
-            queue_tx,
-            generation: 0,
-            output_epoch: 0,
-            planned_next: None,
-            idle: false,
-            pending_resume: None,
-            resume_attempt_seq: 0,
-            active_reconnect_retry: None,
-            reconnect_retry_seq: 0,
-            active_reconnect_output: None,
-            reconnect_token_shared: std::sync::Arc::default(),
-            known_disconnected_output: None,
-        };
+        let pipeline = Arc::new(RecordingPipeline::new());
+        pipeline.fail_once(Call::Reconnect);
+        let harness = Harness::with_db(db.pool.clone(), pipeline.clone(), queued_songs(&["A", "B"]));
         let (events, receiver) = mpsc::unbounded_channel();
-        let runtime = StationRuntime::spawn(controller, receiver);
+        let runtime = StationRuntime::spawn(harness.controller, receiver);
         runtime.play().await.unwrap();
 
         // Playing → output drops → automatic chain X starts; the first
@@ -2319,7 +1833,7 @@ mod tests {
             })
             .unwrap();
         tokio::time::timeout(Duration::from_secs(2), async {
-            while pipeline.reconnects.load(Ordering::Acquire) == 0 {
+            while pipeline.count(Call::Reconnect) == 0 {
                 tokio::task::yield_now().await;
             }
         })
@@ -2340,7 +1854,7 @@ mod tests {
             })
             .unwrap();
         tokio::time::timeout(Duration::from_secs(2), async {
-            while pipeline.reconnects.load(Ordering::Acquire) < 2 {
+            while pipeline.count(Call::Reconnect) < 2 {
                 tokio::task::yield_now().await;
             }
         })
@@ -2350,7 +1864,7 @@ mod tests {
         // The stale retry timer from chain X fires later: it must neither
         // run a third reconnect nor resurrect anything.
         tokio::time::sleep(Duration::from_millis(1500)).await;
-        assert_eq!(pipeline.reconnects.load(Ordering::Acquire), 2);
+        assert_eq!(pipeline.count(Call::Reconnect), 2);
 
         runtime.shutdown().await.unwrap();
         let _ = events;
@@ -2359,9 +1873,7 @@ mod tests {
 
     #[tokio::test]
     async fn disconnect_after_pause_and_play_starts_a_fresh_chain() {
-        let song = song_at(0, "A");
-        let next = song_at(1, "B");
-        let (mut controller, _pipeline) = playing_controller(vec![song, next]).await;
+        let (mut controller, _) = Harness::playing(queued_songs(&["A", "B"])).await.into_parts();
 
         // An automatic chain is active for the current output.
         let token_x = controller.begin_reconnect_chain();
@@ -2393,40 +1905,10 @@ mod tests {
     #[tokio::test]
     async fn disconnect_while_paused_is_recovered_by_play() {
         let Some(db) = reconnect_test_db().await else { return };
-        let song = song_at(0, "A");
-        let next = song_at(1, "B");
-        let (status_tx, _) = broadcast::channel(1);
-        let (queue_tx, _) = broadcast::channel(1);
-        let station_id = Uuid::new_v4();
-        let queue = Arc::new(QueueManager::new(db.pool.clone(), station_id, String::new(), vec![song, next], 0));
-        let pipeline = Arc::new(CountingReconnectPipeline {
-            reconnects: AtomicUsize::new(0),
-            fail_first: false,
-        });
-        let controller = StationController {
-            queue,
-            db: db.pool.clone(),
-            station_id,
-            playback: StationPlaybackConfig::from_persisted("off", 0, 0, 0).unwrap(),
-            driver: PipelineDriver::spawn(pipeline.clone()),
-            target: IcecastTarget::parse("localhost:8000", "secret".into(), "test", "test".into()).unwrap(),
-            state: PipelineState::Stopped,
-            status_tx,
-            queue_tx,
-            generation: 0,
-            output_epoch: 0,
-            planned_next: None,
-            idle: false,
-            pending_resume: None,
-            resume_attempt_seq: 0,
-            active_reconnect_retry: None,
-            reconnect_retry_seq: 0,
-            active_reconnect_output: None,
-            reconnect_token_shared: std::sync::Arc::default(),
-            known_disconnected_output: None,
-        };
+        let pipeline = Arc::new(RecordingPipeline::new());
+        let harness = Harness::with_db(db.pool.clone(), pipeline.clone(), queued_songs(&["A", "B"]));
         let (events, receiver) = mpsc::unbounded_channel();
-        let runtime = StationRuntime::spawn(controller, receiver);
+        let runtime = StationRuntime::spawn(harness.controller, receiver);
         runtime.play().await.unwrap();
 
         // The user pauses; the output breaks WHILE PAUSED. The disconnect
@@ -2442,7 +1924,7 @@ mod tests {
             .unwrap();
         tokio::time::sleep(Duration::from_millis(200)).await;
         assert_eq!(
-            pipeline.reconnects.load(Ordering::Acquire),
+            pipeline.count(Call::Reconnect),
             0,
             "a disconnect while paused must not run a reconnect yet"
         );
@@ -2451,56 +1933,21 @@ mod tests {
         // disconnect event is sent.
         runtime.play().await.unwrap();
         tokio::time::timeout(Duration::from_secs(2), async {
-            while pipeline.reconnects.load(Ordering::Acquire) == 0 {
+            while pipeline.count(Call::Reconnect) == 0 {
                 tokio::task::yield_now().await;
             }
         })
         .await
         .expect("Play must restore an output that broke while paused");
-        assert_eq!(pipeline.reconnects.load(Ordering::Acquire), 1);
+        assert_eq!(pipeline.count(Call::Reconnect), 1);
 
         // The restored chain finished successfully: no further retries.
         tokio::time::sleep(Duration::from_millis(1500)).await;
-        assert_eq!(pipeline.reconnects.load(Ordering::Acquire), 1);
+        assert_eq!(pipeline.count(Call::Reconnect), 1);
 
         runtime.shutdown().await.unwrap();
         let _ = events;
         db.cleanup().await;
-    }
-
-    fn reconnect_test_controller<P: PlaybackPipeline + 'static>(db: PgPool, pipeline: Arc<P>) -> StationController {
-        let (status_tx, _) = broadcast::channel(1);
-        let (queue_tx, _) = broadcast::channel(1);
-        let station_id = Uuid::new_v4();
-        let queue = Arc::new(QueueManager::new(
-            db.clone(),
-            station_id,
-            String::new(),
-            vec![song_at(0, "A"), song_at(1, "B")],
-            0,
-        ));
-        StationController {
-            queue,
-            db,
-            station_id,
-            playback: StationPlaybackConfig::from_persisted("off", 0, 0, 0).unwrap(),
-            driver: PipelineDriver::spawn(pipeline),
-            target: IcecastTarget::parse("localhost:8000", "secret".into(), "test", "test".into()).unwrap(),
-            state: PipelineState::Stopped,
-            status_tx,
-            queue_tx,
-            generation: 0,
-            output_epoch: 0,
-            planned_next: None,
-            idle: false,
-            pending_resume: None,
-            resume_attempt_seq: 0,
-            active_reconnect_retry: None,
-            reconnect_retry_seq: 0,
-            active_reconnect_output: None,
-            reconnect_token_shared: std::sync::Arc::default(),
-            known_disconnected_output: None,
-        }
     }
 
     /// Test 1: a disconnect that happened BEFORE the pause is recovered by
@@ -2508,13 +1955,11 @@ mod tests {
     #[tokio::test]
     async fn disconnect_before_pause_is_recovered_by_play_without_a_second_event() {
         let Some(db) = reconnect_test_db().await else { return };
-        let pipeline = Arc::new(CountingReconnectPipeline {
-            reconnects: AtomicUsize::new(0),
-            fail_first: true,
-        });
-        let controller = reconnect_test_controller(db.pool.clone(), pipeline.clone());
+        let pipeline = Arc::new(RecordingPipeline::new());
+        pipeline.fail_once(Call::Reconnect);
+        let harness = Harness::with_db(db.pool.clone(), pipeline.clone(), queued_songs(&["A", "B"]));
         let (events, receiver) = mpsc::unbounded_channel();
-        let runtime = StationRuntime::spawn(controller, receiver);
+        let runtime = StationRuntime::spawn(harness.controller, receiver);
 
         // Playing → output drops → automatic chain X starts → reconnect #1
         // fails → backoff timer pending.
@@ -2527,7 +1972,7 @@ mod tests {
             })
             .unwrap();
         tokio::time::timeout(Duration::from_secs(2), async {
-            while pipeline.reconnects.load(Ordering::Acquire) == 0 {
+            while pipeline.count(Call::Reconnect) == 0 {
                 tokio::task::yield_now().await;
             }
         })
@@ -2541,17 +1986,17 @@ mod tests {
         // Play with NO second disconnect event: the marker drives recovery.
         runtime.play().await.unwrap();
         tokio::time::timeout(Duration::from_secs(2), async {
-            while pipeline.reconnects.load(Ordering::Acquire) < 2 {
+            while pipeline.count(Call::Reconnect) < 2 {
                 tokio::task::yield_now().await;
             }
         })
         .await
         .expect("Play must recover an output that was already disconnected before the pause");
-        assert_eq!(pipeline.reconnects.load(Ordering::Acquire), 2);
+        assert_eq!(pipeline.count(Call::Reconnect), 2);
 
         // The stale timer from chain X fires later and does nothing.
         tokio::time::sleep(Duration::from_millis(1500)).await;
-        assert_eq!(pipeline.reconnects.load(Ordering::Acquire), 2);
+        assert_eq!(pipeline.count(Call::Reconnect), 2);
 
         runtime.shutdown().await.unwrap();
         let _ = events;
@@ -2563,13 +2008,11 @@ mod tests {
     #[tokio::test]
     async fn pause_interrupting_recovery_keeps_the_output_recoverable() {
         let Some(db) = reconnect_test_db().await else { return };
-        let pipeline = Arc::new(CountingReconnectPipeline {
-            reconnects: AtomicUsize::new(0),
-            fail_first: true,
-        });
-        let controller = reconnect_test_controller(db.pool.clone(), pipeline.clone());
+        let pipeline = Arc::new(RecordingPipeline::new());
+        pipeline.fail_once(Call::Reconnect);
+        let harness = Harness::with_db(db.pool.clone(), pipeline.clone(), queued_songs(&["A", "B"]));
         let (events, receiver) = mpsc::unbounded_channel();
-        let runtime = StationRuntime::spawn(controller, receiver);
+        let runtime = StationRuntime::spawn(harness.controller, receiver);
 
         runtime.play().await.unwrap();
         // Output breaks while paused: the marker is recorded.
@@ -2585,7 +2028,7 @@ mod tests {
         // Play starts recovery #1, which fails (chain A scheduled a retry).
         runtime.play().await.unwrap();
         tokio::time::timeout(Duration::from_secs(2), async {
-            while pipeline.reconnects.load(Ordering::Acquire) == 0 {
+            while pipeline.count(Call::Reconnect) == 0 {
                 tokio::task::yield_now().await;
             }
         })
@@ -2598,13 +2041,13 @@ mod tests {
         // Play again — recovery #2 runs, no second disconnect event.
         runtime.play().await.unwrap();
         tokio::time::timeout(Duration::from_secs(2), async {
-            while pipeline.reconnects.load(Ordering::Acquire) < 2 {
+            while pipeline.count(Call::Reconnect) < 2 {
                 tokio::task::yield_now().await;
             }
         })
         .await
         .expect("a second Play must retry the interrupted recovery");
-        assert_eq!(pipeline.reconnects.load(Ordering::Acquire), 2);
+        assert_eq!(pipeline.count(Call::Reconnect), 2);
 
         runtime.shutdown().await.unwrap();
         let _ = events;
@@ -2616,13 +2059,10 @@ mod tests {
     #[tokio::test]
     async fn successful_recovery_clears_the_marker_for_later_cycles() {
         let Some(db) = reconnect_test_db().await else { return };
-        let pipeline = Arc::new(CountingReconnectPipeline {
-            reconnects: AtomicUsize::new(0),
-            fail_first: false,
-        });
-        let controller = reconnect_test_controller(db.pool.clone(), pipeline.clone());
+        let pipeline = Arc::new(RecordingPipeline::new());
+        let harness = Harness::with_db(db.pool.clone(), pipeline.clone(), queued_songs(&["A", "B"]));
         let (events, receiver) = mpsc::unbounded_channel();
-        let runtime = StationRuntime::spawn(controller, receiver);
+        let runtime = StationRuntime::spawn(harness.controller, receiver);
 
         runtime.play().await.unwrap();
         runtime.pause().await.unwrap();
@@ -2635,13 +2075,13 @@ mod tests {
             .unwrap();
         runtime.play().await.unwrap();
         tokio::time::timeout(Duration::from_secs(2), async {
-            while pipeline.reconnects.load(Ordering::Acquire) == 0 {
+            while pipeline.count(Call::Reconnect) == 0 {
                 tokio::task::yield_now().await;
             }
         })
         .await
         .expect("the recovery must run");
-        assert_eq!(pipeline.reconnects.load(Ordering::Acquire), 1);
+        assert_eq!(pipeline.count(Call::Reconnect), 1);
 
         // The output is connected again: another Pause→Play cycle must NOT
         // reconnect redundantly.
@@ -2649,7 +2089,7 @@ mod tests {
         runtime.play().await.unwrap();
         tokio::time::sleep(Duration::from_millis(500)).await;
         assert_eq!(
-            pipeline.reconnects.load(Ordering::Acquire),
+            pipeline.count(Call::Reconnect),
             1,
             "no redundant reconnect after a successful recovery"
         );
@@ -2664,13 +2104,10 @@ mod tests {
     #[tokio::test]
     async fn successful_manual_reconnect_clears_the_marker() {
         let Some(db) = reconnect_test_db().await else { return };
-        let pipeline = Arc::new(CountingReconnectPipeline {
-            reconnects: AtomicUsize::new(0),
-            fail_first: false,
-        });
-        let controller = reconnect_test_controller(db.pool.clone(), pipeline.clone());
+        let pipeline = Arc::new(RecordingPipeline::new());
+        let harness = Harness::with_db(db.pool.clone(), pipeline.clone(), queued_songs(&["A", "B"]));
         let (events, receiver) = mpsc::unbounded_channel();
-        let runtime = StationRuntime::spawn(controller, receiver);
+        let runtime = StationRuntime::spawn(harness.controller, receiver);
 
         runtime.play().await.unwrap();
         runtime.pause().await.unwrap();
@@ -2683,13 +2120,13 @@ mod tests {
             .unwrap();
         // Manual reconnect succeeds while paused: marker must clear.
         runtime.reconnect().await.unwrap();
-        assert_eq!(pipeline.reconnects.load(Ordering::Acquire), 1);
+        assert_eq!(pipeline.count(Call::Reconnect), 1);
 
         // Play: no redundant recovery.
         runtime.play().await.unwrap();
         tokio::time::sleep(Duration::from_millis(500)).await;
         assert_eq!(
-            pipeline.reconnects.load(Ordering::Acquire),
+            pipeline.count(Call::Reconnect),
             1,
             "no redundant reconnect after a successful manual reconnect"
         );
@@ -2704,13 +2141,11 @@ mod tests {
     #[tokio::test]
     async fn failed_manual_reconnect_keeps_the_marker_for_play_recovery() {
         let Some(db) = reconnect_test_db().await else { return };
-        let pipeline = Arc::new(CountingReconnectPipeline {
-            reconnects: AtomicUsize::new(0),
-            fail_first: true,
-        });
-        let controller = reconnect_test_controller(db.pool.clone(), pipeline.clone());
+        let pipeline = Arc::new(RecordingPipeline::new());
+        pipeline.fail_once(Call::Reconnect);
+        let harness = Harness::with_db(db.pool.clone(), pipeline.clone(), queued_songs(&["A", "B"]));
         let (events, receiver) = mpsc::unbounded_channel();
-        let runtime = StationRuntime::spawn(controller, receiver);
+        let runtime = StationRuntime::spawn(harness.controller, receiver);
 
         runtime.play().await.unwrap();
         runtime.pause().await.unwrap();
@@ -2724,18 +2159,18 @@ mod tests {
         // Manual reconnect fails (one-shot): marker must survive.
         let result = runtime.reconnect().await;
         assert!(result.is_err(), "the manual reconnect must report its failure");
-        assert_eq!(pipeline.reconnects.load(Ordering::Acquire), 1);
+        assert_eq!(pipeline.count(Call::Reconnect), 1);
 
         // Play recovers the output.
         runtime.play().await.unwrap();
         tokio::time::timeout(Duration::from_secs(2), async {
-            while pipeline.reconnects.load(Ordering::Acquire) < 2 {
+            while pipeline.count(Call::Reconnect) < 2 {
                 tokio::task::yield_now().await;
             }
         })
         .await
         .expect("Play must recover the output after a failed manual reconnect");
-        assert_eq!(pipeline.reconnects.load(Ordering::Acquire), 2);
+        assert_eq!(pipeline.count(Call::Reconnect), 2);
 
         runtime.shutdown().await.unwrap();
         let _ = events;
@@ -2750,11 +2185,9 @@ mod tests {
     #[tokio::test]
     async fn stale_success_before_pause_does_not_block_play_recovery() {
         let Some(db) = reconnect_test_db().await else { return };
-        let pipeline = Arc::new(CountingReconnectPipeline {
-            reconnects: AtomicUsize::new(0),
-            fail_first: false,
-        });
-        let mut controller = reconnect_test_controller(db.pool.clone(), pipeline.clone());
+        let pipeline = Arc::new(RecordingPipeline::new());
+        let harness = Harness::with_db(db.pool.clone(), pipeline.clone(), queued_songs(&["A", "B"]));
+        let mut controller = harness.controller;
 
         // Playing → disconnect #1 → automatic chain X starts, marker set.
         assert!(matches!(controller.play().await, PipelineOperation::Replace(_)));
@@ -2815,11 +2248,10 @@ mod tests {
 
         db.cleanup().await;
     }
+
     #[tokio::test]
     async fn stop_clears_the_marker_so_play_does_not_reconnect_the_old_output() {
-        let song = song_at(0, "A");
-        let next = song_at(1, "B");
-        let (mut controller, _pipeline) = playing_controller(vec![song, next]).await;
+        let (mut controller, _) = Harness::playing(queued_songs(&["A", "B"])).await.into_parts();
 
         // Playing → pause → output breaks: the marker is recorded.
         controller.play().await;
@@ -2854,9 +2286,7 @@ mod tests {
     /// by the replacement, so the stale success must not touch the new one.
     #[tokio::test]
     async fn stale_success_does_not_clear_a_new_outputs_marker_after_replacement() {
-        let song = song_at(0, "A");
-        let next = song_at(1, "B");
-        let (mut controller, _pipeline) = playing_controller(vec![song, next]).await;
+        let (mut controller, _) = Harness::playing(queued_songs(&["A", "B"])).await.into_parts();
 
         // Disconnect #1 for the current output → chain X, marker set.
         let first = controller
@@ -2910,47 +2340,6 @@ mod tests {
         );
     }
 
-    /// Pipeline whose `replace` blocks until released: it holds the
-    /// sequential executor while the test queues a reconnect behind it.
-    struct GatedReplacePipeline {
-        replaces: AtomicUsize,
-        reconnects: AtomicUsize,
-        replace_started: tokio::sync::Notify,
-        replace_release: tokio::sync::Notify,
-    }
-
-    #[async_trait]
-    impl PlaybackPipeline for GatedReplacePipeline {
-        async fn replace(&self, _: PairPlan) -> Result<(), PipelineError> {
-            self.replaces.fetch_add(1, Ordering::Release);
-            self.replace_started.notify_waiters();
-            self.replace_release.notified().await;
-            Ok(())
-        }
-        async fn roll(&self, _: RollingPlan) -> Result<(), PipelineError> {
-            Ok(())
-        }
-        async fn apply_output(&self, _: OutputConfig) -> Result<(), PipelineError> {
-            Ok(())
-        }
-        async fn set_playing(&self, _: bool) -> Result<(), PipelineError> {
-            Ok(())
-        }
-        async fn reconnect(&self, _: IcecastTarget) -> Result<(), PipelineError> {
-            self.reconnects.fetch_add(1, Ordering::Release);
-            Ok(())
-        }
-        async fn snapshot(&self) -> Result<PipelineSnapshot, PipelineError> {
-            Ok(PipelineSnapshot {
-                state: PipelineState::Stopped,
-                elapsed: Duration::ZERO,
-            })
-        }
-        async fn stop(&self) -> Result<(), PipelineError> {
-            Ok(())
-        }
-    }
-
     /// Mandatory regression: a reconnect that was QUEUED for output
     /// (generation 1) must never touch the pipeline once the output
     /// identity was replaced (skip → generation 2) — even though its chain
@@ -2964,13 +2353,9 @@ mod tests {
     #[tokio::test]
     async fn replaced_output_invalidates_a_queued_reconnect_before_the_pipeline() {
         let Some(db) = reconnect_test_db().await else { return };
-        let pipeline = Arc::new(GatedReplacePipeline {
-            replaces: AtomicUsize::new(0),
-            reconnects: AtomicUsize::new(0),
-            replace_started: tokio::sync::Notify::new(),
-            replace_release: tokio::sync::Notify::new(),
-        });
-        let mut controller = reconnect_test_controller(db.pool.clone(), pipeline.clone());
+        let pipeline = Arc::new(RecordingPipeline::with_gates());
+        let harness = Harness::with_db(db.pool.clone(), pipeline.clone(), queued_songs(&["A", "B"]));
+        let mut controller = harness.controller;
         let driver = controller.driver();
         let (urgent_tx, urgent) = mpsc::unbounded_channel::<crate::streamer::runtime::ExecutorTask>();
         let (regular_tx, regular) = mpsc::unbounded_channel::<crate::streamer::runtime::ExecutorTask>();
@@ -2981,7 +2366,8 @@ mod tests {
         let operation = controller.play().await;
         crate::streamer::runtime::ExecutorTask::Operation(crate::streamer::runtime::PendingPipelineAction::operation(operation, None))
             .submit(&urgent_tx);
-        pipeline.replace_started.notified().await;
+        let gate = pipeline.replace_gate.as_ref().expect("gated pipeline");
+        gate.wait_started().await;
 
         // The output disconnects while the executor is blocked: chain X is
         // minted and its reconnect operation is queued BEHIND the replace,
@@ -3032,16 +2418,16 @@ mod tests {
         // Release the executor: the replace finishes, then the stale queued
         // reconnect of the old identity reaches the pre-pipeline token
         // guard and is dropped — the pipeline is never touched.
-        pipeline.replace_release.notify_waiters();
+        gate.release();
         drop(urgent_tx);
         drop(regular_tx);
         executor.await.unwrap();
         assert_eq!(
-            pipeline.reconnects.load(Ordering::Acquire),
+            pipeline.count(Call::Reconnect),
             0,
             "a stale queued reconnect of a replaced output must never call pipeline.reconnect()"
         );
-        assert_eq!(pipeline.replaces.load(Ordering::Acquire), 1);
+        assert_eq!(pipeline.count(Call::Replace), 1);
 
         db.cleanup().await;
     }
@@ -3052,22 +2438,24 @@ mod tests {
     #[tokio::test]
     async fn skip_invalidates_the_reconnect_chain_of_the_old_output() {
         let Some(db) = reconnect_test_db().await else { return };
-        let pipeline = Arc::new(CountingReconnectPipeline {
-            reconnects: AtomicUsize::new(0),
-            fail_first: false,
-        });
-        let mut controller = reconnect_test_controller(db.pool.clone(), pipeline.clone());
+        let pipeline = Arc::new(RecordingPipeline::new());
+        let harness = Harness::with_db(db.pool.clone(), pipeline.clone(), queued_songs(&["A", "B"]));
+        let mut controller = harness.controller;
 
         // Playing output (1, 1); a disconnect starts chain X.
         assert!(matches!(controller.play().await, PipelineOperation::Replace(_)));
-        controller
+        let disconnect = controller
             .handle_event(PipelineEvent::SinkDisconnected {
                 generation: 1,
                 output_epoch: 1,
                 message: "output dropped".into(),
             })
             .await
-            .expect("a disconnect while playing must start a chain");
+            .expect("a disconnect while playing must start a chain")
+            .expect("the disconnect handling must not fail");
+        let PipelineOperation::Reconnect(_) = disconnect else {
+            panic!("a disconnect while playing must produce a reconnect");
+        };
         let token_x = controller.current_reconnect_token();
         assert!(controller.reconnect_retry_is_current(token_x));
 
@@ -3102,9 +2490,9 @@ mod tests {
 
     #[tokio::test]
     async fn manual_pause_ends_the_auto_idle_state() {
-        let song = song_at(0, "A");
-        let fresh = song_at(1, "B");
-        let (mut controller, _pipeline) = playing_controller(vec![song.clone()]).await;
+        let song = queued_song("A", 0);
+        let fresh = queued_song("B", 1);
+        let (mut controller, _) = Harness::playing(vec![song.clone()]).await.into_parts();
 
         // Exhaust the queue: the station becomes idle.
         let operation = controller.skip().await.unwrap();
@@ -3140,54 +2528,20 @@ mod tests {
 
     #[tokio::test]
     async fn paused_station_never_auto_resumes_on_later_ticks() {
-        let song = song_at(0, "A");
-        let fresh = song_at(1, "B");
-        let (status_tx, _) = broadcast::channel(1);
-        let (queue_tx, _) = broadcast::channel(1);
-        let db = unavailable_db();
-        let station_id = Uuid::new_v4();
-        let queue = Arc::new(QueueManager::new(db, station_id, String::new(), vec![song.clone()], 0));
-        let pipeline = Arc::new(BlockingPipeline {
-            replace_started: Notify::new(),
-            release_replace: Notify::new(),
-            calls: Mutex::new(Vec::new()),
-        });
-        let controller = StationController {
-            queue: queue.clone(),
-            db: unavailable_db(),
-            station_id,
-            playback: StationPlaybackConfig::from_persisted("off", 0, 0, 0).unwrap(),
-            driver: PipelineDriver::spawn(pipeline.clone()),
-            target: IcecastTarget::parse("localhost:8000", "secret".into(), "test", "test".into()).unwrap(),
-            state: PipelineState::Stopped,
-            status_tx,
-            queue_tx,
-            generation: 0,
-            output_epoch: 0,
-            planned_next: None,
-            idle: false,
-            pending_resume: None,
-            resume_attempt_seq: 0,
-            active_reconnect_retry: None,
-            reconnect_retry_seq: 0,
-            active_reconnect_output: None,
-            reconnect_token_shared: std::sync::Arc::default(),
-            known_disconnected_output: None,
-        };
+        let song = queued_song("A", 0);
+        let fresh = queued_song("B", 1);
+        let pipeline = Arc::new(RecordingPipeline::with_gates());
+        let harness = Harness::with_pipeline(pipeline.clone(), vec![song.clone()]);
+        let queue = harness.controller.queue.clone();
         let (events, receiver) = mpsc::unbounded_channel();
-        let runtime = StationRuntime::spawn(controller, receiver);
+        let runtime = StationRuntime::spawn(harness.controller, receiver);
         let playing = {
             let runtime = runtime.clone();
             tokio::spawn(async move { runtime.play().await })
         };
-        tokio::time::timeout(Duration::from_secs(3), async {
-            while !pipeline.calls.lock().await.contains(&"replace") {
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .expect("the initial replace must reach the pipeline");
-        pipeline.release_replace.notify_one();
+        let gate = pipeline.replace_gate.as_ref().expect("gated pipeline");
+        gate.wait_started().await;
+        gate.release();
         playing.await.unwrap().unwrap();
         events
             .send(PipelineEvent::CurrentEos {
@@ -3196,27 +2550,16 @@ mod tests {
             })
             .unwrap();
         // Exhaust the queue: the station becomes idle.
-        tokio::time::timeout(Duration::from_secs(3), async {
-            while pipeline.calls.lock().await.iter().filter(|call| **call == "replace").count() < 1
-                || !pipeline.calls.lock().await.contains(&"stop")
-            {
-                tokio::task::yield_now().await;
-            }
+        testsupport::wait_for("the exhausted station to stop", || {
+            pipeline.count(Call::Replace) >= 1 && pipeline.calls().contains(&Call::Stop)
         })
-        .await
-        .expect("the exhausted station must stop");
-        assert_eq!(pipeline.calls.lock().await.iter().filter(|call| **call == "replace").count(), 1);
+        .await;
+        assert_eq!(pipeline.count(Call::Replace), 1);
 
         // Content arrives; the first idle tick starts a resume replace that
         // blocks inside the pipeline.
         queue.reload_songs(vec![fresh], false);
-        tokio::time::timeout(Duration::from_secs(3), async {
-            while pipeline.calls.lock().await.iter().filter(|call| **call == "replace").count() < 2 {
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .expect("the resume replace must reach the pipeline");
+        testsupport::wait_for("the resume replace to reach the pipeline", || pipeline.count(Call::Replace) >= 2).await;
 
         // The user pauses while the resume is in flight; the pause command
         // is queued before the release, so the controller processes it (and
@@ -3225,26 +2568,28 @@ mod tests {
             let runtime = runtime.clone();
             tokio::spawn(async move { runtime.pause().await })
         };
-        pipeline.release_replace.notify_one();
+        // The resume replace is blocked inside the gate; arm the release for
+        // exactly this operation (a release can never be lost, but this keeps
+        // the pause strictly queued ahead of the release).
+        gate.wait_started().await;
+        gate.release();
         pausing.await.unwrap().unwrap();
         // Several idle ticks pass: the paused station must not start a new
         // automatic resume.
         tokio::time::sleep(Duration::from_millis(2500)).await;
         assert_eq!(
-            pipeline.calls.lock().await.iter().filter(|call| **call == "replace").count(),
+            pipeline.count(Call::Replace),
             2,
             "idle ticks after a manual pause must not start another resume"
         );
-        assert_eq!(pipeline.calls.lock().await.iter().filter(|call| **call == "set_playing").count(), 1);
+        assert_eq!(pipeline.count(Call::SetPlaying), 1);
         runtime.shutdown().await.unwrap();
         let _ = events;
     }
 
     #[tokio::test]
     async fn target_refresh_failure_keeps_the_chain_retryable() {
-        let song = song_at(0, "A");
-        let next = song_at(1, "B");
-        let (mut controller, _pipeline) = playing_controller(vec![song, next]).await;
+        let (mut controller, _) = Harness::playing(queued_songs(&["A", "B"])).await.into_parts();
 
         // The chain starts (a disconnect just arrived); the target refresh
         // fails against the unreachable database.
@@ -3265,9 +2610,7 @@ mod tests {
 
     #[tokio::test]
     async fn retry_attempts_do_not_mint_a_new_chain_token() {
-        let song = song_at(0, "A");
-        let next = song_at(1, "B");
-        let (mut controller, _pipeline) = playing_controller(vec![song, next]).await;
+        let (mut controller, _) = Harness::playing(queued_songs(&["A", "B"])).await.into_parts();
 
         let token = controller.begin_reconnect_chain();
         // Several failed attempts (each would schedule the next one): the
@@ -3287,9 +2630,7 @@ mod tests {
 
     #[tokio::test]
     async fn superseded_chain_never_reconnects() {
-        let song = song_at(0, "A");
-        let next = song_at(1, "B");
-        let (mut controller, _pipeline) = playing_controller(vec![song, next]).await;
+        let (mut controller, _) = Harness::playing(queued_songs(&["A", "B"])).await.into_parts();
 
         // Chain A fails and schedules a timer; a newer chain B supersedes
         // it. When A's timer fires, the retry must be dropped — the check
@@ -3305,9 +2646,7 @@ mod tests {
 
     #[tokio::test]
     async fn stop_invalidates_the_chain_for_future_retries() {
-        let song = song_at(0, "A");
-        let next = song_at(1, "B");
-        let (mut controller, _pipeline) = playing_controller(vec![song, next]).await;
+        let (mut controller, _) = Harness::playing(queued_songs(&["A", "B"])).await.into_parts();
 
         let token = controller.begin_reconnect_chain();
         controller.stop();
@@ -3319,42 +2658,13 @@ mod tests {
 
     #[tokio::test]
     async fn idle_runtime_auto_starts_when_content_arrives_without_an_api_command() {
-        let song = song_at(0, "A");
-        let fresh = song_at(1, "B");
-        let (status_tx, _) = broadcast::channel(1);
-        let (queue_tx, _) = broadcast::channel(1);
-        let db = unavailable_db();
-        let station_id = Uuid::new_v4();
-        let queue = Arc::new(QueueManager::new(db, station_id, String::new(), vec![song.clone()], 0));
-        let pipeline = Arc::new(FakePipeline {
-            replacements: AtomicUsize::new(0),
-            state_changes: AtomicUsize::new(0),
-            stops: AtomicUsize::new(0),
-        });
-        let controller = StationController {
-            queue: queue.clone(),
-            db: unavailable_db(),
-            station_id,
-            playback: StationPlaybackConfig::from_persisted("off", 0, 0, 0).unwrap(),
-            driver: PipelineDriver::spawn(pipeline.clone()),
-            target: IcecastTarget::parse("localhost:8000", "secret".into(), "test", "test".into()).unwrap(),
-            state: PipelineState::Stopped,
-            status_tx,
-            queue_tx,
-            generation: 0,
-            output_epoch: 0,
-            planned_next: None,
-            idle: false,
-            pending_resume: None,
-            resume_attempt_seq: 0,
-            active_reconnect_retry: None,
-            reconnect_retry_seq: 0,
-            active_reconnect_output: None,
-            reconnect_token_shared: std::sync::Arc::default(),
-            known_disconnected_output: None,
-        };
+        let song = queued_song("A", 0);
+        let fresh = queued_song("B", 1);
+        let pipeline = Arc::new(RecordingPipeline::new());
+        let harness = Harness::with_pipeline(pipeline.clone(), vec![song.clone()]);
+        let queue = harness.controller.queue.clone();
         let (events, receiver) = mpsc::unbounded_channel();
-        let runtime = StationRuntime::spawn(controller, receiver);
+        let runtime = StationRuntime::spawn(harness.controller, receiver);
         runtime.play().await.unwrap();
         events
             .send(PipelineEvent::CurrentEos {
@@ -3364,61 +2674,28 @@ mod tests {
             .unwrap();
         // With no database reachable the exhaustion refill fails and is
         // retried (bounded, ~750ms of backoff) before the controller stops.
-        tokio::time::timeout(Duration::from_secs(2), async {
-            while pipeline.stops.load(Ordering::Acquire) == 0 {
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .unwrap();
-        assert_eq!(pipeline.replacements.load(Ordering::Acquire), 1);
+        testsupport::wait_for("the exhausted station to stop", || pipeline.count(Call::Stop) > 0).await;
+        assert_eq!(pipeline.count(Call::Replace), 1);
 
         // Content arrives in the queue (AutoDJ / schedule fill writing rows),
         // with NO API command: only the runtime's idle tick polls. The next
         // tick must replace the plan and start playback.
         queue.reload_songs(vec![fresh], false);
         tokio::time::timeout(Duration::from_secs(4), async {
-            while pipeline.replacements.load(Ordering::Acquire) < 2 {
+            while pipeline.count(Call::Replace) < 2 {
                 tokio::task::yield_now().await;
             }
         })
         .await
         .expect("the idle runtime must start playback once the queue fills");
-        assert_eq!(pipeline.replacements.load(Ordering::Acquire), 2);
+        assert_eq!(pipeline.count(Call::Replace), 2);
         runtime.shutdown().await.unwrap();
-    }
-
-    struct FailingSnapshotPipeline;
-
-    #[async_trait]
-    impl PlaybackPipeline for FailingSnapshotPipeline {
-        async fn replace(&self, _: PairPlan) -> Result<(), PipelineError> {
-            Ok(())
-        }
-        async fn roll(&self, _: super::super::pipeline::RollingPlan) -> Result<(), PipelineError> {
-            Ok(())
-        }
-        async fn apply_output(&self, _: OutputConfig) -> Result<(), PipelineError> {
-            Ok(())
-        }
-        async fn set_playing(&self, _: bool) -> Result<(), PipelineError> {
-            Ok(())
-        }
-        async fn reconnect(&self, _: IcecastTarget) -> Result<(), PipelineError> {
-            Ok(())
-        }
-        async fn snapshot(&self) -> Result<PipelineSnapshot, PipelineError> {
-            Err(PipelineError::Pipeline("boom: snapshot unavailable".into()))
-        }
-        async fn stop(&self) -> Result<(), PipelineError> {
-            Ok(())
-        }
     }
 
     #[tokio::test]
     async fn status_reports_a_real_stopped_pipeline_as_ok() {
-        let song = song_at(0, "A");
-        let (mut controller, _) = playing_controller(vec![song]).await;
+        let song = queued_song("A", 0);
+        let (mut controller, _) = Harness::playing(vec![song]).await.into_parts();
         controller.stop();
         let status = controller.status().await.expect("a working pipeline must report status");
         let StatusEvent::State { playing, elapsed, .. } = status else {
@@ -3430,32 +2707,10 @@ mod tests {
 
     #[tokio::test]
     async fn status_propagates_a_snapshot_pipeline_error() {
-        let (status_tx, _) = broadcast::channel(1);
-        let (queue_tx, _) = broadcast::channel(1);
-        let db = unavailable_db();
-        let station_id = Uuid::new_v4();
-        let controller = StationController {
-            queue: Arc::new(QueueManager::new(db, station_id, String::new(), Vec::new(), 0)),
-            db: unavailable_db(),
-            station_id,
-            playback: StationPlaybackConfig::from_persisted("off", 0, 0, 0).unwrap(),
-            driver: PipelineDriver::spawn(Arc::new(FailingSnapshotPipeline)),
-            target: IcecastTarget::parse("localhost:8000", "secret".into(), "test", "test".into()).unwrap(),
-            state: PipelineState::Stopped,
-            status_tx,
-            queue_tx,
-            generation: 0,
-            output_epoch: 0,
-            planned_next: None,
-            idle: false,
-            pending_resume: None,
-            resume_attempt_seq: 0,
-            active_reconnect_retry: None,
-            reconnect_retry_seq: 0,
-            active_reconnect_output: None,
-            reconnect_token_shared: std::sync::Arc::default(),
-            known_disconnected_output: None,
-        };
+        let pipeline = Arc::new(RecordingPipeline::new());
+        pipeline.fail(Call::Snapshot);
+        let harness = Harness::with_pipeline(pipeline, Vec::new());
+        let controller = harness.controller;
         // A failed Snapshot must surface as a pipeline error — never as a
         // legal `Stopped` status that monitoring would mistake for a healthy
         // stopped station.
@@ -3463,62 +2718,25 @@ mod tests {
         let Err(PipelineError::Pipeline(message)) = result else {
             panic!("a failed snapshot must propagate as a pipeline error, got {result:?}");
         };
-        assert!(message.contains("boom"), "unexpected error message: {message}");
+        assert!(message.contains("injected failure"), "unexpected error message: {message}");
     }
 
     #[tokio::test]
     async fn shutdown_runs_through_the_executor_and_discards_pending_operations() {
-        let song = song_at(0, "A");
-        let next = song_at(1, "B");
-        let (status_tx, _) = broadcast::channel(1);
-        let (queue_tx, _) = broadcast::channel(1);
-        let db = unavailable_db();
-        let station_id = Uuid::new_v4();
-        let queue = Arc::new(QueueManager::new(db, station_id, String::new(), vec![song, next], 0));
-        let pipeline = Arc::new(BlockingPipeline {
-            replace_started: Notify::new(),
-            release_replace: Notify::new(),
-            calls: Mutex::new(Vec::new()),
-        });
-        let controller = StationController {
-            queue,
-            db: unavailable_db(),
-            station_id,
-            playback: StationPlaybackConfig::from_persisted("off", 0, 0, 0).unwrap(),
-            driver: PipelineDriver::spawn(pipeline.clone()),
-            target: IcecastTarget::parse("localhost:8000", "secret".into(), "test", "test".into()).unwrap(),
-            state: PipelineState::Stopped,
-            status_tx,
-            queue_tx,
-            generation: 0,
-            output_epoch: 0,
-            planned_next: None,
-            idle: false,
-            pending_resume: None,
-            resume_attempt_seq: 0,
-            active_reconnect_retry: None,
-            reconnect_retry_seq: 0,
-            active_reconnect_output: None,
-            reconnect_token_shared: std::sync::Arc::default(),
-            known_disconnected_output: None,
-        };
+        let pipeline = Arc::new(RecordingPipeline::with_gates());
+        let harness = Harness::with_pipeline(pipeline.clone(), queued_songs(&["A", "B"]));
         let (events, receiver) = mpsc::unbounded_channel();
-        let runtime = StationRuntime::spawn(controller, receiver);
+        let runtime = StationRuntime::spawn(harness.controller, receiver);
         let playing = {
             let runtime = runtime.clone();
             tokio::spawn(async move { runtime.play().await })
         };
+        let gate = pipeline.replace_gate.as_ref().expect("gated pipeline");
         // The first replace blocks the executor; a pause and the shutdown
         // queue behind it. Pause is a quick synchronous command (no DB), so
         // the runtime finishes submitting both while the executor is still
         // blocked inside the first replace.
-        tokio::time::timeout(Duration::from_secs(2), async {
-            while !pipeline.calls.lock().await.contains(&"replace") {
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .expect("the first replace must reach the pipeline");
+        gate.wait_started().await;
         let pausing = {
             let runtime = runtime.clone();
             tokio::spawn(async move { runtime.pause().await })
@@ -3535,11 +2753,12 @@ mod tests {
         // Release the first replace: the executor must pick the shutdown
         // barrier next (urgent lane), discard the pending pause, stop, and go
         // terminal — nothing may run after the stop.
-        pipeline.release_replace.notify_one();
-        tokio::time::timeout(Duration::from_secs(5), playing)
+        gate.release();
+        let play_result = tokio::time::timeout(Duration::from_secs(5), playing)
             .await
             .expect("play must complete")
             .unwrap();
+        assert!(play_result.is_ok(), "play must succeed: {play_result:?}");
         let pause_result = tokio::time::timeout(Duration::from_secs(5), pausing)
             .await
             .expect("pause must complete")
@@ -3547,109 +2766,37 @@ mod tests {
         assert!(
             pause_result.is_err(),
             "a pending pause must be refused once the shutdown barrier lands (calls: {:?})",
-            pipeline.calls.lock().await
+            pipeline.calls()
         );
-        tokio::time::timeout(Duration::from_secs(5), shutting_down)
+        let shutdown_result = tokio::time::timeout(Duration::from_secs(5), shutting_down)
             .await
             .expect("shutdown must complete")
             .unwrap();
-        assert_eq!(*pipeline.calls.lock().await, ["replace", "stop"]);
+        assert!(shutdown_result.is_ok(), "shutdown must succeed: {shutdown_result:?}");
+        assert_eq!(pipeline.calls(), [Call::Replace, Call::Stop]);
         let _ = events;
         // The runtime is terminal: further commands are refused.
         assert!(runtime.play().await.is_err());
     }
 
-    struct FailOnceReplacePipeline {
-        replacements: AtomicUsize,
-        stops: AtomicUsize,
-    }
-
-    #[async_trait]
-    impl PlaybackPipeline for FailOnceReplacePipeline {
-        async fn replace(&self, _: PairPlan) -> Result<(), PipelineError> {
-            let attempt = self.replacements.fetch_add(1, Ordering::Release);
-            if attempt == 1 {
-                Err(PipelineError::Pipeline("boom: replace failed".into()))
-            } else {
-                Ok(())
-            }
-        }
-        async fn roll(&self, _: super::super::pipeline::RollingPlan) -> Result<(), PipelineError> {
-            Ok(())
-        }
-        async fn apply_output(&self, _: OutputConfig) -> Result<(), PipelineError> {
-            Ok(())
-        }
-        async fn set_playing(&self, _: bool) -> Result<(), PipelineError> {
-            Ok(())
-        }
-        async fn reconnect(&self, _: IcecastTarget) -> Result<(), PipelineError> {
-            Ok(())
-        }
-        async fn snapshot(&self) -> Result<PipelineSnapshot, PipelineError> {
-            Ok(PipelineSnapshot {
-                state: PipelineState::Stopped,
-                elapsed: Duration::ZERO,
-            })
-        }
-        async fn stop(&self) -> Result<(), PipelineError> {
-            self.stops.fetch_add(1, Ordering::Release);
-            Ok(())
-        }
-    }
-
     #[tokio::test]
     async fn idle_runtime_queues_only_one_resume_replace_while_one_is_in_flight() {
-        let song = song_at(0, "A");
-        let fresh = song_at(1, "B");
-        let (status_tx, _) = broadcast::channel(1);
-        let (queue_tx, _) = broadcast::channel(1);
-        let db = unavailable_db();
-        let station_id = Uuid::new_v4();
-        let queue = Arc::new(QueueManager::new(db, station_id, String::new(), vec![song.clone()], 0));
-        let pipeline = Arc::new(BlockingPipeline {
-            replace_started: Notify::new(),
-            release_replace: Notify::new(),
-            calls: Mutex::new(Vec::new()),
-        });
-        let controller = StationController {
-            queue: queue.clone(),
-            db: unavailable_db(),
-            station_id,
-            playback: StationPlaybackConfig::from_persisted("off", 0, 0, 0).unwrap(),
-            driver: PipelineDriver::spawn(pipeline.clone()),
-            target: IcecastTarget::parse("localhost:8000", "secret".into(), "test", "test".into()).unwrap(),
-            state: PipelineState::Stopped,
-            status_tx,
-            queue_tx,
-            generation: 0,
-            output_epoch: 0,
-            planned_next: None,
-            idle: false,
-            pending_resume: None,
-            resume_attempt_seq: 0,
-            active_reconnect_retry: None,
-            reconnect_retry_seq: 0,
-            active_reconnect_output: None,
-            reconnect_token_shared: std::sync::Arc::default(),
-            known_disconnected_output: None,
-        };
+        let song = queued_song("A", 0);
+        let fresh = queued_song("B", 1);
+        let pipeline = Arc::new(RecordingPipeline::with_gates());
+        let harness = Harness::with_pipeline(pipeline.clone(), vec![song.clone()]);
+        let queue = harness.controller.queue.clone();
         let (events, receiver) = mpsc::unbounded_channel();
-        let runtime = StationRuntime::spawn(controller, receiver);
+        let runtime = StationRuntime::spawn(harness.controller, receiver);
         let playing = {
             let runtime = runtime.clone();
             tokio::spawn(async move { runtime.play().await })
         };
+        let gate = pipeline.replace_gate.as_ref().expect("gated pipeline");
         // The initial replace blocks inside the pipeline; release it so the
         // exhaustion stop below can run through the free executor.
-        tokio::time::timeout(Duration::from_secs(3), async {
-            while !pipeline.calls.lock().await.contains(&"replace") {
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .expect("the initial replace must reach the pipeline");
-        pipeline.release_replace.notify_one();
+        gate.wait_started().await;
+        gate.release();
         playing.await.unwrap().unwrap();
         events
             .send(PipelineEvent::CurrentEos {
@@ -3658,85 +2805,53 @@ mod tests {
             })
             .unwrap();
         // Exhaust the queue: the station becomes idle.
-        tokio::time::timeout(Duration::from_secs(3), async {
-            while pipeline.calls.lock().await.iter().filter(|call| **call == "replace").count() < 1
-                || !pipeline.calls.lock().await.contains(&"stop")
-            {
-                tokio::task::yield_now().await;
-            }
+        testsupport::wait_for("the exhausted station to stop", || {
+            pipeline.count(Call::Replace) >= 1 && pipeline.calls().contains(&Call::Stop)
         })
-        .await
-        .expect("the exhausted station must stop");
-        assert_eq!(pipeline.calls.lock().await.iter().filter(|call| **call == "replace").count(), 1);
-        assert_eq!(pipeline.calls.lock().await.iter().filter(|call| **call == "stop").count(), 1);
+        .await;
+        assert_eq!(pipeline.count(Call::Replace), 1);
+        assert_eq!(pipeline.count(Call::Stop), 1);
 
         // Content arrives; the first idle tick starts a resume replace that
         // blocks inside the pipeline.
         queue.reload_songs(vec![fresh], false);
-        tokio::time::timeout(Duration::from_secs(3), async {
-            while pipeline.calls.lock().await.iter().filter(|call| **call == "replace").count() < 2 {
-                tokio::task::yield_now().await;
-            }
+        testsupport::wait_for("the first resume replace to reach the pipeline", || {
+            pipeline.count(Call::Replace) >= 2
         })
-        .await
-        .expect("the first resume replace must reach the pipeline");
+        .await;
 
         // Several idle ticks pass while the replace is still in flight: no
         // further replace may be queued.
         tokio::time::sleep(Duration::from_millis(2500)).await;
         assert_eq!(
-            pipeline.calls.lock().await.iter().filter(|call| **call == "replace").count(),
+            pipeline.count(Call::Replace),
             2,
             "idle ticks must not queue a second resume while one is in flight"
         );
 
         // The replace completes: the resume succeeds and the station plays.
-        pipeline.release_replace.notify_one();
+        gate.wait_started().await;
+        gate.release();
         // No third replace and no second stop may appear afterwards.
         tokio::time::sleep(Duration::from_millis(500)).await;
-        assert_eq!(pipeline.calls.lock().await.iter().filter(|call| **call == "replace").count(), 2);
-        assert_eq!(pipeline.calls.lock().await.iter().filter(|call| **call == "stop").count(), 1);
+        assert_eq!(pipeline.count(Call::Replace), 2);
+        assert_eq!(pipeline.count(Call::Stop), 1);
         runtime.shutdown().await.unwrap();
         let _ = events;
     }
 
     #[tokio::test]
     async fn idle_runtime_retries_a_failed_auto_resume_on_the_next_tick() {
-        let song = song_at(0, "A");
-        let fresh = song_at(1, "B");
-        let (status_tx, _) = broadcast::channel(1);
-        let (queue_tx, _) = broadcast::channel(1);
-        let db = unavailable_db();
-        let station_id = Uuid::new_v4();
-        let queue = Arc::new(QueueManager::new(db, station_id, String::new(), vec![song.clone()], 0));
-        let pipeline = Arc::new(FailOnceReplacePipeline {
-            replacements: AtomicUsize::new(0),
-            stops: AtomicUsize::new(0),
-        });
-        let controller = StationController {
-            queue: queue.clone(),
-            db: unavailable_db(),
-            station_id,
-            playback: StationPlaybackConfig::from_persisted("off", 0, 0, 0).unwrap(),
-            driver: PipelineDriver::spawn(pipeline.clone()),
-            target: IcecastTarget::parse("localhost:8000", "secret".into(), "test", "test".into()).unwrap(),
-            state: PipelineState::Stopped,
-            status_tx,
-            queue_tx,
-            generation: 0,
-            output_epoch: 0,
-            planned_next: None,
-            idle: false,
-            pending_resume: None,
-            resume_attempt_seq: 0,
-            active_reconnect_retry: None,
-            reconnect_retry_seq: 0,
-            active_reconnect_output: None,
-            reconnect_token_shared: std::sync::Arc::default(),
-            known_disconnected_output: None,
-        };
+        let song = queued_song("A", 0);
+        let fresh = queued_song("B", 1);
+        let pipeline = Arc::new(RecordingPipeline::new());
+        // The second replace (the first automatic resume) fails; the third
+        // succeeds.
+        pipeline.fail_nth(Call::Replace, 1);
+        let harness = Harness::with_pipeline(pipeline.clone(), vec![song.clone()]);
+        let queue = harness.controller.queue.clone();
         let (events, receiver) = mpsc::unbounded_channel();
-        let runtime = StationRuntime::spawn(controller, receiver);
+        let runtime = StationRuntime::spawn(harness.controller, receiver);
         runtime.play().await.unwrap();
         events
             .send(PipelineEvent::CurrentEos {
@@ -3746,43 +2861,33 @@ mod tests {
             .unwrap();
         // The queue exhausts (DB unreachable, bounded fill retries ~750ms):
         // the station becomes idle.
-        tokio::time::timeout(Duration::from_secs(3), async {
-            while pipeline.stops.load(Ordering::Acquire) == 0 {
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .expect("the exhausted station must stop");
-        assert_eq!(pipeline.replacements.load(Ordering::Acquire), 1);
+        testsupport::wait_for("the exhausted station to stop", || pipeline.count(Call::Stop) > 0).await;
+        assert_eq!(pipeline.count(Call::Replace), 1);
 
         // Content arrives; the first automatic resume replace fails. The
         // controller must stay idle/retryable.
         queue.reload_songs(vec![fresh], false);
         tokio::time::timeout(Duration::from_secs(4), async {
-            while pipeline.replacements.load(Ordering::Acquire) < 2 {
+            while pipeline.count(Call::Replace) < 2 {
                 tokio::task::yield_now().await;
             }
         })
         .await
         .expect("the first auto-resume attempt must run");
         tokio::time::sleep(Duration::from_millis(200)).await;
-        assert_eq!(
-            pipeline.replacements.load(Ordering::Acquire),
-            2,
-            "a failed resume must not be retried eagerly"
-        );
+        assert_eq!(pipeline.count(Call::Replace), 2, "a failed resume must not be retried eagerly");
 
         // The next idle tick retries and the second replace succeeds: the
         // station is back in Playing (the pipeline keeps its one stop).
         tokio::time::timeout(Duration::from_secs(4), async {
-            while pipeline.replacements.load(Ordering::Acquire) < 3 {
+            while pipeline.count(Call::Replace) < 3 {
                 tokio::task::yield_now().await;
             }
         })
         .await
         .expect("the idle tick must retry the failed resume");
-        assert_eq!(pipeline.replacements.load(Ordering::Acquire), 3);
-        assert_eq!(pipeline.stops.load(Ordering::Acquire), 1);
+        assert_eq!(pipeline.count(Call::Replace), 3);
+        assert_eq!(pipeline.count(Call::Stop), 1);
         runtime.shutdown().await.unwrap();
         let _ = events;
     }

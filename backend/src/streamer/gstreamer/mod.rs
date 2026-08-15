@@ -765,39 +765,79 @@ impl PlaybackPipelineFactory for GStreamerPipelineFactory {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::streamer::pipeline::{IcecastTarget, OutputConfig, PipelineTrack, PlannedNext, TransitionPlan};
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    use tokio::net::{TcpListener, TcpStream};
+    use crate::streamer::pipeline::{IcecastTarget, PipelineTrack, PlannedNext, TransitionPlan};
+    use crate::streamer::testsupport::{self, track, write_wav, HttpStub};
+    use std::path::PathBuf;
+    use tokio::sync::mpsc;
 
-    fn config() -> PipelineConfig {
-        PipelineConfig {
-            target: IcecastTarget::parse("localhost:8000", "secret".into(), "test", "test".into()).unwrap(),
-            output: OutputConfig {
-                prebuffer_bytes: 1024,
-                sample_rate: 44_100,
-                channels: 2,
-                bitrate_kbps: 128,
-            },
+    /// Owns a real (test-sink) pipeline instance plus its event stream and
+    /// keeps the temporary WAV files alive for the lifetime of the test.
+    struct GstHarness {
+        pipeline: Arc<dyn PlaybackPipeline>,
+        events: mpsc::UnboundedReceiver<PipelineEvent>,
+        files: Vec<tempfile::NamedTempFile>,
+    }
+
+    impl GstHarness {
+        async fn new() -> Self {
+            let instance = GStreamerPipelineFactory::with_test_sink()
+                .create(testsupport::pipeline_config())
+                .await
+                .unwrap();
+            Self {
+                pipeline: instance.pipeline,
+                events: instance.events,
+                files: Vec::new(),
+            }
+        }
+
+        /// Writes a short tone WAV and keeps the temp file alive.
+        fn wav(&mut self, duration: Duration, sample: i16) -> PathBuf {
+            let file = tempfile::NamedTempFile::new().unwrap();
+            write_wav(file.path(), duration, sample);
+            let path = file.path().to_path_buf();
+            self.files.push(file);
+            path
+        }
+
+        /// The next pipeline event within the standard bounded timeout.
+        async fn next_event(&mut self) -> PipelineEvent {
+            tokio::time::timeout(Duration::from_secs(3), self.events.recv())
+                .await
+                .expect("pipeline event timeout")
+                .expect("event channel closed")
+        }
+
+        /// Waits (bounded) for an event matching `predicate`.
+        async fn wait_for_event(&mut self, predicate: impl Fn(&PipelineEvent) -> bool) -> PipelineEvent {
+            tokio::time::timeout(Duration::from_secs(3), async {
+                loop {
+                    if let Some(event) = self.events.recv().await {
+                        if predicate(&event) {
+                            return event;
+                        }
+                    } else {
+                        panic!("event channel closed");
+                    }
+                }
+            })
+            .await
+            .expect("pipeline event timeout")
+        }
+
+        async fn stop(&self) {
+            self.pipeline.stop().await.unwrap();
         }
     }
-    async fn read_http_request(stream: &mut TcpStream) -> String {
-        let mut request = Vec::new();
-        loop {
-            let mut chunk = vec![0; 1024];
-            let length = stream.read(&mut chunk).await.unwrap();
-            assert!(length > 0, "request ended before its form body");
-            request.extend_from_slice(&chunk[..length]);
-            let Some(header_end) = request.windows(4).position(|window| window == b"\r\n\r\n") else {
-                continue;
-            };
-            let headers = String::from_utf8_lossy(&request[..header_end]);
-            let content_length = headers
-                .lines()
-                .find_map(|line| line.to_ascii_lowercase().strip_prefix("content-length: ")?.parse::<usize>().ok())
-                .unwrap_or_default();
-            if request.len() >= header_end + 4 + content_length {
-                return String::from_utf8(request).unwrap();
-            }
+
+    /// An initial replace from a stopped pipeline (output epoch 1).
+    fn initial_plan(generation: u64, current: PipelineTrack, next: Option<PipelineTrack>, transition: TransitionPlan) -> PairPlan {
+        PairPlan {
+            mode: ReplaceMode::InitialReplaceFromStopped,
+            generation,
+            output_epoch: 1,
+            current,
+            next: next.map(|track| PlannedNext { track, transition }),
         }
     }
 
@@ -812,30 +852,6 @@ mod tests {
             .find(|(key, _)| key == "song")
             .map(|(_, value)| value.into_owned())
             .expect("metadata request carries a song parameter")
-    }
-
-    fn write_wav(file: &std::path::Path, duration: Duration, sample: i16) {
-        let frames = (duration.as_secs_f64() * 44_100.0).round() as u32;
-        let data_len = frames * 4;
-        let mut wav = Vec::with_capacity((44 + data_len) as usize);
-        wav.extend_from_slice(b"RIFF");
-        wav.extend_from_slice(&(36 + data_len).to_le_bytes());
-        wav.extend_from_slice(b"WAVEfmt ");
-        wav.extend_from_slice(&16u32.to_le_bytes());
-        wav.extend_from_slice(&1u16.to_le_bytes());
-        wav.extend_from_slice(&2u16.to_le_bytes());
-        wav.extend_from_slice(&44_100u32.to_le_bytes());
-        wav.extend_from_slice(&176_400u32.to_le_bytes());
-        wav.extend_from_slice(&4u16.to_le_bytes());
-
-        wav.extend_from_slice(&16u16.to_le_bytes());
-        wav.extend_from_slice(b"data");
-        wav.extend_from_slice(&data_len.to_le_bytes());
-        for _ in 0..frames {
-            wav.extend_from_slice(&sample.to_le_bytes());
-            wav.extend_from_slice(&sample.to_le_bytes());
-        }
-        std::fs::write(file, wav).unwrap();
     }
 
     #[test]
@@ -855,109 +871,60 @@ mod tests {
         assert!(replacement.is_cancelled());
     }
 
-    fn track(path: &std::path::Path, position: i32) -> PipelineTrack {
-        PipelineTrack {
-            key: TrackKey {
-                queue_item_id: uuid::Uuid::new_v4(),
-                song_id: uuid::Uuid::new_v4(),
-            },
-            metadata: TrackMetadata {
-                title: format!("Track {position}"),
-                artist: format!("Artist {position}"),
-            },
-            path: path.to_path_buf(),
-            cue_in: Duration::ZERO,
-            cue_out: Duration::ZERO,
-            cross_start_next: Duration::ZERO,
-            analyzed: false,
-        }
-    }
-
-    fn initial_plan(generation: u64, current: PipelineTrack, next: Option<PipelineTrack>, transition: TransitionPlan) -> PairPlan {
-        PairPlan {
-            mode: ReplaceMode::InitialReplaceFromStopped,
-            generation,
-            output_epoch: 1,
-            current,
-            next: next.map(|track| PlannedNext { track, transition }),
-        }
-    }
-
     #[tokio::test]
     async fn creates_clocked_mp3_backbone_with_test_sink() {
-        let instance = GStreamerPipelineFactory::with_test_sink().create(config()).await.unwrap();
-        assert_eq!(instance.pipeline.snapshot().await.unwrap().state, PipelineState::Stopped);
-        instance.pipeline.set_playing(false).await.unwrap();
-        assert_eq!(instance.pipeline.snapshot().await.unwrap().state, PipelineState::Paused);
-        instance.pipeline.stop().await.unwrap();
+        let harness = GstHarness::new().await;
+        assert_eq!(harness.pipeline.snapshot().await.unwrap().state, PipelineState::Stopped);
+        harness.pipeline.set_playing(false).await.unwrap();
+        assert_eq!(harness.pipeline.snapshot().await.unwrap().state, PipelineState::Paused);
+        harness.stop().await;
     }
 
     #[tokio::test]
     async fn reconnect_preserves_paused_and_playing_state() {
-        let target = config().target;
-        let file = tempfile::NamedTempFile::new().unwrap();
-        write_wav(file.path(), Duration::from_secs(5), 0);
-        let instance = GStreamerPipelineFactory::with_test_sink().create(config()).await.unwrap();
-        instance
+        let target = testsupport::target();
+        let mut harness = GstHarness::new().await;
+        let file = harness.wav(Duration::from_secs(5), 0);
+        harness
             .pipeline
-            .replace(initial_plan(1, track(file.path(), 0), None, TransitionPlan::Cut))
+            .replace(initial_plan(1, track(&file, 0), None, TransitionPlan::Cut))
             .await
             .unwrap();
-        instance.pipeline.set_playing(false).await.unwrap();
-        instance.pipeline.reconnect(target.clone()).await.unwrap();
-        assert_eq!(instance.pipeline.snapshot().await.unwrap().state, PipelineState::Paused);
-        instance.pipeline.set_playing(true).await.unwrap();
-        assert_eq!(instance.pipeline.snapshot().await.unwrap().state, PipelineState::Playing);
-        instance.pipeline.stop().await.unwrap();
+        harness.pipeline.set_playing(false).await.unwrap();
+        harness.pipeline.reconnect(target.clone()).await.unwrap();
+        assert_eq!(harness.pipeline.snapshot().await.unwrap().state, PipelineState::Paused);
+        harness.pipeline.set_playing(true).await.unwrap();
+        assert_eq!(harness.pipeline.snapshot().await.unwrap().state, PipelineState::Playing);
+        harness.stop().await;
 
-        let instance = GStreamerPipelineFactory::with_test_sink().create(config()).await.unwrap();
-        instance
+        let mut harness = GstHarness::new().await;
+        let file = harness.wav(Duration::from_secs(5), 0);
+        harness
             .pipeline
-            .replace(initial_plan(1, track(file.path(), 0), None, TransitionPlan::Cut))
+            .replace(initial_plan(1, track(&file, 0), None, TransitionPlan::Cut))
             .await
             .unwrap();
-        instance.pipeline.reconnect(target).await.unwrap();
-        assert_eq!(instance.pipeline.snapshot().await.unwrap().state, PipelineState::Playing);
-        instance.pipeline.stop().await.unwrap();
+        harness.pipeline.reconnect(target).await.unwrap();
+        assert_eq!(harness.pipeline.snapshot().await.unwrap().state, PipelineState::Playing);
+        harness.stop().await;
     }
 
     #[tokio::test]
     async fn decodes_a_wav_branch_without_a_second_playback_backend() {
-        use crate::streamer::pipeline::{PipelineTrack, TrackKey};
-        use tempfile::NamedTempFile;
-        use uuid::Uuid;
-
-        let file = NamedTempFile::new().unwrap();
-        let mut wav = Vec::from(b"RIFF".as_slice());
-        wav.extend_from_slice(&(36u32 + 8_820).to_le_bytes());
-        wav.extend_from_slice(b"WAVEfmt ");
-        wav.extend_from_slice(&16u32.to_le_bytes());
-        wav.extend_from_slice(&1u16.to_le_bytes());
-        wav.extend_from_slice(&2u16.to_le_bytes());
-        wav.extend_from_slice(&44_100u32.to_le_bytes());
-        wav.extend_from_slice(&176_400u32.to_le_bytes());
-        wav.extend_from_slice(&4u16.to_le_bytes());
-        wav.extend_from_slice(&16u16.to_le_bytes());
-        wav.extend_from_slice(b"data");
-        wav.extend_from_slice(&8_820u32.to_le_bytes());
-        wav.extend(std::iter::repeat_n(0u8, 8_820));
-        std::fs::write(file.path(), wav).unwrap();
-
-        let PipelineInstance { pipeline, mut events } = GStreamerPipelineFactory::with_test_sink().create(config()).await.unwrap();
-        let key = TrackKey {
-            queue_item_id: Uuid::new_v4(),
-            song_id: Uuid::new_v4(),
-        };
-        pipeline
+        let mut harness = GstHarness::new().await;
+        let file = harness.wav(Duration::from_millis(200), 0);
+        let key = testsupport::track_key();
+        harness
+            .pipeline
             .replace(initial_plan(
                 1,
                 PipelineTrack {
                     key: key.clone(),
-                    metadata: TrackMetadata {
+                    metadata: crate::streamer::pipeline::TrackMetadata {
                         title: "Test track".into(),
                         artist: "Test artist".into(),
                     },
-                    path: file.path().to_path_buf(),
+                    path: file,
                     cue_in: Duration::ZERO,
                     cue_out: Duration::ZERO,
                     cross_start_next: Duration::ZERO,
@@ -968,27 +935,26 @@ mod tests {
             ))
             .await
             .unwrap();
-        assert_eq!(pipeline.snapshot().await.unwrap().state, PipelineState::Playing);
+        assert_eq!(harness.pipeline.snapshot().await.unwrap().state, PipelineState::Playing);
         assert!(matches!(
-            tokio::time::timeout(Duration::from_secs(3), events.recv()).await.unwrap(),
-            Some(PipelineEvent::CurrentEos { generation: 1, current }) if current == key
+            harness.next_event().await,
+            PipelineEvent::CurrentEos { generation: 1, current } if current == key
         ));
-        pipeline.stop().await.unwrap();
+        harness.stop().await;
     }
 
     #[tokio::test]
     async fn schedules_next_branch_and_handover_on_the_clocked_fade_midpoint() {
-        let current_file = tempfile::NamedTempFile::new().unwrap();
-        let next_file = tempfile::NamedTempFile::new().unwrap();
-        write_wav(current_file.path(), Duration::from_secs(1), 8_000);
-        write_wav(next_file.path(), Duration::from_secs(1), -8_000);
-        let current = track(current_file.path(), 0);
-        let next = track(next_file.path(), 1);
+        let mut harness = GstHarness::new().await;
+        let current_file = harness.wav(Duration::from_secs(1), 8_000);
+        let next_file = harness.wav(Duration::from_secs(1), -8_000);
+        let current = track(&current_file, 0);
+        let next = track(&next_file, 1);
         let next_key = next.key.clone();
-        let PipelineInstance { pipeline, mut events } = GStreamerPipelineFactory::with_test_sink().create(config()).await.unwrap();
         let started = std::time::Instant::now();
 
-        pipeline
+        harness
+            .pipeline
             .replace(initial_plan(
                 7,
                 current,
@@ -1000,36 +966,33 @@ mod tests {
             .await
             .unwrap();
 
-        let event = tokio::time::timeout(Duration::from_secs(3), events.recv()).await.unwrap();
+        let event = harness.next_event().await;
         assert!(
             matches!(
                 event,
-                Some(PipelineEvent::Handover { generation: 7, ref current })
+                PipelineEvent::Handover { generation: 7, ref current }
                     if current == &next_key
             ),
             "{event:?}"
         );
         assert!(started.elapsed() >= Duration::from_millis(500));
-        pipeline.stop().await.unwrap();
+        harness.stop().await;
     }
 
     #[tokio::test]
     async fn schedules_each_replacement_on_its_own_running_time() {
-        let first_file = tempfile::NamedTempFile::new().unwrap();
-        let second_file = tempfile::NamedTempFile::new().unwrap();
-        let third_file = tempfile::NamedTempFile::new().unwrap();
-        let fourth_file = tempfile::NamedTempFile::new().unwrap();
-        write_wav(first_file.path(), Duration::from_secs(1), 8_000);
-        write_wav(second_file.path(), Duration::from_secs(1), -8_000);
-        write_wav(third_file.path(), Duration::from_secs(1), 4_000);
-        write_wav(fourth_file.path(), Duration::from_secs(1), -4_000);
-        let first = track(first_file.path(), 0);
-        let second = track(second_file.path(), 1);
-        let third = track(third_file.path(), 2);
-        let fourth = track(fourth_file.path(), 3);
+        let mut harness = GstHarness::new().await;
+        let first_file = harness.wav(Duration::from_secs(1), 8_000);
+        let second_file = harness.wav(Duration::from_secs(1), -8_000);
+        let third_file = harness.wav(Duration::from_secs(1), 4_000);
+        let fourth_file = harness.wav(Duration::from_secs(1), -4_000);
+        let first = track(&first_file, 0);
+        let second = track(&second_file, 1);
+        let third = track(&third_file, 2);
+        let fourth = track(&fourth_file, 3);
         let third_key = third.key.clone();
         let fourth_key = fourth.key.clone();
-        let PipelineInstance { pipeline, mut events } = GStreamerPipelineFactory::with_test_sink().create(config()).await.unwrap();
+        let pipeline = harness.pipeline.clone();
         let plan = |generation, mode, current, next| PairPlan {
             mode,
             generation,
@@ -1047,11 +1010,9 @@ mod tests {
             .replace(plan(1, ReplaceMode::InitialReplaceFromStopped, first, second.clone()))
             .await
             .unwrap();
-        tokio::time::timeout(Duration::from_secs(3), async {
-            while !matches!(events.recv().await, Some(PipelineEvent::Handover { generation: 1, .. })) {}
-        })
-        .await
-        .unwrap();
+        harness
+            .wait_for_event(|event| matches!(event, PipelineEvent::Handover { generation: 1, .. }))
+            .await;
 
         let started = std::time::Instant::now();
         pipeline
@@ -1066,17 +1027,9 @@ mod tests {
             ))
             .await
             .unwrap();
-        tokio::time::timeout(Duration::from_secs(3), async {
-            while !matches!(
-                events.recv().await,
-                Some(PipelineEvent::Handover {
-                    generation: 2,
-                    ref current,
-                }) if current == &third_key
-            ) {}
-        })
-        .await
-        .unwrap();
+        harness
+            .wait_for_event(|event| matches!(event, PipelineEvent::Handover { generation: 2, ref current } if current == &third_key))
+            .await;
         assert!(pipeline.snapshot().await.unwrap().elapsed < Duration::from_millis(250));
         assert!(started.elapsed() >= Duration::from_millis(500));
         let rolling_started = std::time::Instant::now();
@@ -1093,34 +1046,25 @@ mod tests {
             })
             .await
             .unwrap();
-        tokio::time::timeout(Duration::from_secs(3), async {
-            while !matches!(
-                events.recv().await,
-                Some(PipelineEvent::Handover {
-                    generation: 2,
-                    ref current,
-                }) if current == &fourth_key
-            ) {}
-        })
-        .await
-        .unwrap();
+        harness
+            .wait_for_event(|event| matches!(event, PipelineEvent::Handover { generation: 2, ref current } if current == &fourth_key))
+            .await;
         assert!(rolling_started.elapsed() >= Duration::from_millis(500));
-        pipeline.stop().await.unwrap();
+        harness.stop().await;
     }
 
     #[tokio::test]
     async fn applies_autocue_seeks_before_the_clocked_handover() {
-        let current_file = tempfile::NamedTempFile::new().unwrap();
-        let next_file = tempfile::NamedTempFile::new().unwrap();
-        write_wav(current_file.path(), Duration::from_millis(1_500), 8_000);
-        write_wav(next_file.path(), Duration::from_millis(1_500), -8_000);
-        let current = track(current_file.path(), 0);
-        let next = track(next_file.path(), 1);
+        let mut harness = GstHarness::new().await;
+        let current_file = harness.wav(Duration::from_millis(1_500), 8_000);
+        let next_file = harness.wav(Duration::from_millis(1_500), -8_000);
+        let current = track(&current_file, 0);
+        let next = track(&next_file, 1);
         let next_key = next.key.clone();
-        let PipelineInstance { pipeline, mut events } = GStreamerPipelineFactory::with_test_sink().create(config()).await.unwrap();
         let started = std::time::Instant::now();
 
-        pipeline
+        harness
+            .pipeline
             .replace(initial_plan(
                 8,
                 current,
@@ -1137,31 +1081,29 @@ mod tests {
             .await
             .unwrap();
 
-        let event = tokio::time::timeout(Duration::from_secs(3), events.recv()).await.unwrap();
+        let event = harness.next_event().await;
         assert!(
-            matches!(event, Some(PipelineEvent::Handover { generation: 8, ref current }) if current == &next_key),
+            matches!(event, PipelineEvent::Handover { generation: 8, ref current } if current == &next_key),
             "{event:?}"
         );
         assert!(started.elapsed() >= Duration::from_millis(500));
-        pipeline.stop().await.unwrap();
+        harness.stop().await;
     }
 
     #[tokio::test]
     async fn rolling_attach_promotes_handover_and_schedules_the_following_track() {
-        let first_file = tempfile::NamedTempFile::new().unwrap();
-        let second_file = tempfile::NamedTempFile::new().unwrap();
-        let third_file = tempfile::NamedTempFile::new().unwrap();
-        write_wav(first_file.path(), Duration::from_secs(1), 8_000);
-        write_wav(second_file.path(), Duration::from_secs(1), -8_000);
-        write_wav(third_file.path(), Duration::from_secs(1), 4_000);
-        let first = track(first_file.path(), 0);
-        let second = track(second_file.path(), 1);
-        let third = track(third_file.path(), 2);
+        let mut harness = GstHarness::new().await;
+        let first_file = harness.wav(Duration::from_secs(1), 8_000);
+        let second_file = harness.wav(Duration::from_secs(1), -8_000);
+        let third_file = harness.wav(Duration::from_secs(1), 4_000);
+        let first = track(&first_file, 0);
+        let second = track(&second_file, 1);
+        let third = track(&third_file, 2);
         let second_key = second.key.clone();
         let third_key = third.key.clone();
-        let PipelineInstance { pipeline, mut events } = GStreamerPipelineFactory::with_test_sink().create(config()).await.unwrap();
 
-        pipeline
+        harness
+            .pipeline
             .replace(initial_plan(
                 1,
                 first,
@@ -1172,14 +1114,13 @@ mod tests {
             ))
             .await
             .unwrap();
-        tokio::time::timeout(Duration::from_secs(3), async {
-            while !matches!(events.recv().await, Some(PipelineEvent::Handover { generation: 1, ref current }) if current == &second_key) {}
-        })
-        .await
-        .unwrap();
+        harness
+            .wait_for_event(|event| matches!(event, PipelineEvent::Handover { generation: 1, ref current } if current == &second_key))
+            .await;
         let second_started = std::time::Instant::now();
 
-        pipeline
+        harness
+            .pipeline
             .roll(RollingPlan {
                 generation: 1,
                 current: second_key,
@@ -1192,33 +1133,34 @@ mod tests {
             })
             .await
             .unwrap();
-        tokio::time::timeout(Duration::from_secs(3), async {
-            while !matches!(events.recv().await, Some(PipelineEvent::Handover { generation: 1, ref current }) if current == &third_key) {}
-        })
-        .await
-        .unwrap();
+        harness
+            .wait_for_event(|event| matches!(event, PipelineEvent::Handover { generation: 1, ref current } if current == &third_key))
+            .await;
         let second_elapsed = second_started.elapsed();
         assert!(
             second_elapsed >= Duration::from_millis(500),
             "rolling handover fired after {second_elapsed:?}, before the promoted track reached its fade window"
         );
-        pipeline.stop().await.unwrap();
+        harness.stop().await;
     }
 
     #[tokio::test]
     async fn rolling_attach_accepts_a_single_current_branch() {
-        let current_file = tempfile::NamedTempFile::new().unwrap();
-        let next_file = tempfile::NamedTempFile::new().unwrap();
-        write_wav(current_file.path(), Duration::from_secs(1), 8_000);
-        write_wav(next_file.path(), Duration::from_secs(1), -8_000);
-        let current = track(current_file.path(), 0);
+        let mut harness = GstHarness::new().await;
+        let current_file = harness.wav(Duration::from_secs(1), 8_000);
+        let next_file = harness.wav(Duration::from_secs(1), -8_000);
+        let current = track(&current_file, 0);
         let current_key = current.key.clone();
-        let next = track(next_file.path(), 1);
+        let next = track(&next_file, 1);
         let next_key = next.key.clone();
-        let PipelineInstance { pipeline, mut events } = GStreamerPipelineFactory::with_test_sink().create(config()).await.unwrap();
 
-        pipeline.replace(initial_plan(1, current, None, TransitionPlan::Cut)).await.unwrap();
-        pipeline
+        harness
+            .pipeline
+            .replace(initial_plan(1, current, None, TransitionPlan::Cut))
+            .await
+            .unwrap();
+        harness
+            .pipeline
             .roll(RollingPlan {
                 generation: 1,
                 current: current_key,
@@ -1232,33 +1174,30 @@ mod tests {
             .await
             .unwrap();
 
-        tokio::time::timeout(Duration::from_secs(3), async {
-            while !matches!(events.recv().await, Some(PipelineEvent::Handover { generation: 1, ref current }) if current == &next_key) {}
-        })
-        .await
-        .unwrap();
-        pipeline.stop().await.unwrap();
+        harness
+            .wait_for_event(|event| matches!(event, PipelineEvent::Handover { generation: 1, ref current } if current == &next_key))
+            .await;
+        harness.stop().await;
     }
 
     #[tokio::test]
     async fn rolling_replace_next_rejects_a_stale_terminal_key() {
-        let first_file = tempfile::NamedTempFile::new().unwrap();
-        let second_file = tempfile::NamedTempFile::new().unwrap();
-        let replacement_file = tempfile::NamedTempFile::new().unwrap();
-        write_wav(first_file.path(), Duration::from_secs(1), 8_000);
-        write_wav(second_file.path(), Duration::from_secs(1), -8_000);
-        write_wav(replacement_file.path(), Duration::from_secs(1), 4_000);
-        let first = track(first_file.path(), 0);
-        let second = track(second_file.path(), 1);
-        let replacement = track(replacement_file.path(), 2);
+        let mut harness = GstHarness::new().await;
+        let first_file = harness.wav(Duration::from_secs(1), 8_000);
+        let second_file = harness.wav(Duration::from_secs(1), -8_000);
+        let replacement_file = harness.wav(Duration::from_secs(1), 4_000);
+        let first = track(&first_file, 0);
+        let second = track(&second_file, 1);
+        let replacement = track(&replacement_file, 2);
         let first_key = first.key.clone();
-        let PipelineInstance { pipeline, .. } = GStreamerPipelineFactory::with_test_sink().create(config()).await.unwrap();
 
-        pipeline
+        harness
+            .pipeline
             .replace(initial_plan(1, first, Some(second), TransitionPlan::Cut))
             .await
             .unwrap();
-        let result = pipeline
+        let result = harness
+            .pipeline
             .roll(RollingPlan {
                 generation: 1,
                 current: first_key,
@@ -1275,33 +1214,25 @@ mod tests {
             })
             .await;
         assert!(matches!(result, Err(PipelineError::StalePlan)));
-        pipeline.stop().await.unwrap();
+        harness.stop().await;
     }
 
     #[tokio::test]
     async fn replacing_a_branch_releases_its_mixer_request_pad() {
-        use crate::streamer::pipeline::{PipelineTrack, TrackKey};
-        use tempfile::NamedTempFile;
-        use uuid::Uuid;
-
-        let file = NamedTempFile::new().unwrap();
-        let wav = b"RIFF$\0\0\0WAVEfmt \x10\0\0\0\x01\0\x02\0\x44\xAC\0\0\x10\xB1\x02\0\x04\0\x10\0data\0\0\0\0";
-        std::fs::write(file.path(), wav).unwrap();
-        let instance = GStreamerPipelineFactory::with_test_sink().create(config()).await.unwrap();
+        let mut harness = GstHarness::new().await;
+        let file = harness.wav(Duration::from_millis(100), 0);
+        let instance_pipeline = harness.pipeline.clone();
         let plan = |generation, mode| PairPlan {
             mode,
             generation,
             output_epoch: 1,
             current: PipelineTrack {
-                key: TrackKey {
-                    queue_item_id: Uuid::new_v4(),
-                    song_id: Uuid::new_v4(),
-                },
-                metadata: TrackMetadata {
+                key: testsupport::track_key(),
+                metadata: crate::streamer::pipeline::TrackMetadata {
                     title: "Test track".into(),
                     artist: "Test artist".into(),
                 },
-                path: file.path().to_path_buf(),
+                path: file.clone(),
                 cue_in: Duration::ZERO,
                 cue_out: Duration::ZERO,
                 cross_start_next: Duration::ZERO,
@@ -1311,9 +1242,8 @@ mod tests {
         };
         let first = plan(1, ReplaceMode::InitialReplaceFromStopped);
         let first_key = first.current.key.clone();
-        instance.pipeline.replace(first).await.unwrap();
-        instance
-            .pipeline
+        instance_pipeline.replace(first).await.unwrap();
+        instance_pipeline
             .replace(plan(
                 2,
                 ReplaceMode::ActiveReplace {
@@ -1323,30 +1253,29 @@ mod tests {
             ))
             .await
             .unwrap();
-        instance.pipeline.stop().await.unwrap();
+        harness.stop().await;
     }
 
     #[tokio::test]
     async fn rolling_replace_next_swaps_only_the_terminal_branch() {
-        let first_file = tempfile::NamedTempFile::new().unwrap();
-        let second_file = tempfile::NamedTempFile::new().unwrap();
-        let replacement_file = tempfile::NamedTempFile::new().unwrap();
-        write_wav(first_file.path(), Duration::from_secs(1), 8_000);
-        write_wav(second_file.path(), Duration::from_secs(1), -8_000);
-        write_wav(replacement_file.path(), Duration::from_secs(1), 4_000);
-        let first = track(first_file.path(), 0);
-        let second = track(second_file.path(), 1);
-        let replacement = track(replacement_file.path(), 2);
+        let mut harness = GstHarness::new().await;
+        let first_file = harness.wav(Duration::from_secs(1), 8_000);
+        let second_file = harness.wav(Duration::from_secs(1), -8_000);
+        let replacement_file = harness.wav(Duration::from_secs(1), 4_000);
+        let first = track(&first_file, 0);
+        let second = track(&second_file, 1);
+        let replacement = track(&replacement_file, 2);
         let first_key = first.key.clone();
         let second_key = second.key.clone();
         let replacement_key = replacement.key.clone();
-        let PipelineInstance { pipeline, mut events } = GStreamerPipelineFactory::with_test_sink().create(config()).await.unwrap();
 
-        pipeline
+        harness
+            .pipeline
             .replace(initial_plan(1, first, Some(second), TransitionPlan::Cut))
             .await
             .unwrap();
-        pipeline
+        harness
+            .pipeline
             .roll(RollingPlan {
                 generation: 1,
                 current: first_key,
@@ -1360,12 +1289,10 @@ mod tests {
             })
             .await
             .unwrap();
-        tokio::time::timeout(Duration::from_secs(3), async {
-            while !matches!(events.recv().await, Some(PipelineEvent::Handover { generation: 1, ref current }) if current == &replacement_key) {}
-        })
-        .await
-        .unwrap();
-        pipeline.stop().await.unwrap();
+        harness
+            .wait_for_event(|event| matches!(event, PipelineEvent::Handover { generation: 1, ref current } if current == &replacement_key))
+            .await;
+        harness.stop().await;
     }
 
     #[test]
@@ -1437,33 +1364,18 @@ mod tests {
         use std::sync::Mutex as StdMutex;
         use std::time::Instant;
 
-        let current_file = tempfile::NamedTempFile::new().unwrap();
-        let next_file = tempfile::NamedTempFile::new().unwrap();
-        let replacement_file = tempfile::NamedTempFile::new().unwrap();
-        write_wav(current_file.path(), Duration::from_secs(1), 8_000);
-        write_wav(next_file.path(), Duration::from_secs(1), -8_000);
-        write_wav(replacement_file.path(), Duration::from_secs(1), 4_000);
-        let current = track(current_file.path(), 0);
-        let next = track(next_file.path(), 1);
-        let replacement = track(replacement_file.path(), 2);
+        let mut harness = GstHarness::new().await;
+        let current_file = harness.wav(Duration::from_secs(1), 8_000);
+        let next_file = harness.wav(Duration::from_secs(1), -8_000);
+        let replacement_file = harness.wav(Duration::from_secs(1), 4_000);
+        let current = track(&current_file, 0);
+        let next = track(&next_file, 1);
+        let replacement = track(&replacement_file, 2);
         let current_key = current.key.clone();
         let next_key = next.key.clone();
         let replacement_key = replacement.key.clone();
-        let metadata_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let metadata_port = metadata_listener.local_addr().unwrap().port();
-        let metadata_server = tokio::spawn(async move {
-            let mut requests = Vec::new();
-            for delay in [Duration::ZERO, Duration::from_millis(300)] {
-                let (mut stream, _) = metadata_listener.accept().await.unwrap();
-                requests.push(read_http_request(&mut stream).await);
-                tokio::time::sleep(delay).await;
-                stream
-                    .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
-                    .await
-                    .unwrap();
-            }
-            requests
-        });
+        let mut stub = HttpStub::spawn(&[("200 OK", Duration::ZERO), ("200 OK", Duration::from_millis(300))]).await;
+        let metadata_port = stub.port;
 
         // Build the concrete pipeline so the test can probe the clock gate pad.
         let graph::Backbone {
@@ -1474,7 +1386,7 @@ mod tests {
             encoder,
             sink,
             clock_gate,
-        } = graph::build_backbone(&config(), "fakesink").expect("backbone built");
+        } = graph::build_backbone(&testsupport::pipeline_config(), "fakesink").expect("backbone built");
         let (events, receiver) = mpsc::unbounded_channel();
         let active: Arc<Mutex<Option<ActivePlan>>> = Arc::new(Mutex::new(None));
         let replacing: Arc<Mutex<Option<ReplaceCancellation>>> = Arc::new(Mutex::new(None));
@@ -1569,10 +1481,10 @@ mod tests {
         })
         .await
         .expect("replacement handover");
-        let metadata_requests = tokio::time::timeout(Duration::from_secs(1), metadata_server)
+        tokio::time::timeout(Duration::from_secs(1), stub.join())
             .await
-            .expect("metadata requests")
-            .unwrap();
+            .expect("metadata requests");
+        let metadata_requests = stub.requests();
         assert_eq!(
             metadata_song(&metadata_requests[0]),
             "Artist 0 - Track 0",
@@ -1610,35 +1522,31 @@ mod tests {
 
     #[tokio::test]
     async fn roll_replace_next_mid_rotation_keeps_the_promoted_track_playing() {
-        let first_file = tempfile::NamedTempFile::new().unwrap();
-        let second_file = tempfile::NamedTempFile::new().unwrap();
-        let third_file = tempfile::NamedTempFile::new().unwrap();
-        let replacement_file = tempfile::NamedTempFile::new().unwrap();
-        write_wav(first_file.path(), Duration::from_secs(1), 8_000);
-        write_wav(second_file.path(), Duration::from_secs(1), -8_000);
-        write_wav(third_file.path(), Duration::from_secs(1), 4_000);
-        write_wav(replacement_file.path(), Duration::from_secs(1), -4_000);
-        let first = track(first_file.path(), 0);
-        let second = track(second_file.path(), 1);
-        let third = track(third_file.path(), 2);
-        let replacement = track(replacement_file.path(), 3);
+        let mut harness = GstHarness::new().await;
+        let first_file = harness.wav(Duration::from_secs(1), 8_000);
+        let second_file = harness.wav(Duration::from_secs(1), -8_000);
+        let third_file = harness.wav(Duration::from_secs(1), 4_000);
+        let replacement_file = harness.wav(Duration::from_secs(1), -4_000);
+        let first = track(&first_file, 0);
+        let second = track(&second_file, 1);
+        let third = track(&third_file, 2);
+        let replacement = track(&replacement_file, 3);
         let second_key = second.key.clone();
         let third_key = third.key.clone();
         let replacement_key = replacement.key.clone();
-        let PipelineInstance { pipeline, mut events } = GStreamerPipelineFactory::with_test_sink().create(config()).await.unwrap();
 
         // A plays, B staged. After the handover B is the current track and the
         // Attach roll prunes A, so B plays from the first mixer slot.
-        pipeline
+        harness
+            .pipeline
             .replace(initial_plan(23, first, Some(second), TransitionPlan::Cut))
             .await
             .unwrap();
-        tokio::time::timeout(Duration::from_secs(3), async {
-            while !matches!(events.recv().await, Some(PipelineEvent::Handover { generation: 23, ref current }) if current == &second_key) {}
-        })
-        .await
-        .unwrap();
-        pipeline
+        harness
+            .wait_for_event(|event| matches!(event, PipelineEvent::Handover { generation: 23, ref current } if current == &second_key))
+            .await;
+        harness
+            .pipeline
             .roll(RollingPlan {
                 generation: 23,
                 current: second_key.clone(),
@@ -1654,7 +1562,8 @@ mod tests {
         // promoted second track is the one playing.
         tokio::time::sleep(Duration::from_millis(200)).await;
         let replaced = std::time::Instant::now();
-        pipeline
+        harness
+            .pipeline
             .roll(RollingPlan {
                 generation: 23,
                 current: second_key.clone(),
@@ -1668,20 +1577,15 @@ mod tests {
             })
             .await
             .unwrap();
-        tokio::time::timeout(Duration::from_secs(3), async {
-            while !matches!(
-                events.recv().await,
-                Some(PipelineEvent::Handover { generation: 23, ref current }) if current == &replacement_key
-            ) {}
-        })
-        .await
-        .unwrap();
+        harness
+            .wait_for_event(|event| matches!(event, PipelineEvent::Handover { generation: 23, ref current } if current == &replacement_key))
+            .await;
         // B is a 1s track; the swap happened 200ms into it. The replacement
         // must start at B's end, not immediately.
         assert!(
             replaced.elapsed() >= Duration::from_millis(500),
             "replacement handover fired too early: {replaced:?}"
         );
-        pipeline.stop().await.unwrap();
+        harness.stop().await;
     }
 }
