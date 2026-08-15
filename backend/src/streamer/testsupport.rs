@@ -434,11 +434,9 @@ mod tests {
     async fn gate_release_is_consumed_by_exactly_one_operation() {
         let gate = Gate::new();
 
-        // Early release is retained and consumed by the first operation.
         gate.release();
         gate.wait_released().await;
 
-        // The permit is gone: a second operation must not finish on its own.
         let second_wait = tokio::spawn({
             let gate = gate.clone();
             async move { gate.wait_released().await }
@@ -446,7 +444,6 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(100)).await;
         assert!(!second_wait.is_finished(), "second gated operation passed without a second release");
 
-        // A fresh release lets exactly that one operation through.
         gate.release();
         tokio::time::timeout(Duration::from_secs(1), second_wait)
             .await

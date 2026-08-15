@@ -446,7 +446,6 @@ impl StationController {
     /// radio dead.
     pub(crate) fn on_resume_result(&mut self, attempt_id: u64, result: Result<(), PipelineError>) {
         if self.pending_resume != Some(attempt_id) {
-            // Stale completion for a superseded attempt: ignore it entirely.
             return;
         }
         self.pending_resume = None;
@@ -509,9 +508,6 @@ impl StationController {
     /// cleared — never to the bare current identity.
     pub(crate) fn on_reconnect_succeeded(&mut self, token: u64) {
         if self.active_reconnect_retry != Some(token) {
-            // Stale success (superseded by a newer chain, invalidated by a
-            // stop, or replayed late): neither end the newer chain nor
-            // touch a marker that a newer disconnect set.
             return;
         }
 
@@ -578,16 +574,12 @@ impl StationController {
     /// known-disconnected or an active chain already covers it.
     pub(crate) async fn resume_reconnect_for_break(&mut self) -> Option<Result<PipelineOperation, PipelineError>> {
         if self.known_disconnected_output != Some((self.generation, self.output_epoch)) {
-            // Nothing to restore: the output is not known-disconnected (or
-            // the marker belongs to a replaced output identity).
             return None;
         }
         if self.active_reconnect_retry.is_some()
             && self.active_reconnect_output == Some((self.generation, self.output_epoch))
             && !self.reconnect_token_shared.is_current_completed()
         {
-            // An active chain already covers this output; do not mint a
-            // second one.
             return None;
         }
         self.begin_reconnect_chain();
@@ -635,17 +627,13 @@ impl StationController {
         // output_is_current() additionally requires Playing, which would
         // wrongly discard a disconnect received while paused.
         if generation != self.generation || output_epoch != self.output_epoch {
-            // A stale disconnect for an older output identity must not set
-            // the marker.
             return None;
         }
         // The current output is (still) disconnected — factual state,
         // recorded before any per-state decision below.
         self.known_disconnected_output = Some((generation, output_epoch));
         if self.state != PipelineState::Playing {
-            // Paused (or otherwise not Playing): do not reconnect now and do
-            // not start a retry chain; the marker survives for the next
-            // Play.
+            // Not Playing: no reconnect now; the marker survives for the next Play.
             return None;
         }
         let chain_active = self.active_reconnect_retry.is_some() && self.active_reconnect_output == Some((generation, output_epoch));
@@ -1136,12 +1124,8 @@ mod tests {
 
     #[tokio::test]
     async fn reload_into_a_stopped_controller_starts_playback_once_songs_arrive() {
-        // Start was pressed with an empty queue: the controller sits Stopped
-        // with nothing to play. The first reload that brings songs must kick
-        // off an InitialReplaceFromStopped, not stay idle.
         let a = queued_song("A", 0);
         let mut harness = Harness::stopped(Vec::new());
-        // Play with an empty queue is a no-op that leaves the controller stopped.
         assert!(matches!(harness.controller.play().await, PipelineOperation::Stop));
         assert_eq!(harness.controller.state, PipelineState::Stopped);
         let pipeline = harness.pipeline.clone();
@@ -1158,7 +1142,6 @@ mod tests {
             "replace is executed by the runtime, not the controller"
         );
 
-        // A reload that still arrives empty must keep the controller stopped.
         let mut harness = Harness::stopped(Vec::new());
         assert!(matches!(harness.controller.play().await, PipelineOperation::Stop));
         let operation = harness.controller.reload(vec![], false).await.unwrap();
@@ -1175,7 +1158,6 @@ mod tests {
         let (mut controller, _) = Harness::playing(vec![a.clone(), b.clone(), c.clone()]).await.into_parts();
         assert_eq!(controller.planned_next.as_ref().unwrap().0.queue_item_id, b.queue_item_id);
 
-        // A reorder moved X to the top: the staged next (B) must be replaced by X
         let operation = controller
             .reload(vec![a.clone(), x.clone(), b.clone(), c.clone()], true)
             .await
@@ -1215,7 +1197,6 @@ mod tests {
         let c = queued_song("C", 2);
         let x = queued_song("X", 3);
         let (mut controller, _) = Harness::playing(vec![a.clone(), b.clone(), c.clone()]).await.into_parts();
-        // Append-only change (e.g. a manual add): the head stays B, no swap needed
         let operation = controller.reload(vec![a, b.clone(), c.clone(), x], true).await.unwrap();
         assert!(operation.is_none(), "append-only reload must not roll");
         assert_eq!(controller.planned_next.as_ref().unwrap().0.queue_item_id, b.queue_item_id);
@@ -1271,16 +1252,14 @@ mod tests {
         let fresh = queued_song("B", 1);
         let (mut controller, _) = Harness::playing(vec![song.clone()]).await.into_parts();
 
-        // The last track ends: skip() exhausts the queue (the unreachable DB
-        // makes the fill retries fail) and the controller becomes idle —
-        // stopped, but marked for auto-resume, unlike a manual stop.
+        // skip() exhausts the queue: the unreachable DB makes the fill
+        // retries fail, so the station becomes idle (auto-resumable, unlike
+        // a manual stop).
         let operation = controller.skip().await.unwrap();
         assert!(matches!(operation, PipelineOperation::Stop));
         assert_eq!(controller.state, PipelineState::Stopped);
         assert!(controller.idle());
 
-        // AutoDJ / schedule fill inserts a row. No API command arrives; the
-        // periodic idle tick must start playback on its own.
         controller.queue.reload_songs(vec![fresh], false);
         let (operation, attempt_id) = controller
             .resume_from_idle()
@@ -1298,7 +1277,6 @@ mod tests {
         assert_eq!(controller.state, PipelineState::Playing);
         assert!(!controller.idle());
 
-        // A manual stop must never be auto-resumed, even with songs queued.
         controller.stop();
         assert!(!controller.idle());
         assert!(controller.resume_from_idle().await.is_none());
@@ -1311,12 +1289,10 @@ mod tests {
         let fresh = queued_song("B", 1);
         let (mut controller, _) = Harness::playing(vec![song.clone()]).await.into_parts();
 
-        // Exhaust the queue: the station becomes idle (not manually stopped).
         let operation = controller.skip().await.unwrap();
         assert!(matches!(operation, PipelineOperation::Stop));
         assert!(controller.idle());
 
-        // Content arrives; the first automatic replace fails.
         controller.queue.reload_songs(vec![fresh], false);
         let (operation, attempt_id) = controller
             .resume_from_idle()
@@ -1330,7 +1306,6 @@ mod tests {
         assert!(controller.idle(), "a failed resume must stay retryable");
         assert_eq!(controller.state, PipelineState::Stopped);
 
-        // The next tick retries and succeeds: the controller moves to Playing.
         let (operation, attempt_id) = controller
             .resume_from_idle()
             .await
@@ -1359,8 +1334,6 @@ mod tests {
             .expect("an idle station must resume once the queue fills");
         assert!(matches!(operation, PipelineOperation::Replace(_)));
 
-        // While the first resume replace is in flight, repeated idle ticks
-        // must not queue any further replaces.
         assert!(
             controller.resume_from_idle().await.is_none(),
             "a second resume must not start while one is already in flight"
@@ -1370,8 +1343,6 @@ mod tests {
             "a third resume must not start while one is already in flight"
         );
 
-        // A failure clears the pending marker and keeps the station
-        // retryable; the next tick may start a fresh attempt.
         controller.on_resume_result(attempt_id, Err(PipelineError::Pipeline("boom: replace failed".into())));
         assert!(controller.idle());
         let (operation, second_attempt) = controller
@@ -1395,7 +1366,6 @@ mod tests {
         assert!(matches!(operation, PipelineOperation::Stop));
         assert!(controller.idle());
 
-        // An automatic resume starts...
         controller.queue.reload_songs(vec![fresh], false);
         let (_operation, attempt_id) = controller
             .resume_from_idle()
@@ -1403,14 +1373,11 @@ mod tests {
             .expect("an idle station must resume once the queue fills");
         assert!(controller.idle());
 
-        // ...but the user presses Play first: the manual decision wins.
         let operation = controller.play().await;
         assert!(matches!(operation, PipelineOperation::Replace(_)));
         assert_eq!(controller.state, PipelineState::Playing);
         assert!(!controller.idle());
 
-        // The stale resume failure must be ignored: the station keeps the
-        // manual Play decision.
         controller.on_resume_result(attempt_id, Err(PipelineError::Pipeline("boom: stale resume failed".into())));
         assert_eq!(controller.state, PipelineState::Playing);
         assert!(!controller.idle());
@@ -1426,20 +1393,16 @@ mod tests {
         assert!(matches!(operation, PipelineOperation::Stop));
         assert!(controller.idle());
 
-        // An automatic resume starts...
         controller.queue.reload_songs(vec![fresh], false);
         let (_operation, attempt_id) = controller
             .resume_from_idle()
             .await
             .expect("an idle station must resume once the queue fills");
 
-        // ...but the user pauses: the station must stay paused.
         let operation = controller.pause();
         assert!(matches!(operation, PipelineOperation::SetPlaying(false)));
         assert_eq!(controller.state, PipelineState::Paused);
 
-        // The stale resume success must not flip the station back to
-        // Playing.
         controller.on_resume_result(attempt_id, Ok(()));
         assert_eq!(controller.state, PipelineState::Paused);
     }
@@ -1448,12 +1411,9 @@ mod tests {
     async fn reconnect_retry_token_is_invalidated_by_a_newer_chain_and_stop() {
         let (mut controller, _) = Harness::playing(queued_songs(&["A", "B"])).await.into_parts();
 
-        // Chain A starts; its retry timers carry token A.
         let token_a = controller.begin_reconnect_chain();
         assert!(controller.reconnect_retry_is_current(token_a));
 
-        // A newer reconnect attempt (manual or another disconnect) replaces
-        // the chain: token A is stale from that moment on.
         let token_b = controller.begin_reconnect_chain();
         assert!(
             !controller.reconnect_retry_is_current(token_a),
@@ -1461,8 +1421,6 @@ mod tests {
         );
         assert!(controller.reconnect_retry_is_current(token_b));
 
-        // A stop invalidates the chain entirely: no timer may fire a
-        // reconnect for a stopped station.
         controller.stop();
         assert!(
             !controller.reconnect_retry_is_current(token_b),
@@ -1475,10 +1433,8 @@ mod tests {
         let (mut controller, _) = Harness::playing(queued_songs(&["A", "B"])).await.into_parts();
         assert_eq!(controller.state, PipelineState::Playing);
 
-        // Three disconnect events for the same output: the first starts the
-        // chain, the other two are duplicates and must be ignored — they
-        // must not mint new chains (which would reset the backoff and
-        // enqueue redundant reconnects).
+        // The later two disconnects are duplicates: a new chain would reset
+        // the backoff and enqueue redundant reconnects.
         let first = controller
             .handle_event(PipelineEvent::SinkDisconnected {
                 generation: 1,
@@ -1510,8 +1466,6 @@ mod tests {
             "a duplicate disconnect must be coalesced into the existing chain"
         );
 
-        // Exactly one chain exists; the attempt counter was never reset by a
-        // second chain.
         assert!(controller.reconnect_retry_is_current(1));
         assert_eq!(controller.current_reconnect_token(), 1);
     }
@@ -1520,9 +1474,6 @@ mod tests {
     async fn a_new_disconnect_after_a_successful_chain_starts_a_fresh_one() {
         let (mut controller, _) = Harness::playing(queued_songs(&["A", "B"])).await.into_parts();
 
-        // A chain runs and finishes successfully: the controller ends it, so
-        // a later disconnect for the same output is a fresh event, not a
-        // coalesced duplicate.
         let token = controller.begin_reconnect_chain();
         controller.end_reconnect_chain(token);
         assert!(!controller.reconnect_retry_is_current(token));
@@ -1542,8 +1493,6 @@ mod tests {
     async fn failed_manual_reconnect_leaves_the_automatic_chain_untouched() {
         let (mut controller, _) = Harness::playing(queued_songs(&["A", "B"])).await.into_parts();
 
-        // An automatic chain is active (a disconnect just queued its
-        // reconnect operation).
         let token_x = controller.begin_reconnect_chain();
         assert!(controller.reconnect_retry_is_current(token_x));
 
@@ -1611,16 +1560,10 @@ mod tests {
     async fn manual_chain_binds_to_the_output_for_duplicate_coalescing() {
         let (mut controller, _) = Harness::playing(queued_songs(&["A", "B"])).await.into_parts();
 
-        // No automatic chain exists; a manual reconnect starts (simulated:
-        // the target refresh succeeded, the runtime bound the chain to the
-        // current output).
         let token = controller.begin_reconnect_chain();
         controller.bind_reconnect_to_output(controller.generation(), controller.output_epoch());
         assert!(controller.reconnect_retry_is_current(token));
 
-        // While the manual pipeline reconnect is pending, a disconnect for
-        // the same output must be coalesced: no redundant automatic chain,
-        // the manual token stays current.
         let duplicate = controller
             .handle_event(PipelineEvent::SinkDisconnected {
                 generation: controller.generation(),
@@ -1634,8 +1577,6 @@ mod tests {
         );
         assert!(controller.reconnect_retry_is_current(token));
 
-        // After the manual attempt ends (success or one-shot failure), a
-        // real disconnect starts a fresh automatic chain.
         controller.end_reconnect_chain(token);
         let fresh = controller
             .handle_event(PipelineEvent::SinkDisconnected {
@@ -1771,13 +1712,11 @@ mod tests {
     async fn pause_invalidates_the_reconnect_chain() {
         let (mut controller, _) = Harness::playing(queued_songs(&["A", "B"])).await.into_parts();
 
-        // An automatic chain is active with a retry timer pending.
         let token = controller.begin_reconnect_chain();
         assert!(controller.reconnect_retry_is_current(token));
 
-        // A manual pause ends the chain immediately: no active token may
-        // survive without future work (Model B — retries are only eligible
-        // while Playing).
+        // A manual pause ends the chain: retries are only eligible while
+        // Playing (Model B).
         controller.pause();
         assert!(
             !controller.reconnect_retry_is_current(token),
@@ -1794,8 +1733,6 @@ mod tests {
     async fn stale_chain_cleanup_does_not_end_a_newer_chain() {
         let (mut controller, _) = Harness::playing(queued_songs(&["A", "B"])).await.into_parts();
 
-        // Chain X becomes ineligible (its timer fires while a newer chain Y
-        // is active); the runtime ends X through the token-guarded cleanup.
         let token_x = controller.begin_reconnect_chain();
         let token_y = controller.begin_reconnect_chain();
         controller.end_reconnect_chain(token_x);
@@ -1819,8 +1756,6 @@ mod tests {
         let (runtime, events) = harness.into_runtime();
         runtime.play().await.unwrap();
 
-        // Playing → output drops → automatic chain X starts; the first
-        // reconnect fails and schedules a backoff timer.
         events
             .send(PipelineEvent::SinkDisconnected {
                 generation: 1,
@@ -1849,8 +1784,8 @@ mod tests {
         )
         .await;
 
-        // The stale retry timer from chain X fires later: it must neither
-        // run a third reconnect nor resurrect anything.
+        // Chain X's stale retry timer fires later: it must not run a third
+        // reconnect.
         tokio::time::sleep(Duration::from_millis(1500)).await;
         assert_eq!(pipeline.count(Call::Reconnect), 2);
 
@@ -1862,17 +1797,14 @@ mod tests {
     async fn disconnect_after_pause_and_play_starts_a_fresh_chain() {
         let (mut controller, _) = Harness::playing(queued_songs(&["A", "B"])).await.into_parts();
 
-        // An automatic chain is active for the current output.
         let token_x = controller.begin_reconnect_chain();
         controller.bind_reconnect_to_output(controller.generation(), controller.output_epoch());
 
-        // The user pauses: the chain must end immediately (Model B), so the
-        // dead chain can never coalesce a later disconnect.
+        // Pause ends the chain (Model B): the dead chain must never coalesce
+        // a later disconnect.
         controller.pause();
         assert!(!controller.reconnect_retry_is_current(token_x));
 
-        // The user plays again; a fresh disconnect for the same output must
-        // start a NEW chain — not be treated as a duplicate of the dead one.
         controller.play().await;
         let result = controller
             .handle_event(PipelineEvent::SinkDisconnected {
@@ -1897,9 +1829,8 @@ mod tests {
         let (runtime, events) = harness.into_runtime();
         runtime.play().await.unwrap();
 
-        // The user pauses; the output breaks WHILE PAUSED. The disconnect
-        // event is not acted on immediately (no playback, no retry), but it
-        // must be remembered.
+        // The output breaks while paused: no immediate action, but the
+        // disconnect must be remembered.
         runtime.pause().await.unwrap();
         events
             .send(PipelineEvent::SinkDisconnected {
@@ -1915,8 +1846,6 @@ mod tests {
             "a disconnect while paused must not run a reconnect yet"
         );
 
-        // Play resumes playback AND restores the broken output — no second
-        // disconnect event is sent.
         runtime.play().await.unwrap();
         testsupport::wait_for("Play to restore an output that broke while paused", || {
             pipeline.count(Call::Reconnect) > 0
@@ -1924,7 +1853,6 @@ mod tests {
         .await;
         assert_eq!(pipeline.count(Call::Reconnect), 1);
 
-        // The restored chain finished successfully: no further retries.
         tokio::time::sleep(Duration::from_millis(1500)).await;
         assert_eq!(pipeline.count(Call::Reconnect), 1);
 
@@ -1942,8 +1870,6 @@ mod tests {
         let harness = Harness::with_db(db.pool.clone(), pipeline.clone(), queued_songs(&["A", "B"]));
         let (runtime, events) = harness.into_runtime();
 
-        // Playing → output drops → automatic chain X starts → reconnect #1
-        // fails → backoff timer pending.
         runtime.play().await.unwrap();
         events
             .send(PipelineEvent::SinkDisconnected {
@@ -1958,7 +1884,6 @@ mod tests {
         // output is disconnected must survive.
         runtime.pause().await.unwrap();
 
-        // Play with NO second disconnect event: the marker drives recovery.
         runtime.play().await.unwrap();
         testsupport::wait_for("Play to recover an output that was already disconnected before the pause", || {
             pipeline.count(Call::Reconnect) >= 2
@@ -1985,7 +1910,6 @@ mod tests {
         let (runtime, events) = harness.into_runtime();
 
         runtime.play().await.unwrap();
-        // Output breaks while paused: the marker is recorded.
         runtime.pause().await.unwrap();
         events
             .send(PipelineEvent::SinkDisconnected {
@@ -1995,14 +1919,12 @@ mod tests {
             })
             .unwrap();
 
-        // Play starts recovery #1, which fails (chain A scheduled a retry).
         runtime.play().await.unwrap();
         testsupport::wait_for("the first recovery attempt to run", || pipeline.count(Call::Reconnect) > 0).await;
 
         // Pause again before recovery succeeded; the marker must survive.
         runtime.pause().await.unwrap();
 
-        // Play again — recovery #2 runs, no second disconnect event.
         runtime.play().await.unwrap();
         testsupport::wait_for("a second Play to retry the interrupted recovery", || {
             pipeline.count(Call::Reconnect) >= 2
@@ -2042,8 +1964,6 @@ mod tests {
         .expect("the recovery must run");
         assert_eq!(pipeline.count(Call::Reconnect), 1);
 
-        // The output is connected again: another Pause→Play cycle must NOT
-        // reconnect redundantly.
         runtime.pause().await.unwrap();
         runtime.play().await.unwrap();
         tokio::time::sleep(Duration::from_millis(500)).await;
@@ -2075,11 +1995,9 @@ mod tests {
                 message: "output dropped while paused".into(),
             })
             .unwrap();
-        // Manual reconnect succeeds while paused: marker must clear.
         runtime.reconnect().await.unwrap();
         assert_eq!(pipeline.count(Call::Reconnect), 1);
 
-        // Play: no redundant recovery.
         runtime.play().await.unwrap();
         tokio::time::sleep(Duration::from_millis(500)).await;
         assert_eq!(
@@ -2111,12 +2029,10 @@ mod tests {
                 message: "output dropped while paused".into(),
             })
             .unwrap();
-        // Manual reconnect fails (one-shot): marker must survive.
         let result = runtime.reconnect().await;
         assert!(result.is_err(), "the manual reconnect must report its failure");
         assert_eq!(pipeline.count(Call::Reconnect), 1);
 
-        // Play recovers the output.
         runtime.play().await.unwrap();
         tokio::time::timeout(Duration::from_secs(2), async {
             while pipeline.count(Call::Reconnect) < 2 {
@@ -2143,7 +2059,6 @@ mod tests {
         let harness = Harness::with_db(db.pool.clone(), pipeline.clone(), queued_songs(&["A", "B"]));
         let mut controller = harness.controller;
 
-        // Playing → disconnect #1 → automatic chain X starts, marker set.
         assert!(matches!(controller.play().await, PipelineOperation::Replace(_)));
         let first = controller
             .handle_event(PipelineEvent::SinkDisconnected {
@@ -2207,7 +2122,6 @@ mod tests {
     async fn stop_clears_the_marker_so_play_does_not_reconnect_the_old_output() {
         let (mut controller, _) = Harness::playing(queued_songs(&["A", "B"])).await.into_parts();
 
-        // Playing → pause → output breaks: the marker is recorded.
         controller.play().await;
         controller.pause();
         let result = controller
@@ -2220,12 +2134,9 @@ mod tests {
         assert!(result.is_none(), "no reconnect while paused");
         assert!(controller.is_output_known_disconnected());
 
-        // Manual stop cancels recovery completely.
         controller.stop();
         assert!(!controller.is_output_known_disconnected());
 
-        // Play starts a fresh output: the old broken output must not be
-        // reconnected (the marker is gone and the identity changed).
         controller.play().await;
         assert!(
             controller.resume_reconnect_for_break().await.is_none(),
@@ -2242,7 +2153,6 @@ mod tests {
     async fn stale_success_does_not_clear_a_new_outputs_marker_after_replacement() {
         let (mut controller, _) = Harness::playing(queued_songs(&["A", "B"])).await.into_parts();
 
-        // Disconnect #1 for the current output → chain X, marker set.
         let first = controller
             .handle_event(PipelineEvent::SinkDisconnected {
                 generation: 1,
@@ -2254,11 +2164,12 @@ mod tests {
         let token_x = controller.current_reconnect_token();
         assert!(controller.is_output_known_disconnected());
 
-        // X succeeds in the pipeline; ReconnectFinished(X) delayed.
+        // X succeeds in the pipeline, but ReconnectFinished(X) is delayed;
+        // meanwhile skip replaces the output and a new disconnect creates
+        // chain Y. X's late success must neither end Y nor clear the new
+        // output's marker.
         controller.reconnect_token_shared().mark_completed(token_x);
 
-        // The output identity is replaced (skip): the old marker is removed
-        // by `replace_current` (it no longer matches the fresh identity).
         controller.skip().await.unwrap();
         assert_eq!(controller.generation(), 2);
         assert!(
@@ -2266,8 +2177,6 @@ mod tests {
             "a replaced output must not keep a known-disconnected marker"
         );
 
-        // The NEW output disconnects: fresh chain Y, marker for the new
-        // identity.
         let second = controller
             .handle_event(PipelineEvent::SinkDisconnected {
                 generation: 2,
@@ -2280,9 +2189,6 @@ mod tests {
         assert_ne!(token_y, token_x);
         assert!(controller.is_output_known_disconnected());
 
-        // The delayed success of X (bound to the OLD output) arrives: it is
-        // stale and must leave the newer chain and the new output's marker
-        // untouched.
         controller.on_reconnect_succeeded(token_x);
         assert!(
             controller.reconnect_retry_is_current(token_y),
@@ -2396,7 +2302,6 @@ mod tests {
         let harness = Harness::with_db(db.pool.clone(), pipeline.clone(), queued_songs(&["A", "B"]));
         let mut controller = harness.controller;
 
-        // Playing output (1, 1); a disconnect starts chain X.
         assert!(matches!(controller.play().await, PipelineOperation::Replace(_)));
         let disconnect = controller
             .handle_event(PipelineEvent::SinkDisconnected {
@@ -2413,8 +2318,6 @@ mod tests {
         let token_x = controller.current_reconnect_token();
         assert!(controller.reconnect_retry_is_current(token_x));
 
-        // A skip replaces the output identity: chain X becomes stale
-        // immediately.
         controller.skip().await.unwrap();
         assert_eq!(controller.generation(), 2);
         assert!(
@@ -2448,12 +2351,10 @@ mod tests {
         let fresh = queued_song("B", 1);
         let (mut controller, _) = Harness::playing(vec![song.clone()]).await.into_parts();
 
-        // Exhaust the queue: the station becomes idle.
         let operation = controller.skip().await.unwrap();
         assert!(matches!(operation, PipelineOperation::Stop));
         assert!(controller.idle());
 
-        // An automatic resume starts...
         controller.queue.reload_songs(vec![fresh], false);
         let (_operation, attempt_a) = controller
             .resume_from_idle()
@@ -2461,15 +2362,11 @@ mod tests {
             .expect("an idle station must resume once the queue fills");
         assert!(controller.idle());
 
-        // ...and the user pauses: this ends the auto-idle state. No future
-        // idle tick may start playback again.
         let operation = controller.pause();
         assert!(matches!(operation, PipelineOperation::SetPlaying(false)));
         assert_eq!(controller.state, PipelineState::Paused);
         assert!(!controller.idle(), "a manual pause must end the auto-idle state");
 
-        // The stale completion is ignored AND the ticker has nothing to
-        // resume: repeated ticks produce no replace.
         controller.on_resume_result(attempt_a, Ok(()));
         assert_eq!(controller.state, PipelineState::Paused);
         assert!(
@@ -2502,15 +2399,12 @@ mod tests {
                 current: StationController::track(song).key,
             })
             .unwrap();
-        // Exhaust the queue: the station becomes idle.
         testsupport::wait_for("the exhausted station to stop", || {
             pipeline.count(Call::Replace) >= 1 && pipeline.calls().contains(&Call::Stop)
         })
         .await;
         assert_eq!(pipeline.count(Call::Replace), 1);
 
-        // Content arrives; the first idle tick starts a resume replace that
-        // blocks inside the pipeline.
         queue.reload_songs(vec![fresh], false);
         testsupport::wait_for("the resume replace to reach the pipeline", || pipeline.count(Call::Replace) >= 2).await;
 
@@ -2527,8 +2421,6 @@ mod tests {
         gate.wait_started().await;
         gate.release();
         pausing.await.unwrap().unwrap();
-        // Several idle ticks pass: the paused station must not start a new
-        // automatic resume.
         tokio::time::sleep(Duration::from_millis(2500)).await;
         assert_eq!(
             pipeline.count(Call::Replace),
@@ -2543,14 +2435,10 @@ mod tests {
     async fn target_refresh_failure_keeps_the_chain_retryable() {
         let (mut controller, _) = Harness::playing(queued_songs(&["A", "B"])).await.into_parts();
 
-        // The chain starts (a disconnect just arrived); the target refresh
-        // fails against the unreachable database.
         let token = controller.begin_reconnect_chain();
         let result = controller.reconnect_if_current(1, 1, token).await;
         assert!(result.is_err(), "the config refresh must surface its error");
 
-        // The failure must not kill the chain: the next attempt of the SAME
-        // chain is still allowed, and the runtime keeps retrying it.
         assert!(
             controller.reconnect_retry_is_current(token),
             "a refresh failure must not invalidate the chain"
@@ -2565,9 +2453,8 @@ mod tests {
         let (mut controller, _) = Harness::playing(queued_songs(&["A", "B"])).await.into_parts();
 
         let token = controller.begin_reconnect_chain();
-        // Several failed attempts (each would schedule the next one): the
-        // chain token must stay identical — a retry must not supersede its
-        // own chain.
+        // Each failed attempt would schedule the next retry: the token must
+        // stay identical — a retry never supersedes its own chain.
         for _ in 0..3 {
             let result = controller.reconnect_if_current(1, 1, token).await;
             assert!(result.is_err());
@@ -2602,8 +2489,6 @@ mod tests {
 
         let token = controller.begin_reconnect_chain();
         controller.stop();
-        // The timer fires after the stop: the retry is dropped (no target
-        // refresh, no pipeline reconnect for a stopped station).
         let result = controller.reconnect_if_current(1, 1, token).await;
         assert!(matches!(result, Ok(None)), "a stopped station must never reconnect");
     }
@@ -2724,7 +2609,6 @@ mod tests {
             .unwrap();
         assert!(shutdown_result.is_ok(), "shutdown must succeed: {shutdown_result:?}");
         assert_eq!(pipeline.calls(), [Call::Replace, Call::Stop]);
-        // The runtime is terminal: further commands are refused.
         assert!(runtime.play().await.is_err());
     }
 
@@ -2752,7 +2636,6 @@ mod tests {
                 current: StationController::track(song).key,
             })
             .unwrap();
-        // Exhaust the queue: the station becomes idle.
         testsupport::wait_for("the exhausted station to stop", || {
             pipeline.count(Call::Replace) >= 1 && pipeline.calls().contains(&Call::Stop)
         })
@@ -2768,8 +2651,6 @@ mod tests {
         })
         .await;
 
-        // Several idle ticks pass while the replace is still in flight: no
-        // further replace may be queued.
         tokio::time::sleep(Duration::from_millis(2500)).await;
         assert_eq!(
             pipeline.count(Call::Replace),
@@ -2777,10 +2658,8 @@ mod tests {
             "idle ticks must not queue a second resume while one is in flight"
         );
 
-        // The replace completes: the resume succeeds and the station plays.
         gate.wait_started().await;
         gate.release();
-        // No third replace and no second stop may appear afterwards.
         tokio::time::sleep(Duration::from_millis(500)).await;
         assert_eq!(pipeline.count(Call::Replace), 2);
         assert_eq!(pipeline.count(Call::Stop), 1);
@@ -2810,8 +2689,6 @@ mod tests {
         testsupport::wait_for("the exhausted station to stop", || pipeline.count(Call::Stop) > 0).await;
         assert_eq!(pipeline.count(Call::Replace), 1);
 
-        // Content arrives; the first automatic resume replace fails. The
-        // controller must stay idle/retryable.
         queue.reload_songs(vec![fresh], false);
         tokio::time::timeout(Duration::from_secs(4), async {
             while pipeline.count(Call::Replace) < 2 {
@@ -2823,8 +2700,6 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(200)).await;
         assert_eq!(pipeline.count(Call::Replace), 2, "a failed resume must not be retried eagerly");
 
-        // The next idle tick retries and the second replace succeeds: the
-        // station is back in Playing (the pipeline keeps its one stop).
         tokio::time::timeout(Duration::from_secs(4), async {
             while pipeline.count(Call::Replace) < 3 {
                 tokio::task::yield_now().await;

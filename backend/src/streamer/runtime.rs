@@ -127,7 +127,6 @@ async fn run_task(
             true
         }
         ExecutorTask::Shutdown { stop, response } => {
-            // Barrier: nothing buffered may run after the stop.
             discard_lane(urgent);
             discard_lane(regular);
             let result = driver.execute(stop).await.map(|_| ());
@@ -285,9 +284,6 @@ impl PendingPipelineAction {
                         succeeded: true,
                     })
                     .await;
-                // The manual caller learns about the outcome only AFTER
-                // the lifecycle is complete (see the ordering note above):
-                // the response must never overtake the completion event.
                 if let Some(response) = response {
                     send(response, Ok(()));
                 }
@@ -436,10 +432,6 @@ impl StationRuntime {
                         None => break,
                     },
                     _ = idle_poll.tick(), if controller.idle() => {
-                        // The controller only yields a resume while no
-                        // attempt is already in flight, so at most one
-                        // automatic resume replace is ever queued per
-                        // station.
                         if let Some((operation, attempt_id)) = controller.resume_from_idle().await {
                             let (completion, receiver) = tokio::sync::oneshot::channel();
                             ExecutorTask::Operation(PendingPipelineAction::operation(operation, Some(completion)))
@@ -872,8 +864,6 @@ mod tests {
     async fn closing_the_urgent_lane_still_runs_regular_buffered_operations() {
         let harness = ExecutorHarness::new(32);
 
-        // urgent: one op, then the sender goes away while regular still
-        // buffers two operations.
         harness.set_playing_urgent(false);
         harness.set_playing_regular(false);
         harness.set_playing_regular(true);
@@ -903,11 +893,8 @@ mod tests {
         let mut harness = ExecutorHarness::new(32);
         harness.pipeline.fail(Call::Reconnect);
 
-        // A reconnect that fails, scheduling the backoff retry.
         let (action, _) = reconnect_action(harness.commands.clone(), 7, None, true);
         harness.submit_urgent(action);
-        // While the backoff timer runs, the executor must still serve
-        // regular work immediately.
         harness.set_playing_regular(false);
 
         // The single retry is re-queued on the command channel after the
@@ -930,8 +917,6 @@ mod tests {
         .expect("the reconnect retry must be re-queued after the backoff");
         assert_eq!(retry, (1, 1, 1, 7));
 
-        // The executor never slept: the regular operation ran during the
-        // backoff, and exactly one reconnect attempt happened so far.
         assert_eq!(harness.pipeline.count(Call::SetPlaying), 1);
         assert_eq!(harness.pipeline.count(Call::Reconnect), 1);
 
@@ -946,20 +931,17 @@ mod tests {
     async fn superseded_queued_reconnect_is_skipped_before_the_pipeline() {
         let harness = ExecutorHarness::new(32);
 
-        // Reconnect A (chain token 10) is queued...
         let (first, shared) = reconnect_action(harness.commands.clone(), 10, None, true);
         harness.submit_urgent(first);
-        // ...but before the executor runs it, a newer reconnect supersedes
-        // the chain (token 11).
+        // Reconnect A (token 10) is queued, but superseded by token 11
+        // before the executor runs it: A must be dropped by the
+        // pre-pipeline token guard.
         shared.set_token(11);
         let (second, _) = reconnect_action(harness.commands.clone(), 11, None, true);
         harness.submit_urgent(second);
         let (pipeline, mut commands_rx) = harness.finish().await;
 
-        // Only the current chain's reconnect touched the pipeline.
         assert_eq!(pipeline.count(Call::Reconnect), 1);
-        // A successful reconnect ends the chain: the runtime tells the
-        // controller (the command is observed here).
         let succeeded = tokio::time::timeout(Duration::from_secs(1), async {
             loop {
                 if let Some(StationCommand::ReconnectFinished { token, succeeded: true }) = commands_rx.recv().await {
@@ -978,8 +960,6 @@ mod tests {
     async fn shutdown_discards_a_queued_reconnect() {
         let harness = ExecutorHarness::new(32);
 
-        // A reconnect is queued on the regular lane; the shutdown barrier
-        // lands on the urgent lane and must discard it before it can run.
         let (action, _) = reconnect_action(harness.commands.clone(), 10, None, true);
         harness.submit_regular(action);
         let receiver = harness.shutdown_barrier();
@@ -999,7 +979,6 @@ mod tests {
         let harness = ExecutorHarness::new(32);
         harness.pipeline.fail(Call::Reconnect);
 
-        // One-shot manual reconnect: retry_on_failure = false.
         let (action, _) = reconnect_action(harness.commands.clone(), 5, None, false);
         harness.submit_urgent(action);
         // `finish` drops the harness's command sender; keep a clone alive so
@@ -1008,7 +987,6 @@ mod tests {
         let _keep_alive = harness.commands.clone();
         let (pipeline, mut commands_rx) = harness.finish().await;
 
-        // The failed one-shot attempt ends the chain (ReconnectFinished)...
         let message = tokio::time::timeout(Duration::from_secs(1), commands_rx.recv())
             .await
             .expect("the one-shot chain must report its end")
@@ -1020,7 +998,6 @@ mod tests {
             }
             _other => panic!("expected ReconnectFinished, got an unexpected command"),
         }
-        // ...and never schedules a retry timer.
         assert!(
             tokio::time::timeout(Duration::from_millis(300), commands_rx.recv()).await.is_err(),
             "a one-shot manual reconnect must not schedule a retry"
@@ -1045,11 +1022,9 @@ mod tests {
         let (dummy_tx, _dummy_rx) = oneshot::channel();
         harness.commands.send(StationCommand::PushQueueUpdate(dummy_tx)).await.unwrap();
 
-        // One-shot manual reconnect that fails in the pipeline.
         let (response, mut response_rx) = oneshot::channel();
         let (action, shared) = reconnect_action(harness.commands.clone(), 7, Some(response), false);
         harness.submit_urgent(action);
-
         // The executor finishes the pipeline reconnect and marks the chain
         // completed; its `send(ReconnectFinished)` then blocks on the full
         // channel. The manual response must still be pending — the caller
@@ -1089,11 +1064,9 @@ mod tests {
     async fn manual_success_response_waits_until_reconnect_finished_is_enqueued() {
         let mut harness = ExecutorHarness::new(1);
 
-        // Command channel with capacity 1, pre-filled with a dummy command.
         let (dummy_tx, _dummy_rx) = oneshot::channel();
         harness.commands.send(StationCommand::PushQueueUpdate(dummy_tx)).await.unwrap();
 
-        // One-shot manual reconnect that succeeds in the pipeline.
         let (response, mut response_rx) = oneshot::channel();
         let (action, shared) = reconnect_action(harness.commands.clone(), 8, Some(response), false);
         harness.submit_urgent(action);
@@ -1106,7 +1079,6 @@ mod tests {
             "the manual response must stay pending while ReconnectFinished cannot be enqueued"
         );
 
-        // Drain the dummy: completion enqueued, response follows.
         let _dummy = harness.commands_rx.recv().await.expect("the dummy command is queued");
         let result = response_rx.await.expect("the manual caller must be answered");
         assert!(result.is_ok(), "the manual caller must receive Ok on success");
@@ -1130,7 +1102,6 @@ mod tests {
     async fn manual_reconnect_returns_the_pipeline_result_on_success() {
         let harness = ExecutorHarness::new(32);
 
-        // Manual reconnect: response + one-shot.
         let (response, receiver) = oneshot::channel();
         let (action, _) = reconnect_action(harness.commands.clone(), 5, Some(response), false);
         harness.submit_urgent(action);
@@ -1165,8 +1136,6 @@ mod tests {
             other => panic!("expected the pipeline error, got {other:?}"),
         }
         assert_eq!(pipeline.count(Call::Reconnect), 1, "the manual reconnect must run exactly once");
-        // One-shot: the chain ends (ReconnectFinished) and no retry timer is
-        // scheduled.
         let message = tokio::time::timeout(Duration::from_secs(1), commands_rx.recv())
             .await
             .expect("the one-shot chain must report its end")
@@ -1190,11 +1159,11 @@ mod tests {
     async fn superseded_manual_reconnect_answers_its_caller_with_an_error() {
         let harness = ExecutorHarness::new(32);
 
-        // A manual reconnect (token 10) is queued, then superseded by a
-        // newer chain (token 11) before the executor runs it.
         let (response, receiver) = oneshot::channel();
         let (action, shared) = reconnect_action(harness.commands.clone(), 10, Some(response), false);
         harness.submit_urgent(action);
+        // The manual reconnect (token 10) is queued, then superseded by
+        // token 11 before the executor runs it.
         shared.set_token(11);
         let (pipeline, _) = harness.finish().await;
 
@@ -1216,8 +1185,6 @@ mod tests {
         let pipeline = Arc::new(RecordingPipeline::with_gates());
         let harness = ExecutorHarness::new_with(32, pipeline.clone());
 
-        // Chain X (token 10): its reconnect passes the token guard and
-        // blocks inside the pipeline.
         let (action, shared) = reconnect_action(harness.commands.clone(), 10, None, true);
         harness.submit_urgent(action);
         let gate = pipeline.reconnect_gate.as_ref().expect("gated pipeline");
@@ -1225,12 +1192,11 @@ mod tests {
             .await
             .expect("reconnect X must reach the pipeline");
 
-        // While X is in-flight, chain Y starts: the shared current token
-        // moves to 11.
+        // X is blocked inside the pipeline; Y becomes the current chain
+        // before X finishes, so X completing late must not mark Y as
+        // completed.
         shared.set_token(11);
 
-        // X finishes successfully: mark_completed(10) must NOT mark Y as
-        // completed.
         gate.release();
         let (pipeline, _) = harness.finish().await;
 
@@ -1248,8 +1214,6 @@ mod tests {
     async fn shutdown_barrier_stops_the_pipeline_and_discards_pending_work() {
         let harness = ExecutorHarness::new(32);
 
-        // The barrier lands first, then more work lands on both lanes — it
-        // must be discarded, never run after the stop.
         let receiver = harness.shutdown_barrier();
         harness.set_playing_urgent(false);
         harness.set_playing_regular(true);
@@ -1257,8 +1221,6 @@ mod tests {
         let (pipeline, _) = harness.finish().await;
 
         assert!(receiver.await.unwrap().is_ok());
-        // Nothing buffered before the barrier ran, nothing after it ran,
-        // exactly one stop.
         assert_eq!(pipeline.count(Call::SetPlaying), 0);
         assert_eq!(pipeline.count(Call::Stop), 1);
     }
