@@ -1,12 +1,11 @@
 mod api_common;
-mod common;
 
 use axum_test::TestServer;
 use serde_json::json;
+use sqlx::PgPool;
 use uuid::Uuid;
 
-async fn setup_auth() -> (TestServer, String) {
-    let pool = common::setup_db().await;
+async fn setup_auth(pool: PgPool) -> (TestServer, String) {
     let app = api_common::create_test_app(pool);
     let server = TestServer::new(app);
 
@@ -25,9 +24,9 @@ async fn setup_auth() -> (TestServer, String) {
     (server, token)
 }
 
-#[tokio::test]
-async fn test_create_station_returns_201() {
-    let (server, token) = setup_auth().await;
+#[sqlx::test(migrations = "./migrations")]
+async fn test_create_station_returns_201(pool: PgPool) {
+    let (server, token) = setup_auth(pool).await;
 
     let resp = server
         .post("/api/stations")
@@ -41,9 +40,9 @@ async fn test_create_station_returns_201() {
     assert!(!body["id"].as_str().unwrap().is_empty());
 }
 
-#[tokio::test]
-async fn test_list_stations_returns_200() {
-    let (server, token) = setup_auth().await;
+#[sqlx::test(migrations = "./migrations")]
+async fn test_list_stations_returns_200(pool: PgPool) {
+    let (server, token) = setup_auth(pool).await;
 
     server
         .post("/api/stations")
@@ -65,9 +64,9 @@ async fn test_list_stations_returns_200() {
     assert!(list.len() >= 2);
 }
 
-#[tokio::test]
-async fn test_get_station_by_id_returns_200() {
-    let (server, token) = setup_auth().await;
+#[sqlx::test(migrations = "./migrations")]
+async fn test_get_station_by_id_returns_200(pool: PgPool) {
+    let (server, token) = setup_auth(pool).await;
 
     let create_resp = server
         .post("/api/stations")
@@ -84,9 +83,9 @@ async fn test_get_station_by_id_returns_200() {
     assert_eq!(resp.json::<serde_json::Value>()["name"].as_str().unwrap(), "My Station");
 }
 
-#[tokio::test]
-async fn test_get_station_wrong_id_returns_404() {
-    let (server, token) = setup_auth().await;
+#[sqlx::test(migrations = "./migrations")]
+async fn test_get_station_wrong_id_returns_404(pool: PgPool) {
+    let (server, token) = setup_auth(pool).await;
     let fake_id = Uuid::nil().to_string();
 
     let resp = server
@@ -96,9 +95,9 @@ async fn test_get_station_wrong_id_returns_404() {
     assert_eq!(resp.status_code(), 404);
 }
 
-#[tokio::test]
-async fn test_update_station_returns_200() {
-    let (server, token) = setup_auth().await;
+#[sqlx::test(migrations = "./migrations")]
+async fn test_update_station_returns_200(pool: PgPool) {
+    let (server, token) = setup_auth(pool).await;
 
     let create_resp = server
         .post("/api/stations")
@@ -116,9 +115,9 @@ async fn test_update_station_returns_200() {
     assert_eq!(resp.json::<serde_json::Value>()["name"].as_str().unwrap(), "Updated Name");
 }
 
-#[tokio::test]
-async fn test_delete_station_returns_204() {
-    let (server, token) = setup_auth().await;
+#[sqlx::test(migrations = "./migrations")]
+async fn test_delete_station_returns_204(pool: PgPool) {
+    let (server, token) = setup_auth(pool).await;
 
     let create_resp = server
         .post("/api/stations")
@@ -134,9 +133,9 @@ async fn test_delete_station_returns_204() {
     assert_eq!(resp.status_code(), 204);
 }
 
-#[tokio::test]
-async fn test_get_station_after_delete_returns_404() {
-    let (server, token) = setup_auth().await;
+#[sqlx::test(migrations = "./migrations")]
+async fn test_get_station_after_delete_returns_404(pool: PgPool) {
+    let (server, token) = setup_auth(pool).await;
 
     let create_resp = server
         .post("/api/stations")
@@ -157,9 +156,8 @@ async fn test_get_station_after_delete_returns_404() {
     assert_eq!(resp.status_code(), 404);
 }
 
-#[tokio::test]
-async fn test_create_station_without_auth_returns_401() {
-    let pool = common::setup_db().await;
+#[sqlx::test(migrations = "./migrations")]
+async fn test_create_station_without_auth_returns_401(pool: PgPool) {
     let app = api_common::create_test_app(pool);
     let server = TestServer::new(app);
 
@@ -167,9 +165,9 @@ async fn test_create_station_without_auth_returns_401() {
     assert_eq!(resp.status_code(), 401);
 }
 
-#[tokio::test]
-async fn test_create_station_empty_name_returns_400() {
-    let (server, token) = setup_auth().await;
+#[sqlx::test(migrations = "./migrations")]
+async fn test_create_station_empty_name_returns_400(pool: PgPool) {
+    let (server, token) = setup_auth(pool).await;
 
     let resp = server
         .post("/api/stations")

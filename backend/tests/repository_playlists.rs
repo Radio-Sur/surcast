@@ -1,5 +1,4 @@
-mod common;
-
+use sqlx::PgPool;
 use surcast_backend::auth::models::Role;
 use surcast_backend::auth::repository as auth_repo;
 use surcast_backend::playlists::repository;
@@ -8,7 +7,7 @@ use surcast_backend::songs::repository::InsertSongParams;
 use surcast_backend::util::slugify;
 use uuid::Uuid;
 
-async fn make_user(db: &sqlx::PgPool) -> Uuid {
+async fn make_user(db: &PgPool) -> Uuid {
     let id = Uuid::new_v4();
     auth_repo::insert_user(db, id, &format!("user_{id}"), "hash", "Playlist Tester", &Role::Admin)
         .await
@@ -16,7 +15,7 @@ async fn make_user(db: &sqlx::PgPool) -> Uuid {
     id
 }
 
-async fn make_song(db: &sqlx::PgPool, user_id: Uuid) -> Uuid {
+async fn make_song(db: &PgPool, user_id: Uuid) -> Uuid {
     let id = Uuid::new_v4();
     songs_repo::insert_song_record(
         db,
@@ -39,9 +38,8 @@ async fn make_song(db: &sqlx::PgPool, user_id: Uuid) -> Uuid {
     id
 }
 
-#[tokio::test]
-async fn test_insert_and_find_playlist() {
-    let db = common::setup_db().await;
+#[sqlx::test(migrations = "./migrations")]
+async fn test_insert_and_find_playlist(db: PgPool) {
     let user_id = make_user(&db).await;
     let id = Uuid::new_v4();
     let slug = slugify("My Playlist");
@@ -61,9 +59,8 @@ async fn test_insert_and_find_playlist() {
     assert_eq!(pl.slug, Some("my-playlist".to_string()));
 }
 
-#[tokio::test]
-async fn test_find_all_playlists() {
-    let db = common::setup_db().await;
+#[sqlx::test(migrations = "./migrations")]
+async fn test_find_all_playlists(db: PgPool) {
     let user_id = make_user(&db).await;
 
     repository::insert_playlist(&db, Uuid::new_v4(), "P1", "", "p1", user_id)
@@ -77,9 +74,8 @@ async fn test_find_all_playlists() {
     assert!(playlists.len() >= 2);
 }
 
-#[tokio::test]
-async fn test_update_playlist() {
-    let db = common::setup_db().await;
+#[sqlx::test(migrations = "./migrations")]
+async fn test_update_playlist(db: PgPool) {
     let user_id = make_user(&db).await;
     let id = Uuid::new_v4();
 
@@ -99,9 +95,8 @@ async fn test_update_playlist() {
     assert_eq!(pl.slug, Some("new".to_string()));
 }
 
-#[tokio::test]
-async fn test_delete_playlist() {
-    let db = common::setup_db().await;
+#[sqlx::test(migrations = "./migrations")]
+async fn test_delete_playlist(db: PgPool) {
     let user_id = make_user(&db).await;
     let id = Uuid::new_v4();
 
@@ -116,9 +111,8 @@ async fn test_delete_playlist() {
     assert!(pl.is_none());
 }
 
-#[tokio::test]
-async fn test_playlist_exists() {
-    let db = common::setup_db().await;
+#[sqlx::test(migrations = "./migrations")]
+async fn test_playlist_exists(db: PgPool) {
     let user_id = make_user(&db).await;
     let id = Uuid::new_v4();
 
@@ -129,9 +123,8 @@ async fn test_playlist_exists() {
     assert!(repository::playlist_exists(&db, id).await.unwrap());
 }
 
-#[tokio::test]
-async fn test_playlist_song_stats() {
-    let db = common::setup_db().await;
+#[sqlx::test(migrations = "./migrations")]
+async fn test_playlist_song_stats(db: PgPool) {
     let mut conn = db.acquire().await.unwrap();
     let user_id = make_user(&db).await;
     let playlist_id = Uuid::new_v4();
@@ -159,9 +152,8 @@ async fn test_playlist_song_stats() {
     assert_eq!(duration, 180);
 }
 
-#[tokio::test]
-async fn test_insert_and_delete_playlist_song() {
-    let db = common::setup_db().await;
+#[sqlx::test(migrations = "./migrations")]
+async fn test_insert_and_delete_playlist_song(db: PgPool) {
     let mut conn = db.acquire().await.unwrap();
     let user_id = make_user(&db).await;
     let playlist_id = Uuid::new_v4();
@@ -187,9 +179,8 @@ async fn test_insert_and_delete_playlist_song() {
     assert!(ids.is_empty());
 }
 
-#[tokio::test]
-async fn test_find_playlist_song_ids() {
-    let db = common::setup_db().await;
+#[sqlx::test(migrations = "./migrations")]
+async fn test_find_playlist_song_ids(db: PgPool) {
     let mut conn = db.acquire().await.unwrap();
     let user_id = make_user(&db).await;
     let playlist_id = Uuid::new_v4();
@@ -215,9 +206,8 @@ async fn test_find_playlist_song_ids() {
     assert!(ids.contains(&song_b));
 }
 
-#[tokio::test]
-async fn test_resolve_playlist_id() {
-    let db = common::setup_db().await;
+#[sqlx::test(migrations = "./migrations")]
+async fn test_resolve_playlist_id(db: PgPool) {
     let user_id = make_user(&db).await;
     let id = Uuid::new_v4();
 
@@ -232,9 +222,8 @@ async fn test_resolve_playlist_id() {
     assert_eq!(by_slug, id);
 }
 
-#[tokio::test]
-async fn test_find_playlist_by_slug() {
-    let db = common::setup_db().await;
+#[sqlx::test(migrations = "./migrations")]
+async fn test_find_playlist_by_slug(db: PgPool) {
     let user_id = make_user(&db).await;
     let id = Uuid::new_v4();
 

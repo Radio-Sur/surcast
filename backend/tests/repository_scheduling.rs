@@ -1,6 +1,5 @@
-mod common;
-
 use chrono::{Datelike, NaiveDate, NaiveTime};
+use sqlx::PgPool;
 use std::time::Duration;
 use surcast_backend::auth::models::Role;
 use surcast_backend::auth::repository as auth_repo;
@@ -12,7 +11,7 @@ use surcast_backend::stations::repository as stations_repo;
 use surcast_backend::stations::repository::CreateStationParams;
 use uuid::Uuid;
 
-async fn make_user(db: &sqlx::PgPool) -> Uuid {
+async fn make_user(db: &PgPool) -> Uuid {
     let id = Uuid::new_v4();
     auth_repo::insert_user(db, id, &format!("user_{id}"), "hash", "Sched Tester", &Role::Admin)
         .await
@@ -20,7 +19,7 @@ async fn make_user(db: &sqlx::PgPool) -> Uuid {
     id
 }
 
-async fn make_station(db: &sqlx::PgPool, user_id: Uuid) -> Uuid {
+async fn make_station(db: &PgPool, user_id: Uuid) -> Uuid {
     let id = Uuid::new_v4();
     stations_repo::insert_station(
         db,
@@ -42,7 +41,7 @@ async fn make_station(db: &sqlx::PgPool, user_id: Uuid) -> Uuid {
     .unwrap();
     id
 }
-async fn make_auto_dj_schedule(db: &sqlx::PgPool, station_id: Uuid) {
+async fn make_auto_dj_schedule(db: &PgPool, station_id: Uuid) {
     repository::insert_schedule(
         db,
         station_id,
@@ -60,9 +59,8 @@ async fn make_auto_dj_schedule(db: &sqlx::PgPool, station_id: Uuid) {
     .unwrap();
 }
 
-#[tokio::test]
-async fn test_queue_cursor_expand_columns_persist_identity_and_format_marker() {
-    let db = common::setup_db().await;
+#[sqlx::test(migrations = "./migrations")]
+async fn test_queue_cursor_expand_columns_persist_identity_and_format_marker(db: PgPool) {
     let user_id = make_user(&db).await;
     let station_id = make_station(&db, user_id).await;
     let current = Uuid::new_v4();
@@ -89,9 +87,8 @@ async fn test_queue_cursor_expand_columns_persist_identity_and_format_marker() {
     assert_eq!(row.2, 1);
 }
 
-#[tokio::test]
-async fn test_schedule_crud() {
-    let db = common::setup_db().await;
+#[sqlx::test(migrations = "./migrations")]
+async fn test_schedule_crud(db: PgPool) {
     let user_id = make_user(&db).await;
     let station_id = make_station(&db, user_id).await;
 
@@ -148,9 +145,8 @@ async fn test_schedule_crud() {
     assert!(not_found.is_none());
 }
 
-#[tokio::test]
-async fn test_event_crud_with_recurrence() {
-    let db = common::setup_db().await;
+#[sqlx::test(migrations = "./migrations")]
+async fn test_event_crud_with_recurrence(db: PgPool) {
     let user_id = make_user(&db).await;
     let station_id = make_station(&db, user_id).await;
 
@@ -220,9 +216,8 @@ async fn test_event_crud_with_recurrence() {
     assert!(not_found.is_none());
 }
 
-#[tokio::test]
-async fn test_auto_fill_config_upsert_and_find() {
-    let db = common::setup_db().await;
+#[sqlx::test(migrations = "./migrations")]
+async fn test_auto_fill_config_upsert_and_find(db: PgPool) {
     let user_id = make_user(&db).await;
     let station_id = make_station(&db, user_id).await;
 
@@ -281,9 +276,8 @@ async fn test_auto_fill_config_upsert_and_find() {
     assert_eq!(config.mode, AutoDjMode::Sequential);
 }
 
-#[tokio::test]
-async fn test_auto_fill_playlists_add_update_delete() {
-    let db = common::setup_db().await;
+#[sqlx::test(migrations = "./migrations")]
+async fn test_auto_fill_playlists_add_update_delete(db: PgPool) {
     let user_id = make_user(&db).await;
     let station_id = make_station(&db, user_id).await;
     let playlist_id = Uuid::new_v4();
@@ -316,9 +310,8 @@ async fn test_auto_fill_playlists_add_update_delete() {
     assert!(playlists.is_empty());
 }
 
-#[tokio::test]
-async fn test_new_station_default_auto_dj_fills_queue_without_schedule() {
-    let db = common::setup_db().await;
+#[sqlx::test(migrations = "./migrations")]
+async fn test_new_station_default_auto_dj_fills_queue_without_schedule(db: PgPool) {
     let user_id = make_user(&db).await;
     let station_id = make_station(&db, user_id).await;
     let song_id = Uuid::new_v4();
@@ -351,9 +344,8 @@ async fn test_new_station_default_auto_dj_fills_queue_without_schedule() {
         .any(|(queued_song_id, is_auto_dj)| *queued_song_id == song_id && *is_auto_dj));
 }
 
-#[tokio::test]
-async fn test_auto_fill_excludes_durable_current_and_upcoming_songs() {
-    let db = common::setup_db().await;
+#[sqlx::test(migrations = "./migrations")]
+async fn test_auto_fill_excludes_durable_current_and_upcoming_songs(db: PgPool) {
     let user_id = make_user(&db).await;
     let station_id = make_station(&db, user_id).await;
     let songs = [Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4()];
@@ -411,9 +403,8 @@ async fn test_auto_fill_excludes_durable_current_and_upcoming_songs() {
     assert_eq!(queued_song_ids, vec![songs[0], songs[1], songs[2]]);
 }
 
-#[tokio::test]
-async fn concurrent_auto_dj_refills_do_not_overfill_queue() {
-    let db = common::setup_db().await;
+#[sqlx::test(migrations = "./migrations")]
+async fn concurrent_auto_dj_refills_do_not_overfill_queue(db: PgPool) {
     let user_id = make_user(&db).await;
     let station_id = make_station(&db, user_id).await;
     for position in 0..8 {
@@ -455,9 +446,8 @@ async fn concurrent_auto_dj_refills_do_not_overfill_queue() {
     assert_eq!(rows, 3, "one current row plus songs_ahead=2");
 }
 
-#[tokio::test]
-async fn cancelled_auto_dj_refill_releases_the_station_lock() {
-    let db = common::setup_db().await;
+#[sqlx::test(migrations = "./migrations")]
+async fn cancelled_auto_dj_refill_releases_the_station_lock(db: PgPool) {
     let user_id = make_user(&db).await;
     let station_id = make_station(&db, user_id).await;
     make_auto_dj_schedule(&db, station_id).await;

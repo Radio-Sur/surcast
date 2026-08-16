@@ -1,13 +1,11 @@
 mod api_common;
-mod common;
 
 use axum_test::TestServer;
 use serde_json::Value;
 use sqlx::PgPool;
 
-async fn setup() -> (PgPool, TestServer, String) {
-    let db = common::setup_db().await;
-    let app = api_common::create_test_app(db.clone());
+async fn setup(db: PgPool) -> (TestServer, String) {
+    let app = api_common::create_test_app(db);
     let server = TestServer::new(app);
     let token = {
         server
@@ -20,16 +18,16 @@ async fn setup() -> (PgPool, TestServer, String) {
             .await;
         resp.json::<Value>()["access_token"].as_str().unwrap().to_string()
     };
-    (db, server, token)
+    (server, token)
 }
 
 fn auth(token: &str) -> String {
     format!("Bearer {token}")
 }
 
-#[tokio::test]
-async fn test_e2e_full_flow() {
-    let (db, server, token) = setup().await;
+#[sqlx::test(migrations = "./migrations")]
+async fn test_e2e_full_flow(db: PgPool) {
+    let (server, token) = setup(db.clone()).await;
 
     // 1. Check setup is complete
     let resp = server.get("/api/setup/status").await;

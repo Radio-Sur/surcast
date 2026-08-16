@@ -398,118 +398,87 @@ pub async fn delete_song_from_station_songs(db: &PgPool, song_id: Uuid, station_
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sqlx::postgres::PgPoolOptions;
 
     /// The destructive batch delete must return exactly the stations whose
     /// queue rows were really removed — DISTINCT, no unrelated stations —
     /// and the matching rows must be gone while unrelated ones survive.
     #[tokio::test]
     async fn batch_delete_returns_distinct_affected_stations() {
-        let Ok(database_url) = std::env::var("DATABASE_URL") else { return };
-        let pool = PgPoolOptions::new()
-            .max_connections(2)
-            .connect(&database_url)
-            .await
-            .expect("test database must be reachable");
-        crate::db::run_migrations(&pool).await;
-
-        // Unique username per run: a previous run's row must never collide
-        // with the fresh user id this test inserts below.
-        let user_id = Uuid::new_v4();
-        let username = format!("affected-query-test-{user_id}");
-        sqlx::query("INSERT INTO users (id, username, password_hash, name) VALUES ($1, $2, 'x', $3)")
-            .bind(user_id)
-            .bind(&username)
-            .bind(&username)
-            .execute(&pool)
-            .await
-            .expect("user insert");
-
-        async fn station_with_song(pool: &PgPool, user_id: Uuid, name: &str, song_ids: &[Uuid]) -> Uuid {
-            let station_id = Uuid::new_v4();
-            sqlx::query("INSERT INTO stations (id, name, created_by) VALUES ($1, $2, $3)")
-                .bind(station_id)
-                .bind(name)
+        crate::test_db::run_with_test_db(async |db| {
+            let user_id = Uuid::new_v4();
+            let username = format!("affected-query-test-{user_id}");
+            sqlx::query("INSERT INTO users (id, username, password_hash, name) VALUES ($1, $2, 'x', $3)")
                 .bind(user_id)
-                .execute(pool)
+                .bind(&username)
+                .bind(&username)
+                .execute(&db.pool)
                 .await
-                .expect("station insert");
-            for (i, song_id) in song_ids.iter().enumerate() {
-                sqlx::query("INSERT INTO station_queue (station_id, song_id, position) VALUES ($1, $2, $3)")
+                .expect("user insert");
+
+            async fn station_with_song(pool: &PgPool, user_id: Uuid, name: &str, song_ids: &[Uuid]) -> Uuid {
+                let station_id = Uuid::new_v4();
+                sqlx::query("INSERT INTO stations (id, name, created_by) VALUES ($1, $2, $3)")
                     .bind(station_id)
-                    .bind(song_id)
-                    .bind(i as i32)
+                    .bind(name)
+                    .bind(user_id)
                     .execute(pool)
                     .await
-                    .expect("queue insert");
+                    .expect("station insert");
+                for (i, song_id) in song_ids.iter().enumerate() {
+                    sqlx::query("INSERT INTO station_queue (station_id, song_id, position) VALUES ($1, $2, $3)")
+                        .bind(station_id)
+                        .bind(song_id)
+                        .bind(i as i32)
+                        .execute(pool)
+                        .await
+                        .expect("queue insert");
+                }
+                station_id
             }
-            station_id
-        }
 
-        async fn song(pool: &PgPool, user_id: Uuid, title: &str) -> Uuid {
-            let song_id = Uuid::new_v4();
-            sqlx::query("INSERT INTO songs (id, title, file_path, uploaded_by) VALUES ($1, $2, $3, $4)")
-                .bind(song_id)
-                .bind(title)
-                .bind(format!("{title}.wav"))
-                .bind(user_id)
-                .execute(pool)
+            async fn song(pool: &PgPool, user_id: Uuid, title: &str) -> Uuid {
+                let song_id = Uuid::new_v4();
+                sqlx::query("INSERT INTO songs (id, title, file_path, uploaded_by) VALUES ($1, $2, $3, $4)")
+                    .bind(song_id)
+                    .bind(title)
+                    .bind(format!("{title}.wav"))
+                    .bind(user_id)
+                    .execute(pool)
+                    .await
+                    .expect("song insert");
+                song_id
+            }
+
+            let song_a = song(&db.pool, user_id, "del-a").await;
+            let song_b = song(&db.pool, user_id, "del-b").await;
+            let song_unrelated = song(&db.pool, user_id, "keep").await;
+            // Station A queues both deleted songs; station B one; station C an
+            // unrelated song that must survive.
+            let station_a = station_with_song(&db.pool, user_id, "affected A", &[song_a, song_b]).await;
+            let station_b = station_with_song(&db.pool, user_id, "affected B", &[song_b]).await;
+            let station_c = station_with_song(&db.pool, user_id, "unaffected C", &[song_unrelated]).await;
+
+            let mut affected = delete_songs_globally(&db.pool, &[song_a, song_b]).await.expect("batch delete");
+            affected.sort();
+            let mut expected = vec![station_a, station_b];
+            expected.sort();
+            assert_eq!(affected, expected, "affected stations must be exactly A and B, each once");
+
+            // Only the unrelated row may survive; the deleted songs must have
+            // no queue rows left anywhere.
+            let deleted_remaining: i64 = sqlx::query_scalar("SELECT count(*) FROM station_queue WHERE song_id = ANY($1)")
+                .bind(&[song_a, song_b])
+                .fetch_one(&db.pool)
                 .await
-                .expect("song insert");
-            song_id
-        }
-
-        let song_a = song(&pool, user_id, "del-a").await;
-        let song_b = song(&pool, user_id, "del-b").await;
-        let song_unrelated = song(&pool, user_id, "keep").await;
-        // Station A queues both deleted songs; station B one; station C an
-        // unrelated song that must survive.
-        let station_a = station_with_song(&pool, user_id, "affected A", &[song_a, song_b]).await;
-        let station_b = station_with_song(&pool, user_id, "affected B", &[song_b]).await;
-        let station_c = station_with_song(&pool, user_id, "unaffected C", &[song_unrelated]).await;
-
-        let mut affected = delete_songs_globally(&pool, &[song_a, song_b]).await.expect("batch delete");
-        affected.sort();
-        let mut expected = vec![station_a, station_b];
-        expected.sort();
-        assert_eq!(affected, expected, "affected stations must be exactly A and B, each once");
-
-        // Only the unrelated row may survive; the deleted songs must have
-        // no queue rows left anywhere.
-        let deleted_remaining: i64 = sqlx::query_scalar("SELECT count(*) FROM station_queue WHERE song_id = ANY($1)")
-            .bind(&[song_a, song_b])
-            .fetch_one(&pool)
-            .await
-            .expect("deleted-songs readback");
-        assert_eq!(deleted_remaining, 0, "deleted songs must have no queue rows left");
-        let unrelated: Vec<(Uuid, Uuid)> = sqlx::query_as("SELECT station_id, song_id FROM station_queue WHERE station_id = $1")
-            .bind(station_c)
-            .fetch_all(&pool)
-            .await
-            .expect("unrelated readback");
-        assert_eq!(unrelated, vec![(station_c, song_unrelated)], "the unrelated row must survive");
-
-        // Clean up this run's rows (the two deleted songs are already gone;
-        // the unrelated one must be removed before the user row).
-        sqlx::query("DELETE FROM station_queue WHERE station_id = ANY($1)")
-            .bind(&[station_a, station_b, station_c])
-            .execute(&pool)
-            .await
-            .expect("queue cleanup");
-        sqlx::query("DELETE FROM stations WHERE id = ANY($1)")
-            .bind(&[station_a, station_b, station_c])
-            .execute(&pool)
-            .await
-            .expect("station cleanup");
-        sqlx::query("DELETE FROM songs WHERE id = $1")
-            .bind(song_unrelated)
-            .execute(&pool)
-            .await
-            .expect("song cleanup");
-        sqlx::query("DELETE FROM users WHERE id = $1")
-            .bind(user_id)
-            .execute(&pool)
-            .await
-            .expect("user cleanup");
+                .expect("deleted-songs readback");
+            assert_eq!(deleted_remaining, 0, "deleted songs must have no queue rows left");
+            let unrelated: Vec<(Uuid, Uuid)> = sqlx::query_as("SELECT station_id, song_id FROM station_queue WHERE station_id = $1")
+                .bind(station_c)
+                .fetch_all(&db.pool)
+                .await
+                .expect("unrelated readback");
+            assert_eq!(unrelated, vec![(station_c, song_unrelated)], "the unrelated row must survive");
+        })
+        .await;
     }
 }

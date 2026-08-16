@@ -872,8 +872,6 @@ impl StationController {
 
 #[cfg(test)]
 mod tests {
-    use crate::db;
-    use std::str::FromStr;
     use std::sync::Arc;
 
     use super::*;
@@ -1592,78 +1590,26 @@ mod tests {
         assert_ne!(controller.current_reconnect_token(), token);
     }
 
-    /// An isolated, migrated test database for the runtime reconnect tests:
-    /// a fresh `*_test_<uuid>` database is created per test through the real
-    /// `sqlx` connection options (no hand-rolled URL parsing — sslmode,
-    /// IPv6, and query parameters are preserved), migrated with
-    /// `db::run_migrations` (no schema copy), and dropped again by
-    /// `cleanup()` after the pool is closed. Returns `None` only when
-    /// `DATABASE_URL` is absent (the tests then skip); any configured
-    /// connection, setup, or migration failure is a test failure, never a
-    /// silent skip.
-    async fn reconnect_test_db() -> Option<ReconnectTestDb> {
-        let database_url = std::env::var("DATABASE_URL").ok()?;
-        let options =
-            sqlx::postgres::PgConnectOptions::from_str(&database_url).unwrap_or_else(|error| panic!("invalid DATABASE_URL: {error}"));
-        let base_db = options.get_database().map(str::to_owned).unwrap_or_else(|| "postgres".to_owned());
-        let db_name = format!("{}_test_{}", base_db, Uuid::new_v4().to_string().replace('-', ""));
-
-        let admin_pool = sqlx::postgres::PgPoolOptions::new()
-            .connect_with(options.clone().database("postgres"))
+    /// Runs a reconnect-runtime scenario against an isolated, migrated test
+    /// database with the deterministic managed-mode settings pinned (the
+    /// migration seeds the singleton settings row). The database lifecycle
+    /// (create, cleanup on success AND on scenario panic) is handled by the
+    /// shared runner (`crate::test_db::run_with_test_db`); the scenario is
+    /// skipped entirely when `DATABASE_URL` is absent.
+    async fn run_reconnect_test(scenario: impl AsyncFnOnce(&crate::test_db::TestDb) -> ()) {
+        crate::test_db::run_with_test_db(async |db| {
+            sqlx::query(
+                "UPDATE icecast_settings
+                 SET mode = 'managed', port = 8000, source_password = 'surcast-test',
+                     admin_user = 'admin', admin_password = 'surcast-test'
+                 WHERE id = '00000000-0000-0000-0000-000000000001'",
+            )
+            .execute(&db.pool)
             .await
-            .unwrap_or_else(|error| panic!("failed to connect for reconnect test database setup: {error}"));
-        sqlx::query(&format!("CREATE DATABASE \"{db_name}\""))
-            .execute(&admin_pool)
-            .await
-            .unwrap_or_else(|error| panic!("failed to create reconnect test database '{db_name}': {error}"));
-
-        let pool = sqlx::postgres::PgPoolOptions::new()
-            .connect_with(options.database(&db_name))
-            .await
-            .unwrap_or_else(|error| panic!("failed to connect to reconnect test database '{db_name}': {error}"));
-        db::run_migrations(&pool).await;
-        // The migration seeds the singleton settings row; pin a
-        // deterministic managed-mode config for this isolated database.
-        sqlx::query(
-            "UPDATE icecast_settings
-             SET mode = 'managed', port = 8000, source_password = 'surcast-test',
-                 admin_user = 'admin', admin_password = 'surcast-test'
-             WHERE id = '00000000-0000-0000-0000-000000000001'",
-        )
-        .execute(&pool)
-        .await
-        .unwrap_or_else(|error| panic!("failed to configure reconnect test database: {error}"));
-
-        Some(ReconnectTestDb { pool, admin_pool, db_name })
-    }
-
-    /// Owns an isolated reconnect test database; `cleanup()` closes the pool
-    /// first and then drops the database, so no connections are held during
-    /// the DROP.
-    struct ReconnectTestDb {
-        pool: PgPool,
-        admin_pool: PgPool,
-        db_name: String,
-    }
-
-    impl ReconnectTestDb {
-        async fn cleanup(self) {
-            self.pool.close().await;
-            // `DROP DATABASE` fails while ANY backend of the database is
-            // still alive. A queue load executed mid-test (skip →
-            // commit_current → reload_from_db) can leave an idle connection
-            // whose pool handle was closed but whose backend outlives the
-            // close; terminate any straggler backend before dropping.
-            let _ = sqlx::query("SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1 AND pid <> pg_backend_pid()")
-                .bind(&self.db_name)
-                .execute(&self.admin_pool)
-                .await;
-            sqlx::query(&format!("DROP DATABASE IF EXISTS \"{}\"", self.db_name))
-                .execute(&self.admin_pool)
-                .await
-                .unwrap_or_else(|error| panic!("failed to drop reconnect test database '{}': {error}", self.db_name));
-            self.admin_pool.close().await;
-        }
+            .unwrap_or_else(|error| panic!("failed to configure reconnect test database: {error}"));
+            scenario(db).await;
+        })
+        .await;
     }
 
     /// Test A: a manual reconnect through the full `StationRuntime` path —
@@ -1672,15 +1618,16 @@ mod tests {
     /// result.
     #[tokio::test]
     async fn manual_reconnect_through_the_runtime_reports_success() {
-        let Some(db) = reconnect_test_db().await else { return };
-        let pipeline = Arc::new(RecordingPipeline::new());
-        let harness = Harness::with_db(db.pool.clone(), pipeline.clone(), queued_songs(&["A", "B"]));
-        let (runtime, _events) = harness.into_runtime();
-        let result = runtime.reconnect().await;
-        assert!(result.is_ok(), "the manual caller must receive Ok, got {result:?}");
-        assert_eq!(pipeline.count(Call::Reconnect), 1);
-        runtime.shutdown().await.unwrap();
-        db.cleanup().await;
+        run_reconnect_test(async |db| {
+            let pipeline = Arc::new(RecordingPipeline::new());
+            let harness = Harness::with_db(db.pool.clone(), pipeline.clone(), queued_songs(&["A", "B"]));
+            let (runtime, _events) = harness.into_runtime();
+            let result = runtime.reconnect().await;
+            assert!(result.is_ok(), "the manual caller must receive Ok, got {result:?}");
+            assert_eq!(pipeline.count(Call::Reconnect), 1);
+            runtime.shutdown().await.unwrap();
+        })
+        .await;
     }
 
     /// Test B: a failed manual reconnect through the full runtime path
@@ -1688,21 +1635,22 @@ mod tests {
     /// exactly once, and stays one-shot.
     #[tokio::test]
     async fn manual_reconnect_through_the_runtime_reports_failure() {
-        let Some(db) = reconnect_test_db().await else { return };
-        let pipeline = Arc::new(RecordingPipeline::new());
-        pipeline.fail_once(Call::Reconnect);
-        let harness = Harness::with_db(db.pool.clone(), pipeline.clone(), queued_songs(&["A", "B"]));
-        let (runtime, _events) = harness.into_runtime();
-        let result = runtime.reconnect().await;
-        match result {
-            Err(PipelineError::Pipeline(message)) => assert!(message.contains("injected failure"), "unexpected error: {message}"),
-            other => panic!("expected the pipeline error, got {other:?}"),
-        }
-        assert_eq!(pipeline.count(Call::Reconnect), 1, "the manual reconnect must run exactly once");
-        tokio::time::sleep(Duration::from_millis(1500)).await;
-        assert_eq!(pipeline.count(Call::Reconnect), 1, "a manual reconnect must stay one-shot");
-        runtime.shutdown().await.unwrap();
-        db.cleanup().await;
+        run_reconnect_test(async |db| {
+            let pipeline = Arc::new(RecordingPipeline::new());
+            pipeline.fail_once(Call::Reconnect);
+            let harness = Harness::with_db(db.pool.clone(), pipeline.clone(), queued_songs(&["A", "B"]));
+            let (runtime, _events) = harness.into_runtime();
+            let result = runtime.reconnect().await;
+            match result {
+                Err(PipelineError::Pipeline(message)) => assert!(message.contains("injected failure"), "unexpected error: {message}"),
+                other => panic!("expected the pipeline error, got {other:?}"),
+            }
+            assert_eq!(pipeline.count(Call::Reconnect), 1, "the manual reconnect must run exactly once");
+            tokio::time::sleep(Duration::from_millis(1500)).await;
+            assert_eq!(pipeline.count(Call::Reconnect), 1, "a manual reconnect must stay one-shot");
+            runtime.shutdown().await.unwrap();
+        })
+        .await;
     }
 
     #[tokio::test]
@@ -1746,48 +1694,49 @@ mod tests {
     /// reconnect must run.
     #[tokio::test]
     async fn pause_then_retry_then_play_does_not_block_future_reconnects() {
-        let Some(db) = reconnect_test_db().await else { return };
-        let pipeline = Arc::new(RecordingPipeline::new());
-        pipeline.fail_once(Call::Reconnect);
-        let harness = Harness::with_db(db.pool.clone(), pipeline.clone(), queued_songs(&["A", "B"]));
-        let (runtime, events) = harness.into_runtime();
-        runtime.play().await.unwrap();
+        run_reconnect_test(async |db| {
+            let pipeline = Arc::new(RecordingPipeline::new());
+            pipeline.fail_once(Call::Reconnect);
+            let harness = Harness::with_db(db.pool.clone(), pipeline.clone(), queued_songs(&["A", "B"]));
+            let (runtime, events) = harness.into_runtime();
+            runtime.play().await.unwrap();
 
-        events
-            .send(PipelineEvent::SinkDisconnected {
-                generation: 1,
-                output_epoch: 1,
-                message: "output dropped".into(),
-            })
-            .unwrap();
-        testsupport::wait_for("the first reconnect attempt to run", || pipeline.count(Call::Reconnect) > 0).await;
+            events
+                .send(PipelineEvent::SinkDisconnected {
+                    generation: 1,
+                    output_epoch: 1,
+                    message: "output dropped".into(),
+                })
+                .unwrap();
+            testsupport::wait_for("the first reconnect attempt to run", || pipeline.count(Call::Reconnect) > 0).await;
 
-        // The user pauses while the backoff timer is pending. The pause must
-        // end the chain immediately: if it stayed active, a disconnect right
-        // after Play (BEFORE the timer fires) would be coalesced into the
-        // dead chain and the reconnect lost forever.
-        runtime.pause().await.unwrap();
-        runtime.play().await.unwrap();
-        events
-            .send(PipelineEvent::SinkDisconnected {
-                generation: 1,
-                output_epoch: 1,
-                message: "output dropped again".into(),
-            })
-            .unwrap();
-        testsupport::wait_for(
-            "a real reconnect after Pause→Play instead of one coalesced into the dead chain",
-            || pipeline.count(Call::Reconnect) >= 2,
-        )
+            // The user pauses while the backoff timer is pending. The pause must
+            // end the chain immediately: if it stayed active, a disconnect right
+            // after Play (BEFORE the timer fires) would be coalesced into the
+            // dead chain and the reconnect lost forever.
+            runtime.pause().await.unwrap();
+            runtime.play().await.unwrap();
+            events
+                .send(PipelineEvent::SinkDisconnected {
+                    generation: 1,
+                    output_epoch: 1,
+                    message: "output dropped again".into(),
+                })
+                .unwrap();
+            testsupport::wait_for(
+                "a real reconnect after Pause→Play instead of one coalesced into the dead chain",
+                || pipeline.count(Call::Reconnect) >= 2,
+            )
+            .await;
+
+            // Chain X's stale retry timer fires later: it must not run a third
+            // reconnect.
+            tokio::time::sleep(Duration::from_millis(1500)).await;
+            assert_eq!(pipeline.count(Call::Reconnect), 2);
+
+            runtime.shutdown().await.unwrap();
+        })
         .await;
-
-        // Chain X's stale retry timer fires later: it must not run a third
-        // reconnect.
-        tokio::time::sleep(Duration::from_millis(1500)).await;
-        assert_eq!(pipeline.count(Call::Reconnect), 2);
-
-        runtime.shutdown().await.unwrap();
-        db.cleanup().await;
     }
 
     #[tokio::test]
@@ -1820,228 +1769,234 @@ mod tests {
     /// disconnect event injected.
     #[tokio::test]
     async fn disconnect_while_paused_is_recovered_by_play() {
-        let Some(db) = reconnect_test_db().await else { return };
-        let pipeline = Arc::new(RecordingPipeline::new());
-        let harness = Harness::with_db(db.pool.clone(), pipeline.clone(), queued_songs(&["A", "B"]));
-        let (runtime, events) = harness.into_runtime();
-        runtime.play().await.unwrap();
+        run_reconnect_test(async |db| {
+            let pipeline = Arc::new(RecordingPipeline::new());
+            let harness = Harness::with_db(db.pool.clone(), pipeline.clone(), queued_songs(&["A", "B"]));
+            let (runtime, events) = harness.into_runtime();
+            runtime.play().await.unwrap();
 
-        // The output breaks while paused: no immediate action, but the
-        // disconnect must be remembered.
-        runtime.pause().await.unwrap();
-        events
-            .send(PipelineEvent::SinkDisconnected {
-                generation: 1,
-                output_epoch: 1,
-                message: "output dropped while paused".into(),
+            // The output breaks while paused: no immediate action, but the
+            // disconnect must be remembered.
+            runtime.pause().await.unwrap();
+            events
+                .send(PipelineEvent::SinkDisconnected {
+                    generation: 1,
+                    output_epoch: 1,
+                    message: "output dropped while paused".into(),
+                })
+                .unwrap();
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            assert_eq!(
+                pipeline.count(Call::Reconnect),
+                0,
+                "a disconnect while paused must not run a reconnect yet"
+            );
+
+            runtime.play().await.unwrap();
+            testsupport::wait_for("Play to restore an output that broke while paused", || {
+                pipeline.count(Call::Reconnect) > 0
             })
-            .unwrap();
-        tokio::time::sleep(Duration::from_millis(200)).await;
-        assert_eq!(
-            pipeline.count(Call::Reconnect),
-            0,
-            "a disconnect while paused must not run a reconnect yet"
-        );
+            .await;
+            assert_eq!(pipeline.count(Call::Reconnect), 1);
 
-        runtime.play().await.unwrap();
-        testsupport::wait_for("Play to restore an output that broke while paused", || {
-            pipeline.count(Call::Reconnect) > 0
+            tokio::time::sleep(Duration::from_millis(1500)).await;
+            assert_eq!(pipeline.count(Call::Reconnect), 1);
+
+            runtime.shutdown().await.unwrap();
         })
         .await;
-        assert_eq!(pipeline.count(Call::Reconnect), 1);
-
-        tokio::time::sleep(Duration::from_millis(1500)).await;
-        assert_eq!(pipeline.count(Call::Reconnect), 1);
-
-        runtime.shutdown().await.unwrap();
-        db.cleanup().await;
     }
 
     /// Test 1: a disconnect that happened BEFORE the pause is recovered by
     /// Play — no second `SinkDisconnected` event is injected.
     #[tokio::test]
     async fn disconnect_before_pause_is_recovered_by_play_without_a_second_event() {
-        let Some(db) = reconnect_test_db().await else { return };
-        let pipeline = Arc::new(RecordingPipeline::new());
-        pipeline.fail_once(Call::Reconnect);
-        let harness = Harness::with_db(db.pool.clone(), pipeline.clone(), queued_songs(&["A", "B"]));
-        let (runtime, events) = harness.into_runtime();
+        run_reconnect_test(async |db| {
+            let pipeline = Arc::new(RecordingPipeline::new());
+            pipeline.fail_once(Call::Reconnect);
+            let harness = Harness::with_db(db.pool.clone(), pipeline.clone(), queued_songs(&["A", "B"]));
+            let (runtime, events) = harness.into_runtime();
 
-        runtime.play().await.unwrap();
-        events
-            .send(PipelineEvent::SinkDisconnected {
-                generation: 1,
-                output_epoch: 1,
-                message: "output dropped".into(),
+            runtime.play().await.unwrap();
+            events
+                .send(PipelineEvent::SinkDisconnected {
+                    generation: 1,
+                    output_epoch: 1,
+                    message: "output dropped".into(),
+                })
+                .unwrap();
+            testsupport::wait_for("the first reconnect attempt to run", || pipeline.count(Call::Reconnect) > 0).await;
+
+            // Pause: the retry chain is invalidated, but the knowledge that the
+            // output is disconnected must survive.
+            runtime.pause().await.unwrap();
+
+            runtime.play().await.unwrap();
+            testsupport::wait_for("Play to recover an output that was already disconnected before the pause", || {
+                pipeline.count(Call::Reconnect) >= 2
             })
-            .unwrap();
-        testsupport::wait_for("the first reconnect attempt to run", || pipeline.count(Call::Reconnect) > 0).await;
+            .await;
+            assert_eq!(pipeline.count(Call::Reconnect), 2);
 
-        // Pause: the retry chain is invalidated, but the knowledge that the
-        // output is disconnected must survive.
-        runtime.pause().await.unwrap();
+            // The stale timer from chain X fires later and does nothing.
+            tokio::time::sleep(Duration::from_millis(1500)).await;
+            assert_eq!(pipeline.count(Call::Reconnect), 2);
 
-        runtime.play().await.unwrap();
-        testsupport::wait_for("Play to recover an output that was already disconnected before the pause", || {
-            pipeline.count(Call::Reconnect) >= 2
+            runtime.shutdown().await.unwrap();
         })
         .await;
-        assert_eq!(pipeline.count(Call::Reconnect), 2);
-
-        // The stale timer from chain X fires later and does nothing.
-        tokio::time::sleep(Duration::from_millis(1500)).await;
-        assert_eq!(pipeline.count(Call::Reconnect), 2);
-
-        runtime.shutdown().await.unwrap();
-        db.cleanup().await;
     }
 
     /// Test 2: a Pause interrupting an in-flight recovery does not lose the
     /// disconnected knowledge — the next Play retries the recovery.
     #[tokio::test]
     async fn pause_interrupting_recovery_keeps_the_output_recoverable() {
-        let Some(db) = reconnect_test_db().await else { return };
-        let pipeline = Arc::new(RecordingPipeline::new());
-        pipeline.fail_once(Call::Reconnect);
-        let harness = Harness::with_db(db.pool.clone(), pipeline.clone(), queued_songs(&["A", "B"]));
-        let (runtime, events) = harness.into_runtime();
+        run_reconnect_test(async |db| {
+            let pipeline = Arc::new(RecordingPipeline::new());
+            pipeline.fail_once(Call::Reconnect);
+            let harness = Harness::with_db(db.pool.clone(), pipeline.clone(), queued_songs(&["A", "B"]));
+            let (runtime, events) = harness.into_runtime();
 
-        runtime.play().await.unwrap();
-        runtime.pause().await.unwrap();
-        events
-            .send(PipelineEvent::SinkDisconnected {
-                generation: 1,
-                output_epoch: 1,
-                message: "output dropped while paused".into(),
+            runtime.play().await.unwrap();
+            runtime.pause().await.unwrap();
+            events
+                .send(PipelineEvent::SinkDisconnected {
+                    generation: 1,
+                    output_epoch: 1,
+                    message: "output dropped while paused".into(),
+                })
+                .unwrap();
+
+            runtime.play().await.unwrap();
+            testsupport::wait_for("the first recovery attempt to run", || pipeline.count(Call::Reconnect) > 0).await;
+
+            // Pause again before recovery succeeded; the marker must survive.
+            runtime.pause().await.unwrap();
+
+            runtime.play().await.unwrap();
+            testsupport::wait_for("a second Play to retry the interrupted recovery", || {
+                pipeline.count(Call::Reconnect) >= 2
             })
-            .unwrap();
+            .await;
+            assert_eq!(pipeline.count(Call::Reconnect), 2);
 
-        runtime.play().await.unwrap();
-        testsupport::wait_for("the first recovery attempt to run", || pipeline.count(Call::Reconnect) > 0).await;
-
-        // Pause again before recovery succeeded; the marker must survive.
-        runtime.pause().await.unwrap();
-
-        runtime.play().await.unwrap();
-        testsupport::wait_for("a second Play to retry the interrupted recovery", || {
-            pipeline.count(Call::Reconnect) >= 2
+            runtime.shutdown().await.unwrap();
         })
         .await;
-        assert_eq!(pipeline.count(Call::Reconnect), 2);
-
-        runtime.shutdown().await.unwrap();
-        db.cleanup().await;
     }
 
     /// Test 3: a successful recovery clears the marker — a later Pause/Play
     /// cycle must not run a redundant reconnect.
     #[tokio::test]
     async fn successful_recovery_clears_the_marker_for_later_cycles() {
-        let Some(db) = reconnect_test_db().await else { return };
-        let pipeline = Arc::new(RecordingPipeline::new());
-        let harness = Harness::with_db(db.pool.clone(), pipeline.clone(), queued_songs(&["A", "B"]));
-        let (runtime, events) = harness.into_runtime();
+        run_reconnect_test(async |db| {
+            let pipeline = Arc::new(RecordingPipeline::new());
+            let harness = Harness::with_db(db.pool.clone(), pipeline.clone(), queued_songs(&["A", "B"]));
+            let (runtime, events) = harness.into_runtime();
 
-        runtime.play().await.unwrap();
-        runtime.pause().await.unwrap();
-        events
-            .send(PipelineEvent::SinkDisconnected {
-                generation: 1,
-                output_epoch: 1,
-                message: "output dropped while paused".into(),
+            runtime.play().await.unwrap();
+            runtime.pause().await.unwrap();
+            events
+                .send(PipelineEvent::SinkDisconnected {
+                    generation: 1,
+                    output_epoch: 1,
+                    message: "output dropped while paused".into(),
+                })
+                .unwrap();
+            runtime.play().await.unwrap();
+            tokio::time::timeout(Duration::from_secs(2), async {
+                while pipeline.count(Call::Reconnect) == 0 {
+                    tokio::task::yield_now().await;
+                }
             })
-            .unwrap();
-        runtime.play().await.unwrap();
-        tokio::time::timeout(Duration::from_secs(2), async {
-            while pipeline.count(Call::Reconnect) == 0 {
-                tokio::task::yield_now().await;
-            }
+            .await
+            .expect("the recovery must run");
+            assert_eq!(pipeline.count(Call::Reconnect), 1);
+
+            runtime.pause().await.unwrap();
+            runtime.play().await.unwrap();
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            assert_eq!(
+                pipeline.count(Call::Reconnect),
+                1,
+                "no redundant reconnect after a successful recovery"
+            );
+
+            runtime.shutdown().await.unwrap();
         })
-        .await
-        .expect("the recovery must run");
-        assert_eq!(pipeline.count(Call::Reconnect), 1);
-
-        runtime.pause().await.unwrap();
-        runtime.play().await.unwrap();
-        tokio::time::sleep(Duration::from_millis(500)).await;
-        assert_eq!(
-            pipeline.count(Call::Reconnect),
-            1,
-            "no redundant reconnect after a successful recovery"
-        );
-
-        runtime.shutdown().await.unwrap();
-        db.cleanup().await;
+        .await;
     }
 
     /// Test 4: a successful manual reconnect while paused clears the marker
     /// — the later Play does not reconnect again.
     #[tokio::test]
     async fn successful_manual_reconnect_clears_the_marker() {
-        let Some(db) = reconnect_test_db().await else { return };
-        let pipeline = Arc::new(RecordingPipeline::new());
-        let harness = Harness::with_db(db.pool.clone(), pipeline.clone(), queued_songs(&["A", "B"]));
-        let (runtime, events) = harness.into_runtime();
+        run_reconnect_test(async |db| {
+            let pipeline = Arc::new(RecordingPipeline::new());
+            let harness = Harness::with_db(db.pool.clone(), pipeline.clone(), queued_songs(&["A", "B"]));
+            let (runtime, events) = harness.into_runtime();
 
-        runtime.play().await.unwrap();
-        runtime.pause().await.unwrap();
-        events
-            .send(PipelineEvent::SinkDisconnected {
-                generation: 1,
-                output_epoch: 1,
-                message: "output dropped while paused".into(),
-            })
-            .unwrap();
-        runtime.reconnect().await.unwrap();
-        assert_eq!(pipeline.count(Call::Reconnect), 1);
+            runtime.play().await.unwrap();
+            runtime.pause().await.unwrap();
+            events
+                .send(PipelineEvent::SinkDisconnected {
+                    generation: 1,
+                    output_epoch: 1,
+                    message: "output dropped while paused".into(),
+                })
+                .unwrap();
+            runtime.reconnect().await.unwrap();
+            assert_eq!(pipeline.count(Call::Reconnect), 1);
 
-        runtime.play().await.unwrap();
-        tokio::time::sleep(Duration::from_millis(500)).await;
-        assert_eq!(
-            pipeline.count(Call::Reconnect),
-            1,
-            "no redundant reconnect after a successful manual reconnect"
-        );
+            runtime.play().await.unwrap();
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            assert_eq!(
+                pipeline.count(Call::Reconnect),
+                1,
+                "no redundant reconnect after a successful manual reconnect"
+            );
 
-        runtime.shutdown().await.unwrap();
-        db.cleanup().await;
+            runtime.shutdown().await.unwrap();
+        })
+        .await;
     }
 
     /// Test 4b: a FAILED manual reconnect while paused keeps the marker —
     /// the later Play can still recover.
     #[tokio::test]
     async fn failed_manual_reconnect_keeps_the_marker_for_play_recovery() {
-        let Some(db) = reconnect_test_db().await else { return };
-        let pipeline = Arc::new(RecordingPipeline::new());
-        pipeline.fail_once(Call::Reconnect);
-        let harness = Harness::with_db(db.pool.clone(), pipeline.clone(), queued_songs(&["A", "B"]));
-        let (runtime, events) = harness.into_runtime();
+        run_reconnect_test(async |db| {
+            let pipeline = Arc::new(RecordingPipeline::new());
+            pipeline.fail_once(Call::Reconnect);
+            let harness = Harness::with_db(db.pool.clone(), pipeline.clone(), queued_songs(&["A", "B"]));
+            let (runtime, events) = harness.into_runtime();
 
-        runtime.play().await.unwrap();
-        runtime.pause().await.unwrap();
-        events
-            .send(PipelineEvent::SinkDisconnected {
-                generation: 1,
-                output_epoch: 1,
-                message: "output dropped while paused".into(),
+            runtime.play().await.unwrap();
+            runtime.pause().await.unwrap();
+            events
+                .send(PipelineEvent::SinkDisconnected {
+                    generation: 1,
+                    output_epoch: 1,
+                    message: "output dropped while paused".into(),
+                })
+                .unwrap();
+            let result = runtime.reconnect().await;
+            assert!(result.is_err(), "the manual reconnect must report its failure");
+            assert_eq!(pipeline.count(Call::Reconnect), 1);
+
+            runtime.play().await.unwrap();
+            tokio::time::timeout(Duration::from_secs(2), async {
+                while pipeline.count(Call::Reconnect) < 2 {
+                    tokio::task::yield_now().await;
+                }
             })
-            .unwrap();
-        let result = runtime.reconnect().await;
-        assert!(result.is_err(), "the manual reconnect must report its failure");
-        assert_eq!(pipeline.count(Call::Reconnect), 1);
+            .await
+            .expect("Play must recover the output after a failed manual reconnect");
+            assert_eq!(pipeline.count(Call::Reconnect), 2);
 
-        runtime.play().await.unwrap();
-        tokio::time::timeout(Duration::from_secs(2), async {
-            while pipeline.count(Call::Reconnect) < 2 {
-                tokio::task::yield_now().await;
-            }
+            runtime.shutdown().await.unwrap();
         })
-        .await
-        .expect("Play must recover the output after a failed manual reconnect");
-        assert_eq!(pipeline.count(Call::Reconnect), 2);
-
-        runtime.shutdown().await.unwrap();
-        db.cleanup().await;
+        .await;
     }
 
     /// Functional regression: a delayed success of an OLD chain (completion
@@ -2051,68 +2006,68 @@ mod tests {
     /// the recovery WITHOUT a third `SinkDisconnected` event.
     #[tokio::test]
     async fn stale_success_before_pause_does_not_block_play_recovery() {
-        let Some(db) = reconnect_test_db().await else { return };
-        let pipeline = Arc::new(RecordingPipeline::new());
-        let harness = Harness::with_db(db.pool.clone(), pipeline.clone(), queued_songs(&["A", "B"]));
-        let mut controller = harness.controller;
+        run_reconnect_test(async |db| {
+            let pipeline = Arc::new(RecordingPipeline::new());
+            let harness = Harness::with_db(db.pool.clone(), pipeline.clone(), queued_songs(&["A", "B"]));
+            let mut controller = harness.controller;
 
-        assert!(matches!(controller.play().await, PipelineOperation::Replace(_)));
-        let first = controller
-            .handle_event(PipelineEvent::SinkDisconnected {
-                generation: 1,
-                output_epoch: 1,
-                message: "drop #1".into(),
-            })
-            .await;
-        assert!(first.is_some(), "disconnect #1 must start a chain");
-        let token_x = controller.current_reconnect_token();
-        assert!(controller.is_output_known_disconnected());
+            assert!(matches!(controller.play().await, PipelineOperation::Replace(_)));
+            let first = controller
+                .handle_event(PipelineEvent::SinkDisconnected {
+                    generation: 1,
+                    output_epoch: 1,
+                    message: "drop #1".into(),
+                })
+                .await;
+            assert!(first.is_some(), "disconnect #1 must start a chain");
+            let token_x = controller.current_reconnect_token();
+            assert!(controller.is_output_known_disconnected());
 
-        // X succeeds in the pipeline; the executor marks it completed, but
-        // ReconnectFinished(X) has not reached the runtime yet (the race
-        // window).
-        controller.reconnect_token_shared().mark_completed(token_x);
+            // X succeeds in the pipeline; the executor marks it completed, but
+            // ReconnectFinished(X) has not reached the runtime yet (the race
+            // window).
+            controller.reconnect_token_shared().mark_completed(token_x);
 
-        // Disconnect #2 for the SAME output in that window: a fresh chain Y
-        // starts (a completed chain is never coalesced) and the marker is
-        // re-set for the same identity.
-        let second = controller
-            .handle_event(PipelineEvent::SinkDisconnected {
-                generation: 1,
-                output_epoch: 1,
-                message: "drop #2".into(),
-            })
-            .await;
-        assert!(second.is_some(), "disconnect #2 must never be lost");
-        let token_y = controller.current_reconnect_token();
-        assert_ne!(token_y, token_x, "disconnect #2 must start a fresh chain");
+            // Disconnect #2 for the SAME output in that window: a fresh chain Y
+            // starts (a completed chain is never coalesced) and the marker is
+            // re-set for the same identity.
+            let second = controller
+                .handle_event(PipelineEvent::SinkDisconnected {
+                    generation: 1,
+                    output_epoch: 1,
+                    message: "drop #2".into(),
+                })
+                .await;
+            assert!(second.is_some(), "disconnect #2 must never be lost");
+            let token_y = controller.current_reconnect_token();
+            assert_ne!(token_y, token_x, "disconnect #2 must start a fresh chain");
 
-        // The delayed success of X arrives NOW (stale token): it must leave
-        // chain Y and the marker of disconnect #2 untouched.
-        controller.on_reconnect_succeeded(token_x);
-        assert!(
-            controller.reconnect_retry_is_current(token_y),
-            "stale success must not end the newer chain"
-        );
-        assert!(
-            controller.is_output_known_disconnected(),
-            "stale success must not clear the marker of the newer disconnect"
-        );
+            // The delayed success of X arrives NOW (stale token): it must leave
+            // chain Y and the marker of disconnect #2 untouched.
+            controller.on_reconnect_succeeded(token_x);
+            assert!(
+                controller.reconnect_retry_is_current(token_y),
+                "stale success must not end the newer chain"
+            );
+            assert!(
+                controller.is_output_known_disconnected(),
+                "stale success must not clear the marker of the newer disconnect"
+            );
 
-        // Pause invalidates Y (Model B); the factual marker survives.
-        controller.pause();
-        assert!(!controller.reconnect_retry_is_current(token_y));
-        assert!(controller.is_output_known_disconnected());
+            // Pause invalidates Y (Model B); the factual marker survives.
+            controller.pause();
+            assert!(!controller.reconnect_retry_is_current(token_y));
+            assert!(controller.is_output_known_disconnected());
 
-        // Play — still no third SinkDisconnected: the surviving marker
-        // drives the recovery.
-        assert!(matches!(controller.play().await, PipelineOperation::SetPlaying(_)));
-        assert!(
-            controller.resume_reconnect_for_break().await.is_some(),
-            "Play must recover the output after the stale success + Pause sequence"
-        );
-
-        db.cleanup().await;
+            // Play — still no third SinkDisconnected: the surviving marker
+            // drives the recovery.
+            assert!(matches!(controller.play().await, PipelineOperation::SetPlaying(_)));
+            assert!(
+                controller.resume_reconnect_for_break().await.is_some(),
+                "Play must recover the output after the stale success + Pause sequence"
+            );
+        })
+        .await;
     }
 
     #[tokio::test]
@@ -2209,84 +2164,84 @@ mod tests {
     /// observable pipeline effect.
     #[tokio::test]
     async fn replaced_output_invalidates_a_queued_reconnect_before_the_pipeline() {
-        let Some(db) = reconnect_test_db().await else { return };
-        let pipeline = Arc::new(RecordingPipeline::with_gates());
-        let harness = Harness::with_db(db.pool.clone(), pipeline.clone(), queued_songs(&["A", "B"]));
-        let mut controller = harness.controller;
-        let driver = controller.driver();
-        let (urgent_tx, urgent) = mpsc::unbounded_channel::<crate::streamer::runtime::ExecutorTask>();
-        let (regular_tx, regular) = mpsc::unbounded_channel::<crate::streamer::runtime::ExecutorTask>();
-        let executor = tokio::spawn(crate::streamer::runtime::run_executor(urgent, regular, driver));
+        run_reconnect_test(async |db| {
+            let pipeline = Arc::new(RecordingPipeline::with_gates());
+            let harness = Harness::with_db(db.pool.clone(), pipeline.clone(), queued_songs(&["A", "B"]));
+            let mut controller = harness.controller;
+            let driver = controller.driver();
+            let (urgent_tx, urgent) = mpsc::unbounded_channel::<crate::streamer::runtime::ExecutorTask>();
+            let (regular_tx, regular) = mpsc::unbounded_channel::<crate::streamer::runtime::ExecutorTask>();
+            let executor = tokio::spawn(crate::streamer::runtime::run_executor(urgent, regular, driver));
 
-        // Play queues a replace that BLOCKS inside the pipeline: the
-        // sequential executor is now held and cannot run anything else.
-        let operation = controller.play().await;
-        crate::streamer::runtime::ExecutorTask::Operation(crate::streamer::runtime::PendingPipelineAction::operation(operation, None))
+            // Play queues a replace that BLOCKS inside the pipeline: the
+            // sequential executor is now held and cannot run anything else.
+            let operation = controller.play().await;
+            crate::streamer::runtime::ExecutorTask::Operation(crate::streamer::runtime::PendingPipelineAction::operation(operation, None))
+                .submit(&urgent_tx);
+            let gate = pipeline.replace_gate.as_ref().expect("gated pipeline");
+            gate.wait_started().await;
+
+            // The output disconnects while the executor is blocked: chain X is
+            // minted and its reconnect operation is queued BEHIND the replace,
+            // still carrying token X and identity (1, 1).
+            let op = controller
+                .handle_event(PipelineEvent::SinkDisconnected {
+                    generation: 1,
+                    output_epoch: 1,
+                    message: "output dropped".into(),
+                })
+                .await
+                .expect("a disconnect while playing must start a chain")
+                .expect("the reconnect target must build against the test database");
+            let token_x = controller.current_reconnect_token();
+            assert!(controller.reconnect_retry_is_current(token_x));
+            let PipelineOperation::Reconnect(target) = op else {
+                panic!("expected a reconnect operation, got {op:?}");
+            };
+            let (commands_tx, _commands_rx) = mpsc::channel(32);
+            crate::streamer::runtime::ExecutorTask::Operation(crate::streamer::runtime::PendingPipelineAction::reconnect(
+                target,
+                commands_tx,
+                1,
+                1,
+                0,
+                token_x,
+                controller.reconnect_token_shared(),
+                None,
+                true,
+            ))
             .submit(&urgent_tx);
-        let gate = pipeline.replace_gate.as_ref().expect("gated pipeline");
-        gate.wait_started().await;
 
-        // The output disconnects while the executor is blocked: chain X is
-        // minted and its reconnect operation is queued BEHIND the replace,
-        // still carrying token X and identity (1, 1).
-        let op = controller
-            .handle_event(PipelineEvent::SinkDisconnected {
-                generation: 1,
-                output_epoch: 1,
-                message: "output dropped".into(),
-            })
-            .await
-            .expect("a disconnect while playing must start a chain")
-            .expect("the reconnect target must build against the test database");
-        let token_x = controller.current_reconnect_token();
-        assert!(controller.reconnect_retry_is_current(token_x));
-        let PipelineOperation::Reconnect(target) = op else {
-            panic!("expected a reconnect operation, got {op:?}");
-        };
-        let (commands_tx, _commands_rx) = mpsc::channel(32);
-        crate::streamer::runtime::ExecutorTask::Operation(crate::streamer::runtime::PendingPipelineAction::reconnect(
-            target,
-            commands_tx,
-            1,
-            1,
-            0,
-            token_x,
-            controller.reconnect_token_shared(),
-            None,
-            true,
-        ))
-        .submit(&urgent_tx);
+            // The user skips while the reconnect is still queued: the output
+            // identity is replaced (generation 2) and the reconnect chain of
+            // the old identity is invalidated — the shared token flips to 0.
+            controller.skip().await.unwrap();
+            assert_eq!(controller.generation(), 2);
+            assert!(
+                !controller.reconnect_retry_is_current(token_x),
+                "an output replacement must invalidate the reconnect chain of the old output"
+            );
+            assert_eq!(
+                controller.reconnect_token_shared().token(),
+                0,
+                "the shared executor state must be invalidated by the replacement"
+            );
 
-        // The user skips while the reconnect is still queued: the output
-        // identity is replaced (generation 2) and the reconnect chain of
-        // the old identity is invalidated — the shared token flips to 0.
-        controller.skip().await.unwrap();
-        assert_eq!(controller.generation(), 2);
-        assert!(
-            !controller.reconnect_retry_is_current(token_x),
-            "an output replacement must invalidate the reconnect chain of the old output"
-        );
-        assert_eq!(
-            controller.reconnect_token_shared().token(),
-            0,
-            "the shared executor state must be invalidated by the replacement"
-        );
-
-        // Release the executor: the replace finishes, then the stale queued
-        // reconnect of the old identity reaches the pre-pipeline token
-        // guard and is dropped — the pipeline is never touched.
-        gate.release();
-        drop(urgent_tx);
-        drop(regular_tx);
-        executor.await.unwrap();
-        assert_eq!(
-            pipeline.count(Call::Reconnect),
-            0,
-            "a stale queued reconnect of a replaced output must never call pipeline.reconnect()"
-        );
-        assert_eq!(pipeline.count(Call::Replace), 1);
-
-        db.cleanup().await;
+            // Release the executor: the replace finishes, then the stale queued
+            // reconnect of the old identity reaches the pre-pipeline token
+            // guard and is dropped — the pipeline is never touched.
+            gate.release();
+            drop(urgent_tx);
+            drop(regular_tx);
+            executor.await.unwrap();
+            assert_eq!(
+                pipeline.count(Call::Reconnect),
+                0,
+                "a stale queued reconnect of a replaced output must never call pipeline.reconnect()"
+            );
+            assert_eq!(pipeline.count(Call::Replace), 1);
+        })
+        .await;
     }
 
     /// Controller-level companion: the bookkeeping half of the invariant —
@@ -2294,52 +2249,52 @@ mod tests {
     /// shared executor state no longer matches it.
     #[tokio::test]
     async fn skip_invalidates_the_reconnect_chain_of_the_old_output() {
-        let Some(db) = reconnect_test_db().await else { return };
-        let pipeline = Arc::new(RecordingPipeline::new());
-        let harness = Harness::with_db(db.pool.clone(), pipeline.clone(), queued_songs(&["A", "B"]));
-        let mut controller = harness.controller;
+        run_reconnect_test(async |db| {
+            let pipeline = Arc::new(RecordingPipeline::new());
+            let harness = Harness::with_db(db.pool.clone(), pipeline.clone(), queued_songs(&["A", "B"]));
+            let mut controller = harness.controller;
 
-        assert!(matches!(controller.play().await, PipelineOperation::Replace(_)));
-        let disconnect = controller
-            .handle_event(PipelineEvent::SinkDisconnected {
-                generation: 1,
-                output_epoch: 1,
-                message: "output dropped".into(),
-            })
-            .await
-            .expect("a disconnect while playing must start a chain")
-            .expect("the disconnect handling must not fail");
-        let PipelineOperation::Reconnect(_) = disconnect else {
-            panic!("a disconnect while playing must produce a reconnect");
-        };
-        let token_x = controller.current_reconnect_token();
-        assert!(controller.reconnect_retry_is_current(token_x));
+            assert!(matches!(controller.play().await, PipelineOperation::Replace(_)));
+            let disconnect = controller
+                .handle_event(PipelineEvent::SinkDisconnected {
+                    generation: 1,
+                    output_epoch: 1,
+                    message: "output dropped".into(),
+                })
+                .await
+                .expect("a disconnect while playing must start a chain")
+                .expect("the disconnect handling must not fail");
+            let PipelineOperation::Reconnect(_) = disconnect else {
+                panic!("a disconnect while playing must produce a reconnect");
+            };
+            let token_x = controller.current_reconnect_token();
+            assert!(controller.reconnect_retry_is_current(token_x));
 
-        controller.skip().await.unwrap();
-        assert_eq!(controller.generation(), 2);
-        assert!(
-            !controller.reconnect_retry_is_current(token_x),
-            "the old chain token must no longer be current after a skip"
-        );
-        assert_eq!(
-            controller.reconnect_token_shared().token(),
-            0,
-            "the shared token must be invalidated so a queued reconnect of the old output is dropped"
-        );
-        assert!(
-            !controller.is_output_known_disconnected(),
-            "the old output's marker must not survive the replacement"
-        );
+            controller.skip().await.unwrap();
+            assert_eq!(controller.generation(), 2);
+            assert!(
+                !controller.reconnect_retry_is_current(token_x),
+                "the old chain token must no longer be current after a skip"
+            );
+            assert_eq!(
+                controller.reconnect_token_shared().token(),
+                0,
+                "the shared token must be invalidated so a queued reconnect of the old output is dropped"
+            );
+            assert!(
+                !controller.is_output_known_disconnected(),
+                "the old output's marker must not survive the replacement"
+            );
 
-        // A retry timer of the old chain is rejected too (the runtime path
-        // `reconnect_if_current` now fails on the token AND the identity).
-        let retry = controller
-            .reconnect_if_current(1, 1, token_x)
-            .await
-            .expect("a stale retry is dropped, never an error");
-        assert!(retry.is_none(), "a retry of the old identity must be dropped");
-
-        db.cleanup().await;
+            // A retry timer of the old chain is rejected too (the runtime path
+            // `reconnect_if_current` now fails on the token AND the identity).
+            let retry = controller
+                .reconnect_if_current(1, 1, token_x)
+                .await
+                .expect("a stale retry is dropped, never an error");
+            assert!(retry.is_none(), "a retry of the old identity must be dropped");
+        })
+        .await;
     }
 
     #[tokio::test]

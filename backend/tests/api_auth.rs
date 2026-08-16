@@ -1,8 +1,8 @@
 mod api_common;
-mod common;
 
 use axum_test::TestServer;
 use serde_json::json;
+use sqlx::PgPool;
 
 async fn setup_auth_token(server: &TestServer) -> String {
     let resp = server
@@ -12,9 +12,8 @@ async fn setup_auth_token(server: &TestServer) -> String {
     resp.json::<serde_json::Value>()["access_token"].as_str().unwrap().to_string()
 }
 
-#[tokio::test]
-async fn test_setup_status_before_init() {
-    let pool = common::setup_db().await;
+#[sqlx::test(migrations = "./migrations")]
+async fn test_setup_status_before_init(pool: PgPool) {
     let app = api_common::create_test_app(pool);
     let server = TestServer::new(app);
 
@@ -24,9 +23,8 @@ async fn test_setup_status_before_init() {
     assert!(!body["setup_complete"].as_bool().unwrap());
 }
 
-#[tokio::test]
-async fn test_setup_init_creates_admin() {
-    let pool = common::setup_db().await;
+#[sqlx::test(migrations = "./migrations")]
+async fn test_setup_init_creates_admin(pool: PgPool) {
     let app = api_common::create_test_app(pool);
     let server = TestServer::new(app);
 
@@ -37,9 +35,8 @@ async fn test_setup_init_creates_admin() {
     assert_eq!(resp.status_code(), 201);
 }
 
-#[tokio::test]
-async fn test_setup_init_twice_returns_400() {
-    let pool = common::setup_db().await;
+#[sqlx::test(migrations = "./migrations")]
+async fn test_setup_init_twice_returns_400(pool: PgPool) {
     let app = api_common::create_test_app(pool);
     let server = TestServer::new(app);
 
@@ -55,9 +52,8 @@ async fn test_setup_init_twice_returns_400() {
     assert_eq!(resp.status_code(), 400);
 }
 
-#[tokio::test]
-async fn test_setup_status_after_init() {
-    let pool = common::setup_db().await;
+#[sqlx::test(migrations = "./migrations")]
+async fn test_setup_status_after_init(pool: PgPool) {
     let app = api_common::create_test_app(pool);
     let server = TestServer::new(app);
 
@@ -71,9 +67,8 @@ async fn test_setup_status_after_init() {
     assert!(resp.json::<serde_json::Value>()["setup_complete"].as_bool().unwrap());
 }
 
-#[tokio::test]
-async fn test_login_correct_returns_tokens() {
-    let pool = common::setup_db().await;
+#[sqlx::test(migrations = "./migrations")]
+async fn test_login_correct_returns_tokens(pool: PgPool) {
     let app = api_common::create_test_app(pool);
     let server = TestServer::new(app);
 
@@ -93,9 +88,8 @@ async fn test_login_correct_returns_tokens() {
     assert_eq!(body["user"]["username"].as_str().unwrap(), "admin");
 }
 
-#[tokio::test]
-async fn test_login_wrong_password_returns_401() {
-    let pool = common::setup_db().await;
+#[sqlx::test(migrations = "./migrations")]
+async fn test_login_wrong_password_returns_401(pool: PgPool) {
     let app = api_common::create_test_app(pool);
     let server = TestServer::new(app);
 
@@ -111,9 +105,8 @@ async fn test_login_wrong_password_returns_401() {
     assert_eq!(resp.status_code(), 401);
 }
 
-#[tokio::test]
-async fn test_login_wrong_username_returns_401() {
-    let pool = common::setup_db().await;
+#[sqlx::test(migrations = "./migrations")]
+async fn test_login_wrong_username_returns_401(pool: PgPool) {
     let app = api_common::create_test_app(pool);
     let server = TestServer::new(app);
 
@@ -129,9 +122,8 @@ async fn test_login_wrong_username_returns_401() {
     assert_eq!(resp.status_code(), 401);
 }
 
-#[tokio::test]
-async fn test_me_with_token_returns_user() {
-    let pool = common::setup_db().await;
+#[sqlx::test(migrations = "./migrations")]
+async fn test_me_with_token_returns_user(pool: PgPool) {
     let app = api_common::create_test_app(pool);
     let server = TestServer::new(app);
 
@@ -150,9 +142,8 @@ async fn test_me_with_token_returns_user() {
     assert_eq!(resp.json::<serde_json::Value>()["username"].as_str().unwrap(), "admin");
 }
 
-#[tokio::test]
-async fn test_me_without_token_returns_401() {
-    let pool = common::setup_db().await;
+#[sqlx::test(migrations = "./migrations")]
+async fn test_me_without_token_returns_401(pool: PgPool) {
     let app = api_common::create_test_app(pool);
     let server = TestServer::new(app);
 
@@ -165,9 +156,8 @@ async fn test_me_without_token_returns_401() {
     assert_eq!(resp.status_code(), 401);
 }
 
-#[tokio::test]
-async fn test_refresh_with_valid_token() {
-    let pool = common::setup_db().await;
+#[sqlx::test(migrations = "./migrations")]
+async fn test_refresh_with_valid_token(pool: PgPool) {
     let app = api_common::create_test_app(pool);
     let server = TestServer::new(app);
 
@@ -195,9 +185,8 @@ async fn test_refresh_with_valid_token() {
     assert!(!body["refresh_token"].as_str().unwrap().is_empty());
 }
 
-#[tokio::test]
-async fn test_refresh_with_invalid_token_returns_401() {
-    let pool = common::setup_db().await;
+#[sqlx::test(migrations = "./migrations")]
+async fn test_refresh_with_invalid_token_returns_401(pool: PgPool) {
     let app = api_common::create_test_app(pool);
     let server = TestServer::new(app);
 

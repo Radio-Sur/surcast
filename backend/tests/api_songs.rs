@@ -1,9 +1,9 @@
 mod api_common;
-mod common;
 
 use axum_test::multipart::{MultipartForm, Part};
 use axum_test::TestServer;
 use serde_json::json;
+use sqlx::PgPool;
 use uuid::Uuid;
 
 fn make_song_form(title: &str, artist: &str) -> MultipartForm {
@@ -15,8 +15,7 @@ fn make_song_form(title: &str, artist: &str) -> MultipartForm {
     )
 }
 
-async fn setup_auth() -> (TestServer, String) {
-    let pool = common::setup_db().await;
+async fn setup_auth(pool: PgPool) -> (TestServer, String) {
     let app = api_common::create_test_app(pool);
     let server = TestServer::new(app);
 
@@ -57,9 +56,9 @@ async fn create_station(server: &TestServer, token: &str) -> Uuid {
     resp.json::<serde_json::Value>()["id"].as_str().unwrap().parse().unwrap()
 }
 
-#[tokio::test]
-async fn test_upload_song_multipart_returns_201() {
-    let (server, token) = setup_auth().await;
+#[sqlx::test(migrations = "./migrations")]
+async fn test_upload_song_multipart_returns_201(pool: PgPool) {
+    let (server, token) = setup_auth(pool).await;
 
     let form = make_song_form("Uploaded Song", "Uploaded Artist");
     let resp = server
@@ -74,9 +73,9 @@ async fn test_upload_song_multipart_returns_201() {
     assert!(!body["id"].as_str().unwrap().is_empty());
 }
 
-#[tokio::test]
-async fn test_list_songs_returns_200() {
-    let (server, token) = setup_auth().await;
+#[sqlx::test(migrations = "./migrations")]
+async fn test_list_songs_returns_200(pool: PgPool) {
+    let (server, token) = setup_auth(pool).await;
     create_song(&server, &token).await;
 
     let resp = server
@@ -88,9 +87,9 @@ async fn test_list_songs_returns_200() {
     assert!(!list.is_empty());
 }
 
-#[tokio::test]
-async fn test_get_song_by_id_returns_200() {
-    let (server, token) = setup_auth().await;
+#[sqlx::test(migrations = "./migrations")]
+async fn test_get_song_by_id_returns_200(pool: PgPool) {
+    let (server, token) = setup_auth(pool).await;
     let (song_id, _) = create_song(&server, &token).await;
 
     let resp = server
@@ -101,9 +100,9 @@ async fn test_get_song_by_id_returns_200() {
     assert_eq!(resp.json::<serde_json::Value>()["title"].as_str().unwrap(), "Test Song");
 }
 
-#[tokio::test]
-async fn test_update_song_returns_200() {
-    let (server, token) = setup_auth().await;
+#[sqlx::test(migrations = "./migrations")]
+async fn test_update_song_returns_200(pool: PgPool) {
+    let (server, token) = setup_auth(pool).await;
     let (song_id, _) = create_song(&server, &token).await;
 
     let resp = server
@@ -115,9 +114,9 @@ async fn test_update_song_returns_200() {
     assert_eq!(resp.json::<serde_json::Value>()["title"].as_str().unwrap(), "Updated Title");
 }
 
-#[tokio::test]
-async fn test_delete_song_returns_204() {
-    let (server, token) = setup_auth().await;
+#[sqlx::test(migrations = "./migrations")]
+async fn test_delete_song_returns_204(pool: PgPool) {
+    let (server, token) = setup_auth(pool).await;
     let (song_id, _) = create_song(&server, &token).await;
 
     let resp = server
@@ -127,9 +126,9 @@ async fn test_delete_song_returns_204() {
     assert_eq!(resp.status_code(), 204);
 }
 
-#[tokio::test]
-async fn test_assign_song_to_station_returns_200() {
-    let (server, token) = setup_auth().await;
+#[sqlx::test(migrations = "./migrations")]
+async fn test_assign_song_to_station_returns_200(pool: PgPool) {
+    let (server, token) = setup_auth(pool).await;
     let (song_id, _) = create_song(&server, &token).await;
     let station_id = create_station(&server, &token).await;
 
@@ -141,9 +140,9 @@ async fn test_assign_song_to_station_returns_200() {
     assert_eq!(resp.status_code(), 200);
 }
 
-#[tokio::test]
-async fn test_remove_song_from_station_returns_204() {
-    let (server, token) = setup_auth().await;
+#[sqlx::test(migrations = "./migrations")]
+async fn test_remove_song_from_station_returns_204(pool: PgPool) {
+    let (server, token) = setup_auth(pool).await;
     let (song_id, _) = create_song(&server, &token).await;
     let station_id = create_station(&server, &token).await;
 
@@ -160,9 +159,9 @@ async fn test_remove_song_from_station_returns_204() {
     assert_eq!(resp.status_code(), 204);
 }
 
-#[tokio::test]
-async fn test_get_song_wrong_id_returns_404() {
-    let (server, token) = setup_auth().await;
+#[sqlx::test(migrations = "./migrations")]
+async fn test_get_song_wrong_id_returns_404(pool: PgPool) {
+    let (server, token) = setup_auth(pool).await;
     let fake_id = Uuid::nil();
 
     let resp = server
@@ -172,9 +171,9 @@ async fn test_get_song_wrong_id_returns_404() {
     assert_eq!(resp.status_code(), 404);
 }
 
-#[tokio::test]
-async fn test_get_song_file_no_auth_returns_200_or_404() {
-    let (server, token) = setup_auth().await;
+#[sqlx::test(migrations = "./migrations")]
+async fn test_get_song_file_no_auth_returns_200_or_404(pool: PgPool) {
+    let (server, token) = setup_auth(pool).await;
     let (song_id, _) = create_song(&server, &token).await;
 
     let resp = server.get(&format!("/api/songs/{song_id}/file")).await;

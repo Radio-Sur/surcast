@@ -1142,21 +1142,11 @@ mod tests {
     use async_trait::async_trait;
     use tokio::sync::mpsc;
 
-    /// Test database for the lifecycle tests: skips (returns `None`) when
-    /// `DATABASE_URL` is absent; connects with a small pool and applies
-    /// migrations otherwise.
-    async fn lifecycle_test_db() -> Option<PgPool> {
-        let Ok(database_url) = std::env::var("DATABASE_URL") else {
-            return None;
-        };
-        let pool = sqlx::postgres::PgPoolOptions::new()
-            .max_connections(5)
-            .connect(&database_url)
-            .await
-            .expect("test database must be reachable");
-        crate::db::run_migrations(&pool).await;
-        Some(pool)
-    }
+    /// Runs a lifecycle scenario against an isolated, migrated test
+    /// database; the shared runner guarantees the database is dropped on
+    /// success AND on scenario panic (see `crate::test_db::run_with_test_db`).
+    /// The database is skipped entirely when `DATABASE_URL` is absent.
+    use crate::test_db::run_with_test_db;
 
     /// The registry must not keep every UUID it ever saw: after a sequence
     /// of finished transitions on unique stations, only the last entry may
@@ -1273,82 +1263,83 @@ mod tests {
     /// that get/create would reuse and every later Play would poison.
     #[tokio::test]
     async fn failed_stop_removes_terminal_runtime_from_map() {
-        let Some(pool) = lifecycle_test_db().await else { return };
+        run_with_test_db(async |pool| {
+            let map: StreamersMap = Default::default();
+            let lifecycle = Arc::new(StationLifecycleLocks::default());
+            let station_id = Uuid::new_v4();
 
-        let map: StreamersMap = Default::default();
-        let lifecycle = Arc::new(StationLifecycleLocks::default());
-        let station_id = Uuid::new_v4();
+            // Injected pipeline stop failure: the committed finish returns
+            // Err, the terminal streamer is removed, and a repeat begin
+            // without a runtime is a no-op.
+            let failing = Arc::new(RecordingPipeline::new());
+            let (failing_streamer, _failing_keepalive) = recording_streamer(pool, "stop-failure", station_id, Arc::clone(&failing)).await;
+            {
+                let mut map = map.lock().unwrap_or_else(|e| e.into_inner());
+                map.insert(station_id, failing_streamer);
+            }
+            failing.fail_once(Call::Stop);
+            let guard = lifecycle.lock(station_id).await;
+            let shutdown = begin_runtime_shutdown_locked(&map, station_id, guard)
+                .await
+                .expect("admission must succeed; the failure happens in the pipeline stop");
+            let RuntimeShutdown::Admitted {
+                guard: _,
+                streamer,
+                receiver,
+            } = shutdown
+            else {
+                panic!("a mapped runtime must produce an admitted shutdown");
+            };
+            assert!(
+                finish_admitted_shutdown(&map, station_id, &streamer, receiver).await.is_err(),
+                "a failed shutdown must surface as an error"
+            );
+            assert!(
+                !map.lock().unwrap_or_else(|e| e.into_inner()).contains_key(&station_id),
+                "a terminal runtime must not stay in the map (no dead entry blocking get/create)"
+            );
+            let guard = lifecycle.lock(station_id).await;
+            assert!(
+                matches!(
+                    begin_runtime_shutdown_locked(&map, station_id, guard).await,
+                    Ok(RuntimeShutdown::NoRuntime { .. })
+                ),
+                "stopping without a runtime must be a no-op"
+            );
 
-        // Injected pipeline stop failure: the committed finish returns
-        // Err, the terminal streamer is removed, and a repeat begin
-        // without a runtime is a no-op.
-        let failing = Arc::new(RecordingPipeline::new());
-        let (failing_streamer, _failing_keepalive) = recording_streamer(&pool, "stop-failure", station_id, Arc::clone(&failing)).await;
-        {
-            let mut map = map.lock().unwrap_or_else(|e| e.into_inner());
-            map.insert(station_id, failing_streamer);
-        }
-        failing.fail_once(Call::Stop);
-        let guard = lifecycle.lock(station_id).await;
-        let shutdown = begin_runtime_shutdown_locked(&map, station_id, guard)
-            .await
-            .expect("admission must succeed; the failure happens in the pipeline stop");
-        let RuntimeShutdown::Admitted {
-            guard: _,
-            streamer,
-            receiver,
-        } = shutdown
-        else {
-            panic!("a mapped runtime must produce an admitted shutdown");
-        };
-        assert!(
-            finish_admitted_shutdown(&map, station_id, &streamer, receiver).await.is_err(),
-            "a failed shutdown must surface as an error"
-        );
-        assert!(
-            !map.lock().unwrap_or_else(|e| e.into_inner()).contains_key(&station_id),
-            "a terminal runtime must not stay in the map (no dead entry blocking get/create)"
-        );
-        let guard = lifecycle.lock(station_id).await;
-        assert!(
-            matches!(
-                begin_runtime_shutdown_locked(&map, station_id, guard).await,
-                Ok(RuntimeShutdown::NoRuntime { .. })
-            ),
-            "stopping without a runtime must be a no-op"
-        );
-
-        // A fresh runtime for the SAME station is fully operational: its
-        // executor is alive, so play() succeeds — the dead streamer's
-        // executor would answer "station runtime stopped" instead.
-        let healthy_pipeline = Arc::new(RecordingPipeline::new());
-        let (healthy, _healthy_keepalive) = recording_streamer(&pool, "stop-ok", station_id, Arc::clone(&healthy_pipeline)).await;
-        healthy.play().await.expect("a fresh runtime must be fully operational");
-        {
-            let mut map = map.lock().unwrap_or_else(|e| e.into_inner());
-            map.insert(station_id, healthy.clone());
-        }
-        let guard = lifecycle.lock(station_id).await;
-        let shutdown = begin_runtime_shutdown_locked(&map, station_id, guard)
-            .await
-            .expect("admission must succeed");
-        let RuntimeShutdown::Admitted {
-            guard: _,
-            streamer,
-            receiver,
-        } = shutdown
-        else {
-            panic!("a mapped runtime must produce an admitted shutdown");
-        };
-        assert!(
-            finish_admitted_shutdown(&map, station_id, &streamer, receiver).await.is_ok(),
-            "successful shutdown must succeed; calls: {:?}",
-            healthy_pipeline.calls()
-        );
-        assert!(
-            !map.lock().unwrap_or_else(|e| e.into_inner()).contains_key(&station_id),
-            "a successful shutdown must remove the runtime from the map"
-        );
+            // A fresh runtime for the SAME station is fully operational: its
+            // executor is alive, so play() succeeds — the dead streamer's
+            // executor would answer "station runtime stopped" instead.
+            let healthy_pipeline = Arc::new(RecordingPipeline::new());
+            let (healthy, _healthy_keepalive) = recording_streamer(pool, "stop-ok", station_id, Arc::clone(&healthy_pipeline)).await;
+            healthy.play().await.expect("a fresh runtime must be fully operational");
+            {
+                let mut map = map.lock().unwrap_or_else(|e| e.into_inner());
+                map.insert(station_id, healthy.clone());
+            }
+            let guard = lifecycle.lock(station_id).await;
+            let shutdown = begin_runtime_shutdown_locked(&map, station_id, guard)
+                .await
+                .expect("admission must succeed");
+            let RuntimeShutdown::Admitted {
+                guard: _,
+                streamer,
+                receiver,
+            } = shutdown
+            else {
+                panic!("a mapped runtime must produce an admitted shutdown");
+            };
+            assert!(
+                finish_admitted_shutdown(&map, station_id, &streamer, receiver).await.is_ok(),
+                "successful shutdown must succeed; calls: {:?}",
+                healthy_pipeline.calls()
+            );
+            assert!(
+                !map.lock().unwrap_or_else(|e| e.into_inner()).contains_key(&station_id),
+                "a successful shutdown must remove the runtime from the map"
+            );
+        })
+        .await;
     }
 
     /// Explicit send failure (NOT caller cancellation): the command loop
@@ -1357,67 +1348,68 @@ mod tests {
     /// runtime stopped". The stop is still reported as an error.
     #[tokio::test]
     async fn failed_send_removes_a_runtime_whose_command_loop_is_gone() {
-        let Some(pool) = lifecycle_test_db().await else { return };
+        run_with_test_db(async |pool| {
+            let map: StreamersMap = Default::default();
+            let lifecycle = Arc::new(StationLifecycleLocks::default());
+            let station_id = Uuid::new_v4();
 
-        let map: StreamersMap = Default::default();
-        let lifecycle = Arc::new(StationLifecycleLocks::default());
-        let station_id = Uuid::new_v4();
+            // Shut the runtime down WITHOUT the map helper, so the dead
+            // streamer stays mapped — the situation a failed/cancelled stop
+            // used to leave behind before the cleanup fix.
+            let pipeline = Arc::new(RecordingPipeline::new());
+            let (streamer, _keepalive) = recording_streamer(pool, "dead-send", station_id, Arc::clone(&pipeline)).await;
+            streamer.shutdown().await;
+            {
+                let mut map = map.lock().unwrap_or_else(|e| e.into_inner());
+                map.insert(station_id, streamer);
+            }
 
-        // Shut the runtime down WITHOUT the map helper, so the dead
-        // streamer stays mapped — the situation a failed/cancelled stop
-        // used to leave behind before the cleanup fix.
-        let pipeline = Arc::new(RecordingPipeline::new());
-        let (streamer, _keepalive) = recording_streamer(&pool, "dead-send", station_id, Arc::clone(&pipeline)).await;
-        streamer.shutdown().await;
-        {
-            let mut map = map.lock().unwrap_or_else(|e| e.into_inner());
-            map.insert(station_id, streamer);
-        }
+            // begin_shutdown fails on the closed command channel: the begin
+            // helper must report the stop error (logging the source cause) AND
+            // remove the dead Arc.
+            let guard = lifecycle.lock(station_id).await;
+            assert!(
+                begin_runtime_shutdown_locked(&map, station_id, guard).await.is_err(),
+                "a stop against a dead command loop must surface as an error"
+            );
+            assert!(
+                !map.lock().unwrap_or_else(|e| e.into_inner()).contains_key(&station_id),
+                "the dead runtime must not stay in the map after a failed send"
+            );
 
-        // begin_shutdown fails on the closed command channel: the begin
-        // helper must report the stop error (logging the source cause) AND
-        // remove the dead Arc.
-        let guard = lifecycle.lock(station_id).await;
-        assert!(
-            begin_runtime_shutdown_locked(&map, station_id, guard).await.is_err(),
-            "a stop against a dead command loop must surface as an error"
-        );
-        assert!(
-            !map.lock().unwrap_or_else(|e| e.into_inner()).contains_key(&station_id),
-            "the dead runtime must not stay in the map after a failed send"
-        );
-
-        // A fresh runtime for the same station is fully operational — the
-        // dead entry never poisoned a later Play.
-        let fresh = Arc::new(RecordingPipeline::new());
-        let (replacement, _keepalive) = recording_streamer(&pool, "dead-send-fresh", station_id, Arc::clone(&fresh)).await;
-        replacement
-            .play()
-            .await
-            .expect("a fresh runtime must start after the dead one was removed");
-        {
-            let mut map = map.lock().unwrap_or_else(|e| e.into_inner());
-            map.insert(station_id, replacement);
-        }
-        let guard = lifecycle.lock(station_id).await;
-        let shutdown = begin_runtime_shutdown_locked(&map, station_id, guard)
-            .await
-            .expect("admission must succeed");
-        let RuntimeShutdown::Admitted {
-            guard: _,
-            streamer,
-            receiver,
-        } = shutdown
-        else {
-            panic!("a mapped runtime must produce an admitted shutdown");
-        };
-        finish_admitted_shutdown(&map, station_id, &streamer, receiver)
-            .await
-            .expect("the replacement runtime must shut down cleanly");
-        assert!(
-            !map.lock().unwrap_or_else(|e| e.into_inner()).contains_key(&station_id),
-            "the replacement runtime must leave the map"
-        );
+            // A fresh runtime for the same station is fully operational — the
+            // dead entry never poisoned a later Play.
+            let fresh = Arc::new(RecordingPipeline::new());
+            let (replacement, _keepalive) = recording_streamer(pool, "dead-send-fresh", station_id, Arc::clone(&fresh)).await;
+            replacement
+                .play()
+                .await
+                .expect("a fresh runtime must start after the dead one was removed");
+            {
+                let mut map = map.lock().unwrap_or_else(|e| e.into_inner());
+                map.insert(station_id, replacement);
+            }
+            let guard = lifecycle.lock(station_id).await;
+            let shutdown = begin_runtime_shutdown_locked(&map, station_id, guard)
+                .await
+                .expect("admission must succeed");
+            let RuntimeShutdown::Admitted {
+                guard: _,
+                streamer,
+                receiver,
+            } = shutdown
+            else {
+                panic!("a mapped runtime must produce an admitted shutdown");
+            };
+            finish_admitted_shutdown(&map, station_id, &streamer, receiver)
+                .await
+                .expect("the replacement runtime must shut down cleanly");
+            assert!(
+                !map.lock().unwrap_or_else(|e| e.into_inner()).contains_key(&station_id),
+                "the replacement runtime must leave the map"
+            );
+        })
+        .await;
     }
 
     /// A broken runtime must not prevent the fan-out from syncing the
@@ -1426,40 +1418,41 @@ mod tests {
     /// earlier one fails; the first error is still reported.
     #[tokio::test]
     async fn sync_station_queues_continues_after_a_failing_station() {
-        let Some(pool) = lifecycle_test_db().await else { return };
+        run_with_test_db(async |pool| {
+            let map: StreamersMap = Default::default();
+            let lifecycle = Arc::new(StationLifecycleLocks::default());
+            let station_a = Uuid::new_v4();
+            let station_b = Uuid::new_v4();
 
-        let map: StreamersMap = Default::default();
-        let lifecycle = Arc::new(StationLifecycleLocks::default());
-        let station_a = Uuid::new_v4();
-        let station_b = Uuid::new_v4();
+            // Station A has a runtime whose command loop is DEAD (a shutdown
+            // already ran — the same failure mode a cancelled stop leaves
+            // behind), so its reload fails on send; station B has no runtime
+            // and must still receive its station-scoped queue notification.
+            let broken = Arc::new(RecordingPipeline::new());
+            let (broken_streamer, _broken_keepalive) = recording_streamer(pool, "fan-a", station_a, Arc::clone(&broken)).await;
+            broken_streamer.shutdown().await;
+            {
+                let mut map = map.lock().unwrap_or_else(|e| e.into_inner());
+                map.insert(station_a, broken_streamer);
+            }
+            assert!(
+                map.lock().unwrap_or_else(|e| e.into_inner()).contains_key(&station_a),
+                "precondition: the dead runtime must still be mapped"
+            );
 
-        // Station A has a runtime whose command loop is DEAD (a shutdown
-        // already ran — the same failure mode a cancelled stop leaves
-        // behind), so its reload fails on send; station B has no runtime
-        // and must still receive its station-scoped queue notification.
-        let broken = Arc::new(RecordingPipeline::new());
-        let (broken_streamer, _broken_keepalive) = recording_streamer(&pool, "fan-a", station_a, Arc::clone(&broken)).await;
-        broken_streamer.shutdown().await;
-        {
-            let mut map = map.lock().unwrap_or_else(|e| e.into_inner());
-            map.insert(station_a, broken_streamer);
-        }
-        assert!(
-            map.lock().unwrap_or_else(|e| e.into_inner()).contains_key(&station_a),
-            "precondition: the dead runtime must still be mapped"
-        );
-
-        let mut notifications = lifecycle.subscribe_notifications();
-        let result = sync_station_queues(&pool, &map, &lifecycle, "/tmp", [station_a, station_b], true).await;
-        assert!(result.is_err(), "the failing station's error must be reported");
-        let event = tokio::time::timeout(Duration::from_secs(5), notifications.recv())
-            .await
-            .expect("station B must be notified despite station A's failure")
-            .expect("notification channel must stay open");
-        match event {
-            StationEvent::Queue { station_id } => assert_eq!(station_id, station_b),
-            other => panic!("expected a queue notification for station B, got {other:?}"),
-        }
+            let mut notifications = lifecycle.subscribe_notifications();
+            let result = sync_station_queues(pool, &map, &lifecycle, "/tmp", [station_a, station_b], true).await;
+            assert!(result.is_err(), "the failing station's error must be reported");
+            let event = tokio::time::timeout(Duration::from_secs(5), notifications.recv())
+                .await
+                .expect("station B must be notified despite station A's failure")
+                .expect("notification channel must stay open");
+            match event {
+                StationEvent::Queue { station_id } => assert_eq!(station_id, station_b),
+                other => panic!("expected a queue notification for station B, got {other:?}"),
+            }
+        })
+        .await;
     }
 
     /// Cancelling the Stop caller mid-shutdown must not break terminal
@@ -1470,78 +1463,79 @@ mod tests {
     /// for the same station works afterwards.
     #[tokio::test]
     async fn cancelled_stop_still_removes_terminal_runtime_and_serializes() {
-        let Some(pool) = lifecycle_test_db().await else { return };
+        run_with_test_db(async |pool| {
+            let map: StreamersMap = Default::default();
+            let lifecycle = Arc::new(StationLifecycleLocks::default());
+            let station_id = Uuid::new_v4();
+            let gate = Gate::new();
+            let pipeline = Arc::new(RecordingPipeline::with_stop_gate(Arc::clone(&gate)));
+            let (streamer, _keepalive) = recording_streamer(pool, "cancel-stop", station_id, Arc::clone(&pipeline)).await;
+            {
+                let mut map = map.lock().unwrap_or_else(|e| e.into_inner());
+                map.insert(station_id, streamer);
+            }
 
-        let map: StreamersMap = Default::default();
-        let lifecycle = Arc::new(StationLifecycleLocks::default());
-        let station_id = Uuid::new_v4();
-        let gate = Gate::new();
-        let pipeline = Arc::new(RecordingPipeline::with_stop_gate(Arc::clone(&gate)));
-        let (streamer, _keepalive) = recording_streamer(&pool, "cancel-stop", station_id, Arc::clone(&pipeline)).await;
-        {
-            let mut map = map.lock().unwrap_or_else(|e| e.into_inner());
-            map.insert(station_id, streamer);
-        }
-
-        // Stop transition; the pipeline stop parks in the gate — at that
-        // point Shutdown is accepted and the committed finish task owns
-        // the guard (exactly the production tail of Restart/Delete).
-        let stop_task = tokio::spawn({
-            let map = Arc::clone(&map);
-            let lifecycle = Arc::clone(&lifecycle);
-            async move {
-                let guard = lifecycle.lock(station_id).await;
-                match begin_runtime_shutdown_locked(&map, station_id, guard).await? {
-                    RuntimeShutdown::Admitted { guard, streamer, receiver } => {
-                        // No await between admission and the transfer: the
-                        // guard moves into the detached finish BEFORE the
-                        // stop-result await.
-                        let (stop_result, _guard) = tokio::spawn(async move {
-                            let stop_result = finish_admitted_shutdown(&map, station_id, &streamer, receiver).await;
-                            (stop_result, guard)
-                        })
-                        .await
-                        .map_err(|_| AppError::Internal("Stream stop task failed".into()))?;
-                        stop_result
+            // Stop transition; the pipeline stop parks in the gate — at that
+            // point Shutdown is accepted and the committed finish task owns
+            // the guard (exactly the production tail of Restart/Delete).
+            let stop_task = tokio::spawn({
+                let map = Arc::clone(&map);
+                let lifecycle = Arc::clone(&lifecycle);
+                async move {
+                    let guard = lifecycle.lock(station_id).await;
+                    match begin_runtime_shutdown_locked(&map, station_id, guard).await? {
+                        RuntimeShutdown::Admitted { guard, streamer, receiver } => {
+                            // No await between admission and the transfer: the
+                            // guard moves into the detached finish BEFORE the
+                            // stop-result await.
+                            let (stop_result, _guard) = tokio::spawn(async move {
+                                let stop_result = finish_admitted_shutdown(&map, station_id, &streamer, receiver).await;
+                                (stop_result, guard)
+                            })
+                            .await
+                            .map_err(|_| AppError::Internal("Stream stop task failed".into()))?;
+                            stop_result
+                        }
+                        RuntimeShutdown::NoRuntime { .. } => Ok(()),
                     }
-                    RuntimeShutdown::NoRuntime { .. } => Ok(()),
                 }
-            }
-        });
-        gate.wait_started().await;
+            });
+            gate.wait_started().await;
 
-        // The caller dies mid-shutdown (abort) — cleanup must continue.
-        stop_task.abort();
+            // The caller dies mid-shutdown (abort) — cleanup must continue.
+            stop_task.abort();
 
-        // A new transition must NOT pass while the shutdown is in progress:
-        // it contends on the station lock held by the cleanup task.
-        let mut contended = lifecycle.test_hooks().lock_contended.contend_watcher();
-        let next_transition = tokio::spawn({
-            let lifecycle = Arc::clone(&lifecycle);
-            async move {
-                let _guard = lifecycle.lock(station_id).await;
-            }
-        });
-        contended
-            .wait("the next transition to contend on the station lock")
-            .await
-            .expect("station serialization must survive caller cancellation");
+            // A new transition must NOT pass while the shutdown is in progress:
+            // it contends on the station lock held by the cleanup task.
+            let mut contended = lifecycle.test_hooks().lock_contended.contend_watcher();
+            let next_transition = tokio::spawn({
+                let lifecycle = Arc::clone(&lifecycle);
+                async move {
+                    let _guard = lifecycle.lock(station_id).await;
+                }
+            });
+            contended
+                .wait("the next transition to contend on the station lock")
+                .await
+                .expect("station serialization must survive caller cancellation");
 
-        // Let the shutdown finish: cleanup removes the terminal runtime,
-        // then releases the lock and the next transition proceeds.
-        gate.release();
-        next_transition
-            .await
-            .expect("the next transition must proceed once the shutdown finished");
-        assert!(
-            !map.lock().unwrap_or_else(|e| e.into_inner()).contains_key(&station_id),
-            "the terminal runtime must be removed even though the caller was cancelled"
-        );
+            // Let the shutdown finish: cleanup removes the terminal runtime,
+            // then releases the lock and the next transition proceeds.
+            gate.release();
+            next_transition
+                .await
+                .expect("the next transition must proceed once the shutdown finished");
+            assert!(
+                !map.lock().unwrap_or_else(|e| e.into_inner()).contains_key(&station_id),
+                "the terminal runtime must be removed even though the caller was cancelled"
+            );
 
-        // A fresh runtime for the same station is fully operational.
-        let fresh_pipeline = Arc::new(RecordingPipeline::new());
-        let (fresh, _fresh_keepalive) = recording_streamer(&pool, "cancel-stop-fresh", station_id, Arc::clone(&fresh_pipeline)).await;
-        fresh.play().await.expect("a fresh runtime must work after the cancelled shutdown");
+            // A fresh runtime for the same station is fully operational.
+            let fresh_pipeline = Arc::new(RecordingPipeline::new());
+            let (fresh, _fresh_keepalive) = recording_streamer(pool, "cancel-stop-fresh", station_id, Arc::clone(&fresh_pipeline)).await;
+            fresh.play().await.expect("a fresh runtime must work after the cancelled shutdown");
+        })
+        .await;
     }
 
     /// The committed Delete operation owns the row delete + the lifecycle
@@ -1550,72 +1544,66 @@ mod tests {
     /// notification that tells no-runtime forwarders the station is gone.
     #[tokio::test]
     async fn committed_delete_removes_row_and_notifies_after_caller_death() {
-        let Some(pool) = lifecycle_test_db().await else { return };
+        run_with_test_db(async |pool| {
+            let map: StreamersMap = Default::default();
+            let lifecycle = Arc::new(StationLifecycleLocks::default());
+            let station_id = Uuid::new_v4();
 
-        let map: StreamersMap = Default::default();
-        let lifecycle = Arc::new(StationLifecycleLocks::default());
-        let station_id = Uuid::new_v4();
-
-        // A stopped station with zero runtime.
-        let user_id = Uuid::new_v4();
-        let username = format!("committed-delete-{user_id}");
-        sqlx::query("INSERT INTO users (id, username, password_hash, name) VALUES ($1, $2, 'x', $3)")
-            .bind(user_id)
-            .bind(&username)
-            .bind(&username)
-            .execute(&pool)
-            .await
-            .expect("user insert");
-        sqlx::query("INSERT INTO stations (id, name, created_by) VALUES ($1, 'committed-delete', $2)")
-            .bind(station_id)
-            .bind(user_id)
-            .execute(&pool)
-            .await
-            .expect("station insert");
-
-        // The committed operation holds the guard; a subscriber listens
-        // for the lifecycle notification.
-        let mut notifications = lifecycle.subscribe_notifications();
-        let guard = lifecycle.lock(station_id).await;
-        let operation = tokio::spawn(run_committed_delete(pool.clone(), Arc::clone(&lifecycle), station_id, guard));
-        let caller = tokio::spawn(async move { operation.await });
-
-        // The request caller dies mid-operation (cancellation during the
-        // DB await is covered by the spawn-before-mutation structure) —
-        // the operation task itself must continue.
-        caller.abort();
-        assert!(caller.await.is_err(), "the Delete caller must be cancelled");
-
-        let event = tokio::time::timeout(Duration::from_secs(5), notifications.recv())
-            .await
-            .expect("the committed delete must notify after the row delete")
-            .expect("notification channel must stay open");
-        match event {
-            StationEvent::Lifecycle { station_id: notified } => assert_eq!(notified, station_id),
-            other => panic!("expected a lifecycle notification, got {other:?}"),
-        }
-        assert!(
-            repository::find_station_by_id(&pool, station_id)
+            // A stopped station with zero runtime.
+            let user_id = Uuid::new_v4();
+            let username = format!("committed-delete-{user_id}");
+            sqlx::query("INSERT INTO users (id, username, password_hash, name) VALUES ($1, $2, 'x', $3)")
+                .bind(user_id)
+                .bind(&username)
+                .bind(&username)
+                .execute(&pool.pool)
                 .await
-                .expect("station lookup")
-                .is_none(),
-            "the station row must be gone"
-        );
-        assert!(
-            !map.lock().unwrap_or_else(|e| e.into_inner()).contains_key(&station_id),
-            "no runtime may appear"
-        );
+                .expect("user insert");
+            sqlx::query("INSERT INTO stations (id, name, created_by) VALUES ($1, 'committed-delete', $2)")
+                .bind(station_id)
+                .bind(user_id)
+                .execute(&pool.pool)
+                .await
+                .expect("station insert");
 
-        // The operation released the guard when it finished: the next
-        // transition must pass without contention.
-        let _next = lifecycle.lock(station_id).await;
+            // The committed operation holds the guard; a subscriber listens
+            // for the lifecycle notification.
+            let mut notifications = lifecycle.subscribe_notifications();
+            let guard = lifecycle.lock(station_id).await;
+            let operation = tokio::spawn(run_committed_delete(pool.pool.clone(), Arc::clone(&lifecycle), station_id, guard));
+            let caller = tokio::spawn(async move { operation.await });
 
-        // Clean up this run's rows.
-        sqlx::query("DELETE FROM users WHERE id = $1")
-            .bind(user_id)
-            .execute(&pool)
-            .await
-            .expect("user cleanup");
+            // The request caller dies mid-operation (cancellation during the
+            // DB await is covered by the spawn-before-mutation structure) —
+            // the operation task itself must continue.
+            caller.abort();
+            assert!(caller.await.is_err(), "the Delete caller must be cancelled");
+
+            let event = tokio::time::timeout(Duration::from_secs(5), notifications.recv())
+                .await
+                .expect("the committed delete must notify after the row delete")
+                .expect("notification channel must stay open");
+            match event {
+                StationEvent::Lifecycle { station_id: notified } => assert_eq!(notified, station_id),
+                other => panic!("expected a lifecycle notification, got {other:?}"),
+            }
+            assert!(
+                repository::find_station_by_id(pool, station_id)
+                    .await
+                    .expect("station lookup")
+                    .is_none(),
+                "the station row must be gone"
+            );
+            assert!(
+                !map.lock().unwrap_or_else(|e| e.into_inner()).contains_key(&station_id),
+                "no runtime may appear"
+            );
+
+            // The operation released the guard when it finished: the next
+            // transition must pass without contention.
+            let _next = lifecycle.lock(station_id).await;
+        })
+        .await;
     }
 
     /// Full-Stop cancellation regression: the caller owns ONLY the guard
@@ -1628,116 +1616,105 @@ mod tests {
     /// serialization.
     #[tokio::test]
     async fn stop_survives_caller_cancellation_before_persistence() {
-        let Some(pool) = lifecycle_test_db().await else { return };
+        run_with_test_db(async |pool| {
+            let map: StreamersMap = Default::default();
+            let lifecycle = Arc::new(StationLifecycleLocks::default());
+            let station_id = Uuid::new_v4();
 
-        let map: StreamersMap = Default::default();
-        let lifecycle = Arc::new(StationLifecycleLocks::default());
-        let station_id = Uuid::new_v4();
-
-        // A station persisted as started with a live runtime.
-        let user_id = Uuid::new_v4();
-        let username = format!("committed-stop-{user_id}");
-        sqlx::query("INSERT INTO users (id, username, password_hash, name) VALUES ($1, $2, 'x', $3)")
-            .bind(user_id)
-            .bind(&username)
-            .bind(&username)
-            .execute(&pool)
-            .await
-            .expect("user insert");
-        sqlx::query("INSERT INTO stations (id, name, created_by) VALUES ($1, 'committed-stop', $2)")
-            .bind(station_id)
-            .bind(user_id)
-            .execute(&pool)
-            .await
-            .expect("station insert");
-        repository::set_station_started(&pool, station_id, true)
-            .await
-            .expect("started persist");
-        let pipeline = Arc::new(RecordingPipeline::new());
-        let (streamer, _keepalive) = recording_streamer(&pool, "committed-stop", station_id, Arc::clone(&pipeline)).await;
-        streamer.play().await.expect("the runtime must be live");
-        {
-            let mut map = map.lock().unwrap_or_else(|e| e.into_inner());
-            map.insert(station_id, streamer);
-        }
-
-        // Park the stop operation BEFORE the DB write: it holds the
-        // station guard, but `is_started=false` has not been persisted yet.
-        let hooks = lifecycle.test_hooks();
-        hooks.before_stop.arm();
-        let stop_task = tokio::spawn({
-            let pool = pool.clone();
-            let map = Arc::clone(&map);
-            let lifecycle = Arc::clone(&lifecycle);
-            async move { stop_station(&pool, &map, &lifecycle, station_id).await }
-        });
-        tokio::time::timeout(Duration::from_secs(5), hooks.before_stop.entered().notified())
-            .await
-            .expect("the Stop must reach the before_stop hook");
-
-        // The mutation has NOT started: desired state is still `true` and
-        // the runtime is still mapped.
-        assert_eq!(
-            repository::find_station_started(&pool, station_id).await.expect("started readback"),
-            Some(true),
-            "is_started must still be true: the DB write has not started"
-        );
-        assert!(
-            map.lock().unwrap_or_else(|e| e.into_inner()).contains_key(&station_id),
-            "the runtime must still be mapped"
-        );
-
-        // The request caller dies BEFORE the mutation. The detached stop
-        // operation must keep the guard and finish persist + shutdown.
-        stop_task.abort();
-        assert!(stop_task.await.is_err(), "the Stop caller must be cancelled");
-
-        // A new transition must NOT pass: it contends on the station lock
-        // held by the detached stop operation.
-        let mut contended = hooks.lock_contended.contend_watcher();
-        let next_transition = tokio::spawn({
-            let lifecycle = Arc::clone(&lifecycle);
-            async move {
-                let _guard = lifecycle.lock(station_id).await;
+            // A station persisted as started with a live runtime.
+            let user_id = Uuid::new_v4();
+            let username = format!("committed-stop-{user_id}");
+            sqlx::query("INSERT INTO users (id, username, password_hash, name) VALUES ($1, $2, 'x', $3)")
+                .bind(user_id)
+                .bind(&username)
+                .bind(&username)
+                .execute(&pool.pool)
+                .await
+                .expect("user insert");
+            sqlx::query("INSERT INTO stations (id, name, created_by) VALUES ($1, 'committed-stop', $2)")
+                .bind(station_id)
+                .bind(user_id)
+                .execute(&pool.pool)
+                .await
+                .expect("station insert");
+            repository::set_station_started(pool, station_id, true)
+                .await
+                .expect("started persist");
+            let pipeline = Arc::new(RecordingPipeline::new());
+            let (streamer, _keepalive) = recording_streamer(pool, "committed-stop", station_id, Arc::clone(&pipeline)).await;
+            streamer.play().await.expect("the runtime must be live");
+            {
+                let mut map = map.lock().unwrap_or_else(|e| e.into_inner());
+                map.insert(station_id, streamer);
             }
-        });
-        contended
-            .wait("the next transition to contend behind the committed stop")
-            .await
-            .expect("station serialization must survive the Stop caller's death");
 
-        // Release: the operation persists false, admits the Shutdown (the
-        // command channel is empty, so admission is immediate), stops the
-        // pipeline and cleans the map; only then does the next transition
-        // proceed.
-        hooks.before_stop.release();
-        next_transition
-            .await
-            .expect("the next transition must proceed once the committed stop finished");
-        assert!(
-            !map.lock().unwrap_or_else(|e| e.into_inner()).contains_key(&station_id),
-            "the committed stop must remove the runtime even though the caller was cancelled before persistence"
-        );
-        assert!(
-            pipeline.calls().contains(&Call::Stop),
-            "the runtime must have been stopped by the operation"
-        );
-        assert_eq!(
-            repository::find_station_started(&pool, station_id).await.expect("started readback"),
-            Some(false),
-            "final state: is_started=false"
-        );
+            // Park the stop operation BEFORE the DB write: it holds the
+            // station guard, but `is_started=false` has not been persisted yet.
+            let hooks = lifecycle.test_hooks();
+            hooks.before_stop.arm();
+            let stop_task = tokio::spawn({
+                let pool = pool.pool.clone();
+                let map = Arc::clone(&map);
+                let lifecycle = Arc::clone(&lifecycle);
+                async move { stop_station(&pool, &map, &lifecycle, station_id).await }
+            });
+            tokio::time::timeout(Duration::from_secs(5), hooks.before_stop.entered().notified())
+                .await
+                .expect("the Stop must reach the before_stop hook");
 
-        // Clean up this run's rows.
-        sqlx::query("DELETE FROM stations WHERE id = $1")
-            .bind(station_id)
-            .execute(&pool)
-            .await
-            .expect("station cleanup");
-        sqlx::query("DELETE FROM users WHERE id = $1")
-            .bind(user_id)
-            .execute(&pool)
-            .await
-            .expect("user cleanup");
+            // The mutation has NOT started: desired state is still `true` and
+            // the runtime is still mapped.
+            assert_eq!(
+                repository::find_station_started(pool, station_id).await.expect("started readback"),
+                Some(true),
+                "is_started must still be true: the DB write has not started"
+            );
+            assert!(
+                map.lock().unwrap_or_else(|e| e.into_inner()).contains_key(&station_id),
+                "the runtime must still be mapped"
+            );
+
+            // The request caller dies BEFORE the mutation. The detached stop
+            // operation must keep the guard and finish persist + shutdown.
+            stop_task.abort();
+            assert!(stop_task.await.is_err(), "the Stop caller must be cancelled");
+
+            // A new transition must NOT pass: it contends on the station lock
+            // held by the detached stop operation.
+            let mut contended = hooks.lock_contended.contend_watcher();
+            let next_transition = tokio::spawn({
+                let lifecycle = Arc::clone(&lifecycle);
+                async move {
+                    let _guard = lifecycle.lock(station_id).await;
+                }
+            });
+            contended
+                .wait("the next transition to contend behind the committed stop")
+                .await
+                .expect("station serialization must survive the Stop caller's death");
+
+            // Release: the operation persists false, admits the Shutdown (the
+            // command channel is empty, so admission is immediate), stops the
+            // pipeline and cleans the map; only then does the next transition
+            // proceed.
+            hooks.before_stop.release();
+            next_transition
+                .await
+                .expect("the next transition must proceed once the committed stop finished");
+            assert!(
+                !map.lock().unwrap_or_else(|e| e.into_inner()).contains_key(&station_id),
+                "the committed stop must remove the runtime even though the caller was cancelled before persistence"
+            );
+            assert!(
+                pipeline.calls().contains(&Call::Stop),
+                "the runtime must have been stopped by the operation"
+            );
+            assert_eq!(
+                repository::find_station_started(pool, station_id).await.expect("started readback"),
+                Some(false),
+                "final state: is_started=false"
+            );
+        })
+        .await;
     }
 }

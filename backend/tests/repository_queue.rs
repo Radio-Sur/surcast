@@ -1,5 +1,4 @@
-mod common;
-
+use sqlx::PgPool;
 use surcast_backend::auth::models::Role;
 use surcast_backend::auth::repository as auth_repo;
 use surcast_backend::playlists::repository as playlists_repo;
@@ -10,7 +9,7 @@ use surcast_backend::stations::repository as stations_repo;
 use surcast_backend::stations::repository::CreateStationParams;
 use uuid::Uuid;
 
-async fn make_user(db: &sqlx::PgPool) -> Uuid {
+async fn make_user(db: &PgPool) -> Uuid {
     let id = Uuid::new_v4();
     auth_repo::insert_user(db, id, &format!("user_{id}"), "hash", "Queue Tester", &Role::Admin)
         .await
@@ -18,7 +17,7 @@ async fn make_user(db: &sqlx::PgPool) -> Uuid {
     id
 }
 
-async fn make_station(db: &sqlx::PgPool, user_id: Uuid) -> Uuid {
+async fn make_station(db: &PgPool, user_id: Uuid) -> Uuid {
     let id = Uuid::new_v4();
     stations_repo::insert_station(
         db,
@@ -41,7 +40,7 @@ async fn make_station(db: &sqlx::PgPool, user_id: Uuid) -> Uuid {
     id
 }
 
-async fn make_song(db: &sqlx::PgPool, user_id: Uuid) -> Uuid {
+async fn make_song(db: &PgPool, user_id: Uuid) -> Uuid {
     let id = Uuid::new_v4();
     songs_repo::insert_song_record(
         db,
@@ -64,9 +63,8 @@ async fn make_song(db: &sqlx::PgPool, user_id: Uuid) -> Uuid {
     id
 }
 
-#[tokio::test]
-async fn test_insert_queue_item_and_find_all() {
-    let db = common::setup_db().await;
+#[sqlx::test(migrations = "./migrations")]
+async fn test_insert_queue_item_and_find_all(db: PgPool) {
     let user_id = make_user(&db).await;
     let station_id = make_station(&db, user_id).await;
     let song_id = make_song(&db, user_id).await;
@@ -83,9 +81,8 @@ async fn test_insert_queue_item_and_find_all() {
     assert_eq!(items[0].3, 0);
 }
 
-#[tokio::test]
-async fn test_queue_next_position() {
-    let db = common::setup_db().await;
+#[sqlx::test(migrations = "./migrations")]
+async fn test_queue_next_position(db: PgPool) {
     let user_id = make_user(&db).await;
     let station_id = make_station(&db, user_id).await;
     let song_id = make_song(&db, user_id).await;
@@ -103,9 +100,8 @@ async fn test_queue_next_position() {
     assert_eq!(pos, 1);
 }
 
-#[tokio::test]
-async fn test_reorder_queue() {
-    let db = common::setup_db().await;
+#[sqlx::test(migrations = "./migrations")]
+async fn test_reorder_queue(db: PgPool) {
     let user_id = make_user(&db).await;
     let station_id = make_station(&db, user_id).await;
     let song1 = make_song(&db, user_id).await;
@@ -127,9 +123,8 @@ async fn test_reorder_queue() {
     assert_eq!(positions, vec![0, 1]);
 }
 
-#[tokio::test]
-async fn test_delete_queue_by_id() {
-    let db = common::setup_db().await;
+#[sqlx::test(migrations = "./migrations")]
+async fn test_delete_queue_by_id(db: PgPool) {
     let user_id = make_user(&db).await;
     let station_id = make_station(&db, user_id).await;
     let song_id = make_song(&db, user_id).await;
@@ -147,9 +142,8 @@ async fn test_delete_queue_by_id() {
     assert!(items.is_empty());
 }
 
-#[tokio::test]
-async fn test_shift_queue_positions_from() {
-    let db = common::setup_db().await;
+#[sqlx::test(migrations = "./migrations")]
+async fn test_shift_queue_positions_from(db: PgPool) {
     let user_id = make_user(&db).await;
     let station_id = make_station(&db, user_id).await;
     let song1 = make_song(&db, user_id).await;
@@ -170,9 +164,8 @@ async fn test_shift_queue_positions_from() {
     assert!(positions.contains(&1));
 }
 
-#[tokio::test]
-async fn test_delete_queue_by_playlist() {
-    let db = common::setup_db().await;
+#[sqlx::test(migrations = "./migrations")]
+async fn test_delete_queue_by_playlist(db: PgPool) {
     let user_id = make_user(&db).await;
     let station_id = make_station(&db, user_id).await;
     let song_id = make_song(&db, user_id).await;
@@ -196,9 +189,8 @@ async fn test_delete_queue_by_playlist() {
     assert!(items.is_empty());
 }
 
-#[tokio::test]
-async fn test_trim_consumed_queue_items_removes_played_rows() {
-    let db = common::setup_db().await;
+#[sqlx::test(migrations = "./migrations")]
+async fn test_trim_consumed_queue_items_removes_played_rows(db: PgPool) {
     let user_id = make_user(&db).await;
     let station_id = make_station(&db, user_id).await;
     let stale_song = make_song(&db, user_id).await;
@@ -245,9 +237,8 @@ async fn test_trim_consumed_queue_items_removes_played_rows() {
     assert_eq!(remaining[0].1, 2);
 }
 
-#[tokio::test]
-async fn test_trim_consumed_queue_items_ignores_stale_position_cutoff() {
-    let db = common::setup_db().await;
+#[sqlx::test(migrations = "./migrations")]
+async fn test_trim_consumed_queue_items_ignores_stale_position_cutoff(db: PgPool) {
     let user_id = make_user(&db).await;
     let station_id = make_station(&db, user_id).await;
     let played_song = make_song(&db, user_id).await;
@@ -300,9 +291,8 @@ async fn test_trim_consumed_queue_items_ignores_stale_position_cutoff() {
     assert_eq!(remaining[2].1, 3);
 }
 
-#[tokio::test]
-async fn test_renumber_syncs_current_song_index() {
-    let db = common::setup_db().await;
+#[sqlx::test(migrations = "./migrations")]
+async fn test_renumber_syncs_current_song_index(db: PgPool) {
     let user_id = make_user(&db).await;
     let station_id = make_station(&db, user_id).await;
     let song_a = make_song(&db, user_id).await;
@@ -375,9 +365,8 @@ async fn test_renumber_syncs_current_song_index() {
     assert_eq!(indexed, 1);
 }
 
-#[tokio::test]
-async fn test_trim_consumed_queue_items_keeps_unplayed_rows() {
-    let db = common::setup_db().await;
+#[sqlx::test(migrations = "./migrations")]
+async fn test_trim_consumed_queue_items_keeps_unplayed_rows(db: PgPool) {
     let user_id = make_user(&db).await;
     let station_id = make_station(&db, user_id).await;
     let song = make_song(&db, user_id).await;

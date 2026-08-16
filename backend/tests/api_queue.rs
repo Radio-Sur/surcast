@@ -1,9 +1,9 @@
 mod api_common;
-mod common;
 
 use axum_test::multipart::{MultipartForm, Part};
 use axum_test::TestServer;
 use serde_json::json;
+use sqlx::PgPool;
 use uuid::Uuid;
 
 fn make_song_form() -> MultipartForm {
@@ -16,8 +16,7 @@ fn make_song_form() -> MultipartForm {
         )
 }
 
-async fn setup_with_station_and_song() -> (TestServer, String, Uuid, Uuid) {
-    let pool = common::setup_db().await;
+async fn setup_with_station_and_song(pool: PgPool) -> (TestServer, String, Uuid, Uuid) {
     let app = api_common::create_test_app(pool);
     let server = TestServer::new(app);
 
@@ -81,9 +80,9 @@ async fn setup_with_station_and_song() -> (TestServer, String, Uuid, Uuid) {
     (server, token, station_id, song_id)
 }
 
-#[tokio::test]
-async fn test_add_songs_to_queue_returns_200() {
-    let (server, token, station_id, song_id) = setup_with_station_and_song().await;
+#[sqlx::test(migrations = "./migrations")]
+async fn test_add_songs_to_queue_returns_200(pool: PgPool) {
+    let (server, token, station_id, song_id) = setup_with_station_and_song(pool).await;
 
     let resp = server
         .post(&format!("/api/stations/{station_id}/queue"))
@@ -93,9 +92,9 @@ async fn test_add_songs_to_queue_returns_200() {
     assert_eq!(resp.status_code(), 201);
 }
 
-#[tokio::test]
-async fn test_list_queue_returns_200() {
-    let (server, token, station_id, song_id) = setup_with_station_and_song().await;
+#[sqlx::test(migrations = "./migrations")]
+async fn test_list_queue_returns_200(pool: PgPool) {
+    let (server, token, station_id, song_id) = setup_with_station_and_song(pool).await;
 
     server
         .post(&format!("/api/stations/{station_id}/queue"))
@@ -112,9 +111,9 @@ async fn test_list_queue_returns_200() {
     assert!(!items.is_empty());
 }
 
-#[tokio::test]
-async fn test_reorder_queue_returns_200() {
-    let (server, token, station_id, song_id) = setup_with_station_and_song().await;
+#[sqlx::test(migrations = "./migrations")]
+async fn test_reorder_queue_returns_200(pool: PgPool) {
+    let (server, token, station_id, song_id) = setup_with_station_and_song(pool).await;
 
     let add_resp = server
         .post(&format!("/api/stations/{station_id}/queue"))
@@ -132,9 +131,9 @@ async fn test_reorder_queue_returns_200() {
     assert_eq!(resp.status_code(), 200);
 }
 
-#[tokio::test]
-async fn test_insert_song_at_position_returns_200() {
-    let (server, token, station_id, song_id) = setup_with_station_and_song().await;
+#[sqlx::test(migrations = "./migrations")]
+async fn test_insert_song_at_position_returns_200(pool: PgPool) {
+    let (server, token, station_id, song_id) = setup_with_station_and_song(pool).await;
 
     server
         .post(&format!("/api/stations/{station_id}/queue"))
@@ -150,9 +149,9 @@ async fn test_insert_song_at_position_returns_200() {
     assert_eq!(resp.status_code(), 200);
 }
 
-#[tokio::test]
-async fn test_remove_song_from_queue_returns_204() {
-    let (server, token, station_id, song_id) = setup_with_station_and_song().await;
+#[sqlx::test(migrations = "./migrations")]
+async fn test_remove_song_from_queue_returns_204(pool: PgPool) {
+    let (server, token, station_id, song_id) = setup_with_station_and_song(pool).await;
 
     let add_resp = server
         .post(&format!("/api/stations/{station_id}/queue"))
@@ -169,9 +168,9 @@ async fn test_remove_song_from_queue_returns_204() {
     assert_eq!(resp.status_code(), 204);
 }
 
-#[tokio::test]
-async fn test_add_nonexistent_song_to_queue_returns_400() {
-    let (server, token, station_id, _) = setup_with_station_and_song().await;
+#[sqlx::test(migrations = "./migrations")]
+async fn test_add_nonexistent_song_to_queue_returns_400(pool: PgPool) {
+    let (server, token, station_id, _) = setup_with_station_and_song(pool).await;
     let fake_song_id = Uuid::nil();
 
     let resp = server
@@ -182,9 +181,9 @@ async fn test_add_nonexistent_song_to_queue_returns_400() {
     assert_eq!(resp.status_code(), 400);
 }
 
-#[tokio::test]
-async fn test_remove_playlist_from_queue_returns_204() {
-    let (server, token, station_id, song_id) = setup_with_station_and_song().await;
+#[sqlx::test(migrations = "./migrations")]
+async fn test_remove_playlist_from_queue_returns_204(pool: PgPool) {
+    let (server, token, station_id, song_id) = setup_with_station_and_song(pool).await;
 
     let playlist_resp = server
         .post("/api/playlists")
@@ -206,9 +205,8 @@ async fn test_remove_playlist_from_queue_returns_204() {
     assert_eq!(resp.status_code(), 204);
 }
 
-#[tokio::test]
-async fn test_add_songs_trims_consumed_queue_items() {
-    let pool = common::setup_db().await;
+#[sqlx::test(migrations = "./migrations")]
+async fn test_add_songs_trims_consumed_queue_items(pool: PgPool) {
     let app = api_common::create_test_app(pool.clone());
     let server = TestServer::new(app);
 
@@ -280,9 +278,8 @@ async fn test_add_songs_trims_consumed_queue_items() {
     assert_eq!(items[0]["title"], "Fresh Song");
 }
 
-#[tokio::test]
-async fn test_reorder_then_add_keeps_upcoming_songs() {
-    let pool = common::setup_db().await;
+#[sqlx::test(migrations = "./migrations")]
+async fn test_reorder_then_add_keeps_upcoming_songs(pool: PgPool) {
     let app = api_common::create_test_app(pool.clone());
     let server = TestServer::new(app);
 

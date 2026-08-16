@@ -1,12 +1,11 @@
 mod api_common;
-mod common;
 
 use axum_test::TestServer;
 use serde_json::{json, Value};
+use sqlx::PgPool;
 
-async fn setup() -> (TestServer, String) {
-    let db = common::setup_db().await;
-    let app = api_common::create_test_app(db);
+async fn setup(pool: PgPool) -> (TestServer, String) {
+    let app = api_common::create_test_app(pool);
     let server = TestServer::new(app);
     server
         .post("/api/setup/init")
@@ -24,16 +23,16 @@ fn auth(token: &str) -> String {
     format!("Bearer {token}")
 }
 
-#[tokio::test]
-async fn test_get_settings_without_auth_returns_401() {
-    let (server, _) = setup().await;
+#[sqlx::test(migrations = "./migrations")]
+async fn test_get_settings_without_auth_returns_401(pool: PgPool) {
+    let (server, _) = setup(pool).await;
     let resp = server.get("/api/admin/icecast").await;
     assert_eq!(resp.status_code(), 401);
 }
 
-#[tokio::test]
-async fn test_get_settings_with_auth_returns_200_or_500() {
-    let (server, token) = setup().await;
+#[sqlx::test(migrations = "./migrations")]
+async fn test_get_settings_with_auth_returns_200_or_500(pool: PgPool) {
+    let (server, token) = setup(pool).await;
     let resp = server.get("/api/admin/icecast").add_header("Authorization", &auth(&token)).await;
     // 200 = settings returned, 500 = icecast not installed
     assert!(
@@ -43,16 +42,16 @@ async fn test_get_settings_with_auth_returns_200_or_500() {
     );
 }
 
-#[tokio::test]
-async fn test_patch_settings_without_auth_returns_401() {
-    let (server, _) = setup().await;
+#[sqlx::test(migrations = "./migrations")]
+async fn test_patch_settings_without_auth_returns_401(pool: PgPool) {
+    let (server, _) = setup(pool).await;
     let resp = server.patch("/api/admin/icecast").json(&json!({"enabled": false})).await;
     assert_eq!(resp.status_code(), 401);
 }
 
-#[tokio::test]
-async fn test_patch_settings_with_auth_returns_200_or_500() {
-    let (server, token) = setup().await;
+#[sqlx::test(migrations = "./migrations")]
+async fn test_patch_settings_with_auth_returns_200_or_500(pool: PgPool) {
+    let (server, token) = setup(pool).await;
     let resp = server
         .patch("/api/admin/icecast")
         .add_header("Authorization", &auth(&token))
@@ -65,16 +64,16 @@ async fn test_patch_settings_with_auth_returns_200_or_500() {
     );
 }
 
-#[tokio::test]
-async fn test_start_icecast_without_auth_returns_401() {
-    let (server, _) = setup().await;
+#[sqlx::test(migrations = "./migrations")]
+async fn test_start_icecast_without_auth_returns_401(pool: PgPool) {
+    let (server, _) = setup(pool).await;
     let resp = server.post("/api/admin/icecast/start").await;
     assert_eq!(resp.status_code(), 401);
 }
 
-#[tokio::test]
-async fn test_start_icecast_with_auth_returns_200_or_400() {
-    let (server, token) = setup().await;
+#[sqlx::test(migrations = "./migrations")]
+async fn test_start_icecast_with_auth_returns_200_or_400(pool: PgPool) {
+    let (server, token) = setup(pool).await;
     let resp = server
         .post("/api/admin/icecast/start")
         .add_header("Authorization", &auth(&token))
@@ -87,9 +86,9 @@ async fn test_start_icecast_with_auth_returns_200_or_400() {
     );
 }
 
-#[tokio::test]
-async fn test_stop_icecast_with_auth_returns_200_or_400() {
-    let (server, token) = setup().await;
+#[sqlx::test(migrations = "./migrations")]
+async fn test_stop_icecast_with_auth_returns_200_or_400(pool: PgPool) {
+    let (server, token) = setup(pool).await;
     let resp = server
         .post("/api/admin/icecast/stop")
         .add_header("Authorization", &auth(&token))
@@ -102,9 +101,9 @@ async fn test_stop_icecast_with_auth_returns_200_or_400() {
     );
 }
 
-#[tokio::test]
-async fn test_test_connection_with_auth_returns_200_or_500() {
-    let (server, token) = setup().await;
+#[sqlx::test(migrations = "./migrations")]
+async fn test_test_connection_with_auth_returns_200_or_500(pool: PgPool) {
+    let (server, token) = setup(pool).await;
     let resp = server
         .post("/api/admin/icecast/test")
         .add_header("Authorization", &auth(&token))
@@ -116,10 +115,9 @@ async fn test_test_connection_with_auth_returns_200_or_500() {
     );
 }
 
-#[tokio::test]
-async fn test_non_admin_user_cannot_access_icecast() {
-    let db = common::setup_db().await;
-    let app = api_common::create_test_app(db);
+#[sqlx::test(migrations = "./migrations")]
+async fn test_non_admin_user_cannot_access_icecast(pool: PgPool) {
+    let app = api_common::create_test_app(pool);
     let server = TestServer::new(app);
     server
         .post("/api/setup/init")

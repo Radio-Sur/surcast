@@ -30,6 +30,8 @@ use surcast_backend::stations::handlers::stream::StationLifecycleLocks;
 use tempfile::TempDir;
 use uuid::Uuid;
 
+use crate::common::TestDb;
+
 pub fn failure(message: impl Into<String>) -> Box<dyn std::error::Error> {
     Box::new(std::io::Error::other(message.into()))
 }
@@ -107,6 +109,10 @@ pub struct StatusView {
 pub struct StreamerTestApp {
     /// Durable infrastructure shared by every backend session.
     pub db: PgPool,
+    /// Owner of the isolated test database behind `db`; dropped (closed
+    /// pool + DROP DATABASE) at the very end of teardown, after every other
+    /// `PgPool` clone is gone.
+    test_db: Option<TestDb>,
     pub files: TempDir,
     pub icecast_dir_path: PathBuf,
     pub port: u16,
@@ -128,6 +134,21 @@ fn teardown_failure_suffix(errors: &[String]) -> String {
     } else {
         format!("; teardown also failed: {}", errors.join("; "))
     }
+}
+
+/// Runs one fallible `StreamerTestApp::build` activation step. On error the
+/// whole app is torn down (session streamers, Icecast child, test database)
+/// and the original error is returned, augmented with any teardown failures.
+async fn with_build_teardown(
+    app: &mut StreamerTestApp,
+    what: &str,
+    step: impl AsyncFnOnce(&mut StreamerTestApp) -> Result<(), Box<dyn std::error::Error>>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if let Err(error) = step(app).await {
+        let teardown_errors = app.teardown().await;
+        return Err(failure(format!("{what}: {error}{}", teardown_failure_suffix(&teardown_errors))));
+    }
+    Ok(())
 }
 
 /// State that belongs to one backend process lifetime: the router/`TestServer`,
@@ -163,21 +184,27 @@ impl StreamerTestApp {
 
     async fn build(http_transport: bool) -> Result<Self, Box<dyn std::error::Error>> {
         let _ = tracing_subscriber::fmt().with_test_writer().try_init();
-        let db = crate::common::setup_db().await;
+        // Local preparation first: every resource created here is cleaned up
+        // by a plain Drop (the IcecastManager exists but has NOT started a
+        // child process yet). Then the test DB is acquired immediately before
+        // constructing StreamerTestApp — once Self owns TestDb, later
+        // fallible resource activation is safe because every build error
+        // path goes through teardown().
         let files = TempDir::new().unwrap();
         let icecast_dir = TempDir::new().unwrap();
         let icecast_dir_path = icecast_dir.path().to_path_buf();
         let port = free_port();
         let icecast = IcecastManager::new(icecast_dir.path().into());
-        icecast
-            .start(port.into(), "surcast", "admin", "surcast")
-            .await
-            .map_err(|message| failure(format!("icecast start failed: {message}")))?;
         let mut config = crate::api_common::test_config();
         config.upload_dir = files.path().display().to_string();
         let client = reqwest::Client::builder().timeout(Duration::from_secs(5)).build().unwrap();
+        // Keep test DB acquisition immediately before ownership transfer into
+        // Self: there must be no fallible operation in between.
+        let test_db = crate::common::setup_db().await;
+        let db = test_db.pool.clone();
         let mut app = Self {
             db,
+            test_db: Some(test_db),
             files,
             icecast_dir_path,
             port,
@@ -187,19 +214,27 @@ impl StreamerTestApp {
             icecast,
             session: None,
         };
+        // From here on, every operation that activates a durable/external
+        // resource (Icecast child, backend session, SQL init) runs under
+        // `with_build_teardown`, which tears the whole app down on error.
+        with_build_teardown(&mut app, "icecast start failed", async |app| {
+            app.icecast
+                .start(port.into(), "surcast", "admin", "surcast")
+                .await
+                .map_err(failure)?;
+            Ok(())
+        })
+        .await?;
         // The first session initializes the schema (fresh test DB per run);
         // restarted sessions skip setup and only log in. Any failure after
         // the Icecast child started must stop it again — `IcecastManager`
         // has no Drop, so a leaked child would keep running for the rest of
         // the test binary.
-        if let Err(error) = app.spawn_session(http_transport, true).await {
-            let teardown_errors = app.teardown().await;
-            return Err(failure(format!(
-                "first backend session failed to spawn: {error}{}",
-                teardown_failure_suffix(&teardown_errors)
-            )));
-        }
-        if let Err(error) = async {
+        with_build_teardown(&mut app, "first backend session failed to spawn", async |app| {
+            app.spawn_session(http_transport, true).await
+        })
+        .await?;
+        with_build_teardown(&mut app, "test app initialization failed", async |app| {
             sqlx::query(
                 "UPDATE icecast_settings SET enabled=true, mode='managed', port=$1, \
                  source_password='surcast', admin_user='admin', admin_password='surcast'",
@@ -212,15 +247,8 @@ impl StreamerTestApp {
                 .await?;
             app.admin_id = admin_id;
             Ok::<(), Box<dyn std::error::Error>>(())
-        }
-        .await
-        {
-            let teardown_errors = app.teardown().await;
-            return Err(failure(format!(
-                "test app initialization failed: {error}{}",
-                teardown_failure_suffix(&teardown_errors)
-            )));
-        }
+        })
+        .await?;
         Ok(app)
     }
 
@@ -325,45 +353,74 @@ impl StreamerTestApp {
     }
 
     /// Runs the scenario and guarantees teardown afterwards: every active
-    /// station streamer (including scenario-created maps) is shut down and
-    /// every managed Icecast process is stopped, even when the scenario
-    /// returned `Err` (which is then reported as a panic, like the original
-    /// suite). An Icecast that the scenario already stopped itself is
-    /// tolerated; any other teardown failure panics when the scenario
-    /// succeeded.
+    /// station streamer (including scenario-created maps), the managed
+    /// Icecast and the isolated test database are released even when the
+    /// scenario returned `Err` — or panicked (an assertion failure resumes
+    /// the original panic after teardown, so the failure report is
+    /// unchanged, but the test database is never leaked by a panic). An
+    /// Icecast that the scenario already stopped itself is tolerated; any
+    /// other teardown failure panics when the scenario succeeded.
     pub async fn run<R>(mut self, scenario: impl AsyncFnOnce(&mut Self) -> Result<R, Box<dyn std::error::Error>>) -> R {
-        let result = scenario(&mut self).await;
+        use futures::FutureExt;
+        let result = std::panic::AssertUnwindSafe(async { scenario(&mut self).await })
+            .catch_unwind()
+            .await;
         let teardown_errors = self.teardown().await;
         match result {
-            Ok(value) => {
+            Ok(Ok(value)) => {
                 if !teardown_errors.is_empty() {
                     panic!("scenario failed cleanly, but teardown failed: {}", teardown_errors.join("; "));
                 }
                 value
             }
-            Err(error) => {
+            Ok(Err(error)) => {
                 if teardown_errors.is_empty() {
                     panic!("{error}");
                 }
                 panic!("scenario failed: {error}; teardown also failed: {}", teardown_errors.join("; "));
             }
+            Err(panic) => {
+                // The scenario panicked (e.g. an assertion). Teardown has
+                // already released streamers, Icecast and the test database;
+                // resume the original panic so the failure report is
+                // unchanged.
+                if !teardown_errors.is_empty() {
+                    eprintln!("scenario panicked; teardown also failed: {}", teardown_errors.join("; "));
+                }
+                std::panic::resume_unwind(panic);
+            }
         }
     }
 
     /// Shuts down every live resource owned by the app: the current session's
-    /// streamers, then the managed Icecast. Cleanup continues past individual
-    /// failures; all errors are returned so the runner can report them
-    /// alongside the scenario result instead of discarding them.
+    /// streamers, then the managed Icecast, then the isolated test database.
+    /// Cleanup continues past individual failures; all errors are returned so
+    /// the runner can report them alongside the scenario result instead of
+    /// discarding them.
     async fn teardown(&mut self) -> Vec<String> {
         let mut errors = Vec::new();
-        if let Some(session) = &self.session {
+        if let Some(session) = self.session.take() {
             let active = { session.streamers.lock().unwrap().values().cloned().collect::<Vec<_>>() };
             futures::future::join_all(active.into_iter().map(|streamer| async move { streamer.shutdown().await })).await;
+            // Dropping the session drops the TestServer (AppState), the
+            // streamers map and every other clone of the test pool, so the
+            // DROP DATABASE below cannot race live connections.
+            drop(session);
         }
         match self.icecast.stop().await {
             Err(message) if message.contains("not running") => {}
             Err(message) => errors.push(format!("icecast stop: {message}")),
             Ok(_) => {}
+        }
+        // The test database is released LAST, after every other PgPool clone
+        // is gone: cleanup closes the pool and DROPs the database from the
+        // maintenance connection. Also runs when initialization failed after
+        // the database was created (build() calls teardown on its error
+        // paths).
+        if let Some(test_db) = self.test_db.take() {
+            if let Err(message) = test_db.cleanup().await {
+                errors.push(format!("test database cleanup: {message}"));
+            }
         }
         errors
     }
@@ -958,4 +1015,44 @@ pub async fn run_streamer_test<R>(scenario: impl AsyncFnOnce(&mut StreamerTestAp
 #[allow(dead_code)]
 pub async fn run_http_streamer_test<R>(scenario: impl AsyncFnOnce(&mut StreamerTestApp) -> Result<R, Box<dyn std::error::Error>>) -> R {
     StreamerTestApp::new_http().await.run(scenario).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use futures::FutureExt;
+
+    /// A panicking scenario must still release the isolated test database:
+    /// `run()` catches the unwind, runs teardown (streamers, Icecast, test
+    /// database) and only then resumes the original panic.
+    #[tokio::test]
+    async fn panicking_scenario_still_releases_the_test_database() {
+        let app = StreamerTestApp::new().await;
+        let db_name = app.test_db.as_ref().expect("the app must own a test database").db_name.clone();
+
+        let outcome = std::panic::AssertUnwindSafe(app.run(async |_app| {
+            panic!("simulated scenario panic");
+            #[allow(unreachable_code)]
+            Ok(())
+        }))
+        .catch_unwind()
+        .await;
+        assert!(outcome.is_err(), "the scenario panic must propagate after teardown");
+
+        // The database is gone: the panic did not leak it.
+        let Some(options) = surcast_backend::test_db::connection_options() else {
+            return;
+        };
+        let admin_pool = sqlx::postgres::PgPoolOptions::new()
+            .connect_with(options.database("postgres"))
+            .await
+            .expect("admin connection must work");
+        let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM pg_database WHERE datname = $1)")
+            .bind(&db_name)
+            .fetch_one(&admin_pool)
+            .await
+            .expect("pg_database lookup");
+        admin_pool.close().await;
+        assert!(!exists, "the panicking scenario leaked its test database '{db_name}'");
+    }
 }

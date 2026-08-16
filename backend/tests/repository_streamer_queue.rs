@@ -8,8 +8,7 @@
 //! that raise once (sequences are not rolled back, so the "fail once" state
 //! survives the rollback).
 
-mod common;
-
+use sqlx::PgPool;
 use surcast_backend::auth::models::Role;
 use surcast_backend::auth::repository as auth_repo;
 use surcast_backend::songs::repository as songs_repo;
@@ -20,7 +19,7 @@ use surcast_backend::streamer::queue_repository::QueueRepository;
 use surcast_backend::streamer::queue_state::QueueCursor;
 use uuid::Uuid;
 
-async fn make_user(db: &sqlx::PgPool) -> Uuid {
+async fn make_user(db: &PgPool) -> Uuid {
     let id = Uuid::new_v4();
     auth_repo::insert_user(db, id, &format!("user_{id}"), "hash", "Streamer Queue Tester", &Role::Admin)
         .await
@@ -28,7 +27,7 @@ async fn make_user(db: &sqlx::PgPool) -> Uuid {
     id
 }
 
-async fn make_station(db: &sqlx::PgPool, user_id: Uuid) -> Uuid {
+async fn make_station(db: &PgPool, user_id: Uuid) -> Uuid {
     let id = Uuid::new_v4();
     stations_repo::insert_station(
         db,
@@ -51,7 +50,7 @@ async fn make_station(db: &sqlx::PgPool, user_id: Uuid) -> Uuid {
     id
 }
 
-async fn make_song(db: &sqlx::PgPool, user_id: Uuid, position: i32) -> Uuid {
+async fn make_song(db: &PgPool, user_id: Uuid, position: i32) -> Uuid {
     let id = Uuid::new_v4();
     songs_repo::insert_song_record(
         db,
@@ -76,7 +75,7 @@ async fn make_song(db: &sqlx::PgPool, user_id: Uuid, position: i32) -> Uuid {
 
 /// Queues `song_id` at `position` (following the repository's own insert
 /// helper so position shifts and defaults stay consistent with the app).
-async fn queue_song(db: &sqlx::PgPool, station_id: Uuid, song_id: Uuid) -> Uuid {
+async fn queue_song(db: &PgPool, station_id: Uuid, song_id: Uuid) -> Uuid {
     let queue_item_id = Uuid::new_v4();
     let position: i32 = sqlx::query_scalar("SELECT COALESCE(MAX(position) + 1, 0) FROM station_queue WHERE station_id = $1")
         .bind(station_id)
@@ -99,7 +98,7 @@ async fn queue_song(db: &sqlx::PgPool, station_id: Uuid, song_id: Uuid) -> Uuid 
 
 /// A BEFORE INSERT trigger on station_queue that raises exactly once (the
 /// "fail once" flag lives in a sequence, which rollbacks never rewind).
-async fn fail_first_insert(db: &sqlx::PgPool, sequence_name: &str, trigger_name: &str) {
+async fn fail_first_insert(db: &PgPool, sequence_name: &str, trigger_name: &str) {
     sqlx::query(&format!("CREATE SEQUENCE {sequence_name}")).execute(db).await.unwrap();
     sqlx::query(&format!(
         "CREATE FUNCTION {trigger_name}_fn() RETURNS trigger AS $$
@@ -122,7 +121,7 @@ async fn fail_first_insert(db: &sqlx::PgPool, sequence_name: &str, trigger_name:
 }
 
 /// A BEFORE DELETE trigger on station_queue that raises exactly once.
-async fn fail_first_delete(db: &sqlx::PgPool, sequence_name: &str, trigger_name: &str) {
+async fn fail_first_delete(db: &PgPool, sequence_name: &str, trigger_name: &str) {
     sqlx::query(&format!("CREATE SEQUENCE {sequence_name}")).execute(db).await.unwrap();
     sqlx::query(&format!(
         "CREATE FUNCTION {trigger_name}_fn() RETURNS trigger AS $$
@@ -146,7 +145,7 @@ async fn fail_first_delete(db: &sqlx::PgPool, sequence_name: &str, trigger_name:
 
 /// An active `station_schedule_events` row for today covering the whole day,
 /// so the schedule fill is active regardless of the weekday.
-async fn station_autodj_songs_ahead(db: &sqlx::PgPool, station_id: Uuid, songs_ahead: i32) {
+async fn station_autodj_songs_ahead(db: &PgPool, station_id: Uuid, songs_ahead: i32) {
     // The scheduler matches the event against `Local::now()` (the server's
     // wall clock), while Postgres' CURRENT_DATE uses the session timezone
     // (GMT here). Around midnight the two dates can differ, which would
@@ -170,9 +169,8 @@ async fn station_autodj_songs_ahead(db: &sqlx::PgPool, station_id: Uuid, songs_a
 /// Test A: the first refill attempt hits a transient SQL error; the retry
 /// starts a brand-new transaction and succeeds. Expects: success, consistent
 /// data, and no SQL ever executed on the aborted transaction.
-#[tokio::test]
-async fn commit_cursor_and_refill_retries_a_transient_fill_error_on_a_fresh_transaction() {
-    let db = common::setup_db().await;
+#[sqlx::test(migrations = "./migrations")]
+async fn commit_cursor_and_refill_retries_a_transient_fill_error_on_a_fresh_transaction(db: PgPool) {
     let user_id = make_user(&db).await;
     let station_id = make_station(&db, user_id).await;
     // Several distinct songs (and artists) so the AutoDJ window can fill.
@@ -219,9 +217,8 @@ async fn commit_cursor_and_refill_retries_a_transient_fill_error_on_a_fresh_tran
 /// Test B: a trim DELETE fails. The error must not be swallowed; the
 /// transaction is rolled back and the retry uses a fresh transaction, so the
 /// cursor ends up persisted and the trim completes.
-#[tokio::test]
-async fn commit_cursor_and_refill_rolls_back_and_retries_after_a_trim_error() {
-    let db = common::setup_db().await;
+#[sqlx::test(migrations = "./migrations")]
+async fn commit_cursor_and_refill_rolls_back_and_retries_after_a_trim_error(db: PgPool) {
     let user_id = make_user(&db).await;
     let station_id = make_station(&db, user_id).await;
     // played_limit = 1. Two previously consumed rows (older than the current
@@ -289,9 +286,8 @@ async fn commit_cursor_and_refill_rolls_back_and_retries_after_a_trim_error() {
 /// Test B': when the trim error never goes away the error must be propagated
 /// (not swallowed) and the failed transaction must not have persisted
 /// anything.
-#[tokio::test]
-async fn commit_cursor_and_refill_propagates_a_persistent_trim_error_without_partial_state() {
-    let db = common::setup_db().await;
+#[sqlx::test(migrations = "./migrations")]
+async fn commit_cursor_and_refill_propagates_a_persistent_trim_error_without_partial_state(db: PgPool) {
     let user_id = make_user(&db).await;
     let station_id = make_station(&db, user_id).await;
     let mut songs = Vec::new();

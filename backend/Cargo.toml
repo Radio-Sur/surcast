@@ -9,7 +9,7 @@ futures = "0.3"
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "postgres", "chrono", "uuid"] }
+sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "postgres", "chrono", "uuid", "macros", "migrate"] }
 jsonwebtoken = "9"
 bcrypt = "0.19"
 tower-http = { version = "0.6", features = ["cors", "trace", "fs", "catch-panic"] }
@@ -34,7 +34,16 @@ gstreamer = { version = "0.25.3", features = ["v1_20"] }
 gstreamer-controller = { version = "0.25.2", features = ["v1_20"] }
 gstreamer-pbutils = { version = "0.25.2", features = ["v1_20"] }
 
+[features]
+# Shared test-database provisioner (`src/test_db.rs`). Enabled whenever any
+# test target builds (see the self dev-dependency below), so production
+# builds compile without the CREATE/DROP/sweep support in the library API.
+test-support = []
+
 [dev-dependencies]
+# Self dev-dependency: turns `test-support` on for every test target
+# (lib unit tests, integration tests) and off for production builds.
+surcast-backend = { path = ".", features = ["test-support"] }
 axum-test = { version = "21", features = ["ws"] }
 tempfile = "3"
 serde_json = "1"
