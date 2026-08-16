@@ -6,12 +6,15 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use super::upload_helper::resolve_audio_path;
+use crate::api::StreamersMap;
 use crate::auth::middleware::AuthUser;
 use crate::config::Config;
 use crate::errors::AppError;
 use crate::errors::DbResult;
 use crate::songs::models::*;
 use crate::songs::repository;
+use crate::stations::handlers::{sync_station_queues, StationLifecycleLocks};
+use std::sync::Arc;
 
 pub async fn list_songs(Extension(_auth_user): Extension<AuthUser>, State(db): State<PgPool>) -> Result<Json<Vec<SongResponse>>, AppError> {
     let songs = repository::find_all_songs(&db).await?;
@@ -154,19 +157,25 @@ pub async fn update_song(
 pub async fn delete_song(
     Extension(_auth_user): Extension<AuthUser>,
     State(db): State<PgPool>,
+    State(streamers): State<StreamersMap>,
     State(config): State<Config>,
+    State(lifecycle): State<Arc<StationLifecycleLocks>>,
     Path(id): Path<Uuid>,
 ) -> Result<StatusCode, AppError> {
     let song = repository::find_song_by_id(&db, id)
         .await?
         .ok_or_else(|| AppError::NotFound("Song not found".into()))?;
 
-    repository::delete_song_from_all_station_queues(&db, id).await?;
-    repository::delete_song_from_all_station_songs(&db, id).await?;
-    repository::delete_song(&db, id).await?;
+    // The affected stations come from the rows the destructive operation
+    // actually removed (DELETE ... RETURNING) — never from a pre-delete
+    // snapshot. The song row is locked inside the same transaction, so a
+    // concurrent enqueue cannot slip a queue row past the returned set.
+    let affected = repository::delete_song_globally(&db, id).await?;
 
     let song_path = resolve_audio_path(&config.upload_dir, &song.file_path);
     let _ = tokio::fs::remove_file(&song_path).await;
+
+    sync_station_queues(&db, &streamers, &lifecycle, &config.upload_dir, affected, true).await?;
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -174,7 +183,9 @@ pub async fn delete_song(
 pub async fn delete_songs_batch(
     Extension(_auth_user): Extension<AuthUser>,
     State(db): State<PgPool>,
+    State(streamers): State<StreamersMap>,
     State(config): State<Config>,
+    State(lifecycle): State<Arc<StationLifecycleLocks>>,
     Json(req): Json<BatchDeleteSongsRequest>,
 ) -> Result<StatusCode, AppError> {
     let songs = sqlx::query_as::<_, crate::songs::models::Song>("SELECT * FROM songs WHERE id = ANY($1)")
@@ -183,13 +194,16 @@ pub async fn delete_songs_batch(
         .await
         .db_error("failed to fetch songs for batch delete")?;
 
-    repository::delete_songs_from_all_stations_batch(&db, &req.ids).await?;
-    repository::delete_songs_batch(&db, &req.ids).await?;
+    // Same destructive semantics as the single delete: affected stations
+    // come from the actually deleted rows, deduplicated by DISTINCT.
+    let affected = repository::delete_songs_globally(&db, &req.ids).await?;
 
     for song in &songs {
         let song_path = resolve_audio_path(&config.upload_dir, &song.file_path);
         let _ = tokio::fs::remove_file(&song_path).await;
     }
+
+    sync_station_queues(&db, &streamers, &lifecycle, &config.upload_dir, affected, true).await?;
 
     Ok(StatusCode::NO_CONTENT)
 }

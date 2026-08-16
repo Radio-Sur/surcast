@@ -206,6 +206,7 @@ pub(crate) struct RecordingPipeline {
     snapshot: Mutex<PipelineSnapshot>,
     pub(crate) replace_gate: Option<Arc<Gate>>,
     pub(crate) reconnect_gate: Option<Arc<Gate>>,
+    pub(crate) stop_gate: Option<Arc<Gate>>,
 }
 
 impl RecordingPipeline {
@@ -222,6 +223,7 @@ impl RecordingPipeline {
             }),
             replace_gate: None,
             reconnect_gate: None,
+            stop_gate: None,
         }
     }
 
@@ -230,6 +232,15 @@ impl RecordingPipeline {
         Self {
             replace_gate: Some(Gate::new()),
             reconnect_gate: Some(Gate::new()),
+            ..Self::new()
+        }
+    }
+
+    /// A pipeline whose `stop` blocks until released — used to prove that
+    /// terminal cleanup survives caller cancellation mid-shutdown.
+    pub(crate) fn with_stop_gate(stop_gate: Arc<Gate>) -> Self {
+        Self {
+            stop_gate: Some(stop_gate),
             ..Self::new()
         }
     }
@@ -319,7 +330,12 @@ impl crate::streamer::pipeline::PlaybackPipeline for RecordingPipeline {
     }
 
     async fn stop(&self) -> Result<(), PipelineError> {
-        self.record(Call::Stop)
+        self.record(Call::Stop)?;
+        if let Some(gate) = &self.stop_gate {
+            gate.started.notify_one();
+            gate.wait_released().await;
+        }
+        Ok(())
     }
 }
 

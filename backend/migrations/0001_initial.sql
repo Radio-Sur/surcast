@@ -49,6 +49,7 @@ CREATE TABLE IF NOT EXISTS stations (
     default_fade_ms INTEGER NOT NULL DEFAULT 3000,
     transition_mode TEXT NOT NULL DEFAULT 'autocue',
     autocue_fade_max_ms INTEGER NOT NULL DEFAULT 5000,
+    is_started BOOLEAN NOT NULL DEFAULT FALSE,
     created_by UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -56,6 +57,10 @@ CREATE TABLE IF NOT EXISTS stations (
 
 CREATE INDEX IF NOT EXISTS idx_stations_created_by ON stations(created_by);
 CREATE INDEX IF NOT EXISTS idx_stations_slug ON stations(slug);
+
+-- Persistent desired lifecycle state (started/stopped); re-applied safely on
+-- existing databases. Never the transient pipeline state.
+ALTER TABLE stations ADD COLUMN IF NOT EXISTS is_started BOOLEAN NOT NULL DEFAULT FALSE;
 
 -- ---------------------------------------------------------------
 -- Songs (incl. autocue analysis columns)

@@ -139,7 +139,7 @@ async fn test_assign_song_to_station_and_find_station_ids() {
 }
 
 #[tokio::test]
-async fn test_delete_song_from_all_station_songs() {
+async fn test_delete_song_globally_clears_station_library() {
     let db = common::setup_db().await;
     let user_id = make_user(&db).await;
     let station_id = make_station(&db, user_id).await;
@@ -151,9 +151,7 @@ async fn test_delete_song_from_all_station_songs() {
     let station_ids = repository::find_station_ids_for_song(&db, song_id).await.unwrap();
     assert!(!station_ids.is_empty());
 
-    repository::delete_song_from_all_station_songs(&db, song_id)
-        .await
-        .expect("delete from all failed");
+    repository::delete_song_globally(&db, song_id).await.expect("global delete failed");
 
     let station_ids = repository::find_station_ids_for_song(&db, song_id).await.unwrap();
     assert!(station_ids.is_empty());

@@ -479,8 +479,29 @@ impl StationRuntime {
         self.request(StationCommand::Pause).await
     }
 
+    /// Phase A of the terminal shutdown: enqueues the `Shutdown` command
+    /// and returns its completion barrier. A successful return means the
+    /// command was admitted by the bounded command channel — from that
+    /// moment the runtime is terminal (the command loop exits after
+    /// queueing the stop, whether the pipeline stop succeeds or not), and
+    /// the completion receiver MUST be handed to a cancellation-independent
+    /// task. The awaited send is the LAST cancellable point of the
+    /// shutdown: a caller dropped while the channel is full abandons the
+    /// send and leaves the runtime untouched, with no command behind.
+    pub(crate) async fn begin_shutdown(&self) -> Result<oneshot::Receiver<Result<(), PipelineError>>, PipelineError> {
+        let (response, receiver) = oneshot::channel();
+        self.commands
+            .send(StationCommand::Shutdown(response))
+            .await
+            .map_err(|_| PipelineError::Pipeline("station runtime stopped".to_owned()))?;
+        Ok(receiver)
+    }
+
     pub(crate) async fn shutdown(&self) -> Result<(), PipelineError> {
-        self.request(StationCommand::Shutdown).await
+        self.begin_shutdown()
+            .await?
+            .await
+            .map_err(|_| PipelineError::Pipeline("station runtime stopped".to_owned()))?
     }
 
     pub(crate) async fn skip(&self) -> Result<(), PipelineError> {
@@ -1218,5 +1239,99 @@ mod tests {
         assert!(receiver.await.unwrap().is_ok());
         assert_eq!(pipeline.count(Call::SetPlaying), 0);
         assert_eq!(pipeline.count(Call::Stop), 1);
+    }
+
+    /// Phase A of the terminal shutdown is exactly the bounded send: a
+    /// `begin_shutdown` parked on a full command channel must not return,
+    /// and a caller abandoned there must leave NO Shutdown command behind —
+    /// the runtime stays untouched and no detached work exists that could
+    /// stop it later.
+    #[tokio::test]
+    async fn begin_shutdown_parks_until_admission_and_abandoned_send_leaves_no_command_behind() {
+        let (commands, mut receiver) = mpsc::channel::<StationCommand>(2);
+        let runtime = StationRuntime { commands };
+        for _ in 0..2 {
+            let (dummy, _) = oneshot::channel();
+            runtime.commands.send(StationCommand::PushQueueUpdate(dummy)).await.unwrap();
+        }
+        // Precondition: the channel is full, so a send cannot be admitted.
+        let probe = runtime.commands.clone();
+        assert!(
+            probe.try_send(StationCommand::PushQueueUpdate(oneshot::channel().0)).is_err(),
+            "precondition: the command channel must be full"
+        );
+
+        // Poll the shutdown future DIRECTLY: the first poll must report
+        // `Pending` inside the bounded send — deterministic proof that
+        // the future really entered `commands.send(...).await` and is
+        // parked on the full channel (no scheduler yield involved).
+        let mut shutdown = Box::pin(runtime.begin_shutdown());
+        assert!(
+            matches!(futures::poll!(&mut shutdown), std::task::Poll::Pending),
+            "begin_shutdown must poll to Pending inside the bounded send"
+        );
+
+        // Abandon the caller mid-send. The parked send vanishes with the
+        // dropped future, and dropping `runtime` (the future only borrowed
+        // it) closes the channel: draining it yields only the two dummies,
+        // then `None` — a Shutdown command never entered it, so no stale
+        // detached stop can appear later.
+        drop(shutdown);
+        drop(probe);
+        drop(runtime);
+        for _ in 0..2 {
+            match receiver.recv().await {
+                Some(StationCommand::PushQueueUpdate(_)) => {}
+                Some(_) => panic!("unexpected command after abandonment"),
+                None => panic!("the channel closed early"),
+            }
+        }
+        assert!(
+            receiver.recv().await.is_none(),
+            "after the abandoned send the channel must contain no Shutdown command"
+        );
+    }
+
+    /// After admission `begin_shutdown` returns the completion barrier
+    /// that carries the real pipeline stop result.
+    #[tokio::test]
+    async fn begin_shutdown_returns_the_completion_receiver_after_admission() {
+        let (commands, mut receiver) = mpsc::channel::<StationCommand>(2);
+        let runtime = StationRuntime { commands };
+        let (dummy, _) = oneshot::channel();
+        runtime.commands.send(StationCommand::PushQueueUpdate(dummy)).await.unwrap();
+
+        let completion = runtime.begin_shutdown().await.expect("the command must be admitted");
+        match receiver.recv().await {
+            Some(StationCommand::PushQueueUpdate(_)) => {}
+            Some(_) => panic!("expected the queued PushQueueUpdate first"),
+            None => panic!("the channel closed early"),
+        }
+        let command = receiver.recv().await.expect("the shutdown command must arrive");
+        let StationCommand::Shutdown(response) = command else {
+            panic!("expected Shutdown, got a different command");
+        };
+
+        // The pipeline answers the barrier; the receiver observes the
+        // result (here: a failed pipeline stop propagates as an error).
+        response.send(Err(PipelineError::Pipeline("injected failure".into()))).unwrap();
+        match completion.await.unwrap() {
+            Err(PipelineError::Pipeline(message)) => assert!(message.contains("injected failure"), "unexpected error: {message}"),
+            other => panic!("expected the pipeline error, got {other:?}"),
+        }
+    }
+
+    /// An explicit send failure — the command receiver is gone, so the
+    /// runtime is dead — is reported as a runtime-stopped error instead of
+    /// hanging: the caller must remove the dead streamer from the map.
+    #[tokio::test]
+    async fn begin_shutdown_reports_a_runtime_whose_command_loop_is_gone() {
+        let (commands, receiver) = mpsc::channel::<StationCommand>(2);
+        drop(receiver);
+        let runtime = StationRuntime { commands };
+        match runtime.begin_shutdown().await {
+            Err(PipelineError::Pipeline(message)) => assert!(message.contains("station runtime stopped"), "unexpected error: {message}"),
+            other => panic!("expected the runtime-stopped error, got {other:?}"),
+        }
     }
 }

@@ -26,6 +26,7 @@ use surcast_backend::api::router::{self, StreamersMap};
 use surcast_backend::config::Config;
 use surcast_backend::icecast::IcecastManager;
 use surcast_backend::listeners::ListenersState;
+use surcast_backend::stations::handlers::stream::StationLifecycleLocks;
 use tempfile::TempDir;
 use uuid::Uuid;
 
@@ -138,6 +139,11 @@ pub struct BackendSession {
     pub streamers: StreamersMap,
     pub listeners: Arc<ListenersState>,
     pub auth: String,
+    /// The session's per-station lifecycle locks; carries the session-scoped
+    /// test hooks used by the lifecycle concurrency tests (used by
+    /// `e2e_lifecycle` only).
+    #[allow(dead_code)]
+    pub lifecycle: Arc<StationLifecycleLocks>,
 }
 
 impl StreamerTestApp {
@@ -251,11 +257,13 @@ impl StreamerTestApp {
         }
         let streamers: StreamersMap = Arc::new(Mutex::new(HashMap::new()));
         let listeners = ListenersState::new();
+        let lifecycle = Arc::new(surcast_backend::stations::handlers::stream::StationLifecycleLocks::default());
         let server = if http_transport {
             TestServer::builder().http_transport().build(router::create_router(
                 self.db.clone(),
                 self.config.clone(),
                 streamers.clone(),
+                lifecycle.clone(),
                 self.icecast.clone(),
                 listeners.clone(),
             ))
@@ -264,6 +272,7 @@ impl StreamerTestApp {
                 self.db.clone(),
                 self.config.clone(),
                 streamers.clone(),
+                lifecycle.clone(),
                 self.icecast.clone(),
                 listeners.clone(),
             ))
@@ -293,11 +302,16 @@ impl StreamerTestApp {
             .ok()
             .and_then(|value| value["access_token"].as_str().map(str::to_owned))
             .ok_or_else(|| failure(format!("login response has no access token; body: {body}")))?;
+        // Model the production boot path: every station persisted as started
+        // is started again (main.rs runs the same restore after Icecast is up).
+        surcast_backend::stations::handlers::stream::restore_started_stations(&self.db, &streamers, &lifecycle, &self.config.upload_dir)
+            .await;
         self.session = Some(BackendSession {
             server,
             streamers,
             listeners,
             auth: format!("Bearer {auth}"),
+            lifecycle,
         });
         Ok(())
     }
@@ -937,4 +951,11 @@ pub fn visible_upcoming(status: &StatusView, queue: &[QueueItem]) -> i64 {
 /// guarantees streamer/Icecast teardown before propagating the result.
 pub async fn run_streamer_test<R>(scenario: impl AsyncFnOnce(&mut StreamerTestApp) -> Result<R, Box<dyn std::error::Error>>) -> R {
     StreamerTestApp::new().await.run(scenario).await
+}
+
+/// HTTP-transport variant of [`run_streamer_test`] used by
+/// lifecycle/WebSocket tests. Not every test binary uses it.
+#[allow(dead_code)]
+pub async fn run_http_streamer_test<R>(scenario: impl AsyncFnOnce(&mut StreamerTestApp) -> Result<R, Box<dyn std::error::Error>>) -> R {
+    StreamerTestApp::new_http().await.run(scenario).await
 }

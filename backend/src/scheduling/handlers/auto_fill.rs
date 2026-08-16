@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use axum::extract::Extension;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
@@ -14,6 +16,7 @@ use crate::errors::AppError;
 use crate::scheduling::models::*;
 use crate::scheduling::repository;
 use crate::scheduling::service::fill_queue_from_schedule;
+use crate::stations::handlers::stream::StationLifecycleLocks;
 
 pub fn time_to_sec(t: NaiveTime) -> i32 {
     t.hour() as i32 * 3600 + t.minute() as i32 * 60 + t.second() as i32
@@ -194,6 +197,7 @@ pub async fn trigger_auto_fill(
     State(db): State<PgPool>,
     State(streamers): State<StreamersMap>,
     State(config): State<Config>,
+    State(lifecycle): State<Arc<StationLifecycleLocks>>,
     Path(station_id): Path<String>,
 ) -> Result<Json<Value>, AppError> {
     let sid: Uuid = station_id.parse().map_err(|_| AppError::BadRequest("Invalid station ID".into()))?;
@@ -201,7 +205,7 @@ pub async fn trigger_auto_fill(
     // The refill above writes rows straight into the DB; a live streamer keeps
     // its own in-memory queue copy, so reload it or the new tracks are never
     // picked up by the running pipeline.
-    crate::stations::handlers::sync_streamer_songs(&db, &streamers, &config.upload_dir, sid, false).await?;
+    crate::stations::handlers::sync_streamer_songs(&db, &streamers, &lifecycle, &config.upload_dir, sid, false).await?;
     Ok(Json(json!({ "status": "ok" })))
 }
 #[cfg(test)]

@@ -147,45 +147,83 @@ pub async fn delete_song(db: &PgPool, id: Uuid) -> Result<(), AppError> {
     Ok(())
 }
 
-pub async fn delete_songs_batch(db: &PgPool, ids: &[Uuid]) -> Result<(), AppError> {
-    sqlx::query("DELETE FROM songs WHERE id = ANY($1)")
-        .bind(ids)
-        .execute(db)
+/// Atomically deletes one song everywhere: queue rows, station-library rows
+/// and the `songs` row itself, and returns the DISTINCT station IDs whose
+/// queue rows were actually deleted.
+///
+/// TOCTOU-safe in two ways:
+/// - the affected stations come from `DELETE ... RETURNING station_id`
+///   inside the SAME statement that removes the rows — never from a
+///   pre-delete SELECT that could be stale;
+/// - the parent `songs` row is locked (`FOR UPDATE`) BEFORE the queue
+///   delete: a concurrent enqueue's foreign-key check blocks on that lock,
+///   so no queue row for this song can appear between the queue delete and
+///   the final `songs` delete. Without the lock, `ON DELETE CASCADE` would
+///   remove such a late row outside the returned affected set.
+pub async fn delete_song_globally(db: &PgPool, song_id: Uuid) -> Result<Vec<Uuid>, AppError> {
+    let mut tx = db.begin().await.db_error("failed to begin song delete transaction")?;
+    sqlx::query("SELECT id FROM songs WHERE id = $1 FOR UPDATE")
+        .bind(song_id)
+        .execute(&mut *tx)
         .await
-        .db_error("failed to batch delete songs")?;
-    Ok(())
-}
-
-pub async fn delete_songs_from_all_stations_batch(db: &PgPool, ids: &[Uuid]) -> Result<(), AppError> {
-    sqlx::query("DELETE FROM station_songs WHERE song_id = ANY($1)")
-        .bind(ids)
-        .execute(db)
-        .await
-        .db_error("failed to batch unassign songs from stations")?;
-    sqlx::query("DELETE FROM station_queue WHERE song_id = ANY($1)")
-        .bind(ids)
-        .execute(db)
-        .await
-        .db_error("failed to batch clear songs from station queues")?;
-    Ok(())
-}
-
-pub async fn delete_song_from_all_station_songs(db: &PgPool, song_id: Uuid) -> Result<(), AppError> {
+        .db_error("failed to lock song row")?;
+    let affected: Vec<Uuid> = sqlx::query_scalar(
+        "WITH deleted AS (
+             DELETE FROM station_queue WHERE song_id = $1 RETURNING station_id
+         )
+         SELECT DISTINCT station_id FROM deleted",
+    )
+    .bind(song_id)
+    .fetch_all(&mut *tx)
+    .await
+    .db_error("failed to clear song from station queues")?;
     sqlx::query("DELETE FROM station_songs WHERE song_id = $1")
         .bind(song_id)
-        .execute(db)
+        .execute(&mut *tx)
         .await
         .db_error("failed to unassign song from stations")?;
-    Ok(())
+    sqlx::query("DELETE FROM songs WHERE id = $1")
+        .bind(song_id)
+        .execute(&mut *tx)
+        .await
+        .db_error("failed to delete song")?;
+    tx.commit().await.db_error("failed to commit song delete")?;
+    Ok(affected)
 }
 
-pub async fn delete_song_from_all_station_queues(db: &PgPool, song_id: Uuid) -> Result<(), AppError> {
-    sqlx::query("DELETE FROM station_queue WHERE song_id = $1")
-        .bind(song_id)
-        .execute(db)
+/// Batch equivalent of [`delete_song_globally`]: deletes every listed song
+/// and returns the DISTINCT station IDs whose queue rows were actually
+/// deleted. The parent rows are locked in a stable order (`ORDER BY id`),
+/// so two concurrent batch deletes can never deadlock on each other.
+pub async fn delete_songs_globally(db: &PgPool, ids: &[Uuid]) -> Result<Vec<Uuid>, AppError> {
+    let mut tx = db.begin().await.db_error("failed to begin batch song delete transaction")?;
+    sqlx::query("SELECT id FROM songs WHERE id = ANY($1) ORDER BY id FOR UPDATE")
+        .bind(ids)
+        .execute(&mut *tx)
         .await
-        .db_error("failed to clear song from station queues")?;
-    Ok(())
+        .db_error("failed to lock song rows")?;
+    let affected: Vec<Uuid> = sqlx::query_scalar(
+        "WITH deleted AS (
+             DELETE FROM station_queue WHERE song_id = ANY($1) RETURNING station_id
+         )
+         SELECT DISTINCT station_id FROM deleted",
+    )
+    .bind(ids)
+    .fetch_all(&mut *tx)
+    .await
+    .db_error("failed to clear songs from station queues")?;
+    sqlx::query("DELETE FROM station_songs WHERE song_id = ANY($1)")
+        .bind(ids)
+        .execute(&mut *tx)
+        .await
+        .db_error("failed to batch unassign songs from stations")?;
+    sqlx::query("DELETE FROM songs WHERE id = ANY($1)")
+        .bind(ids)
+        .execute(&mut *tx)
+        .await
+        .db_error("failed to batch delete songs")?;
+    tx.commit().await.db_error("failed to commit batch song delete")?;
+    Ok(affected)
 }
 
 pub async fn find_station_ids_for_song(db: &PgPool, song_id: Uuid) -> Result<Vec<(Uuid,)>, AppError> {
@@ -355,4 +393,123 @@ pub async fn delete_song_from_station_songs(db: &PgPool, song_id: Uuid, station_
         .await
         .db_error("failed to remove from station library")?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sqlx::postgres::PgPoolOptions;
+
+    /// The destructive batch delete must return exactly the stations whose
+    /// queue rows were really removed — DISTINCT, no unrelated stations —
+    /// and the matching rows must be gone while unrelated ones survive.
+    #[tokio::test]
+    async fn batch_delete_returns_distinct_affected_stations() {
+        let Ok(database_url) = std::env::var("DATABASE_URL") else { return };
+        let pool = PgPoolOptions::new()
+            .max_connections(2)
+            .connect(&database_url)
+            .await
+            .expect("test database must be reachable");
+        crate::db::run_migrations(&pool).await;
+
+        // Unique username per run: a previous run's row must never collide
+        // with the fresh user id this test inserts below.
+        let user_id = Uuid::new_v4();
+        let username = format!("affected-query-test-{user_id}");
+        sqlx::query("INSERT INTO users (id, username, password_hash, name) VALUES ($1, $2, 'x', $3)")
+            .bind(user_id)
+            .bind(&username)
+            .bind(&username)
+            .execute(&pool)
+            .await
+            .expect("user insert");
+
+        async fn station_with_song(pool: &PgPool, user_id: Uuid, name: &str, song_ids: &[Uuid]) -> Uuid {
+            let station_id = Uuid::new_v4();
+            sqlx::query("INSERT INTO stations (id, name, created_by) VALUES ($1, $2, $3)")
+                .bind(station_id)
+                .bind(name)
+                .bind(user_id)
+                .execute(pool)
+                .await
+                .expect("station insert");
+            for (i, song_id) in song_ids.iter().enumerate() {
+                sqlx::query("INSERT INTO station_queue (station_id, song_id, position) VALUES ($1, $2, $3)")
+                    .bind(station_id)
+                    .bind(song_id)
+                    .bind(i as i32)
+                    .execute(pool)
+                    .await
+                    .expect("queue insert");
+            }
+            station_id
+        }
+
+        async fn song(pool: &PgPool, user_id: Uuid, title: &str) -> Uuid {
+            let song_id = Uuid::new_v4();
+            sqlx::query("INSERT INTO songs (id, title, file_path, uploaded_by) VALUES ($1, $2, $3, $4)")
+                .bind(song_id)
+                .bind(title)
+                .bind(format!("{title}.wav"))
+                .bind(user_id)
+                .execute(pool)
+                .await
+                .expect("song insert");
+            song_id
+        }
+
+        let song_a = song(&pool, user_id, "del-a").await;
+        let song_b = song(&pool, user_id, "del-b").await;
+        let song_unrelated = song(&pool, user_id, "keep").await;
+        // Station A queues both deleted songs; station B one; station C an
+        // unrelated song that must survive.
+        let station_a = station_with_song(&pool, user_id, "affected A", &[song_a, song_b]).await;
+        let station_b = station_with_song(&pool, user_id, "affected B", &[song_b]).await;
+        let station_c = station_with_song(&pool, user_id, "unaffected C", &[song_unrelated]).await;
+
+        let mut affected = delete_songs_globally(&pool, &[song_a, song_b]).await.expect("batch delete");
+        affected.sort();
+        let mut expected = vec![station_a, station_b];
+        expected.sort();
+        assert_eq!(affected, expected, "affected stations must be exactly A and B, each once");
+
+        // Only the unrelated row may survive; the deleted songs must have
+        // no queue rows left anywhere.
+        let deleted_remaining: i64 = sqlx::query_scalar("SELECT count(*) FROM station_queue WHERE song_id = ANY($1)")
+            .bind(&[song_a, song_b])
+            .fetch_one(&pool)
+            .await
+            .expect("deleted-songs readback");
+        assert_eq!(deleted_remaining, 0, "deleted songs must have no queue rows left");
+        let unrelated: Vec<(Uuid, Uuid)> = sqlx::query_as("SELECT station_id, song_id FROM station_queue WHERE station_id = $1")
+            .bind(station_c)
+            .fetch_all(&pool)
+            .await
+            .expect("unrelated readback");
+        assert_eq!(unrelated, vec![(station_c, song_unrelated)], "the unrelated row must survive");
+
+        // Clean up this run's rows (the two deleted songs are already gone;
+        // the unrelated one must be removed before the user row).
+        sqlx::query("DELETE FROM station_queue WHERE station_id = ANY($1)")
+            .bind(&[station_a, station_b, station_c])
+            .execute(&pool)
+            .await
+            .expect("queue cleanup");
+        sqlx::query("DELETE FROM stations WHERE id = ANY($1)")
+            .bind(&[station_a, station_b, station_c])
+            .execute(&pool)
+            .await
+            .expect("station cleanup");
+        sqlx::query("DELETE FROM songs WHERE id = $1")
+            .bind(song_unrelated)
+            .execute(&pool)
+            .await
+            .expect("song cleanup");
+        sqlx::query("DELETE FROM users WHERE id = $1")
+            .bind(user_id)
+            .execute(&pool)
+            .await
+            .expect("user cleanup");
+    }
 }

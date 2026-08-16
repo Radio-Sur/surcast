@@ -11,8 +11,10 @@ use crate::errors::AppError;
 use crate::stations::models::*;
 use crate::stations::repository;
 use crate::streamer::pipeline::TransitionMode;
+use std::sync::Arc;
 
 use super::stream::resolve_station_id;
+use super::stream::StationLifecycleLocks;
 
 fn normalize_transition_mode(value: Option<String>) -> Result<TransitionMode, AppError> {
     let mode = value.unwrap_or_else(|| TransitionMode::Crossfade.as_str().to_owned());
@@ -129,10 +131,12 @@ pub async fn update_station(
 pub async fn delete_station(
     Extension(_auth_user): Extension<AuthUser>,
     State(db): State<PgPool>,
+    State(streamers): State<StreamersMap>,
+    State(lifecycle): State<Arc<StationLifecycleLocks>>,
     Path(id): Path<String>,
 ) -> Result<StatusCode, AppError> {
     let id = resolve_station_id(&db, &id).await?;
-    repository::delete_station(&db, id).await?;
+    super::stream::delete_station_lifecycle(&db, &streamers, &lifecycle, id).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 

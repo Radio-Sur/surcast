@@ -26,5 +26,13 @@ pub fn create_test_app(pool: PgPool) -> Router {
     let config = test_config();
     let icecast_manager = IcecastManager::new(std::path::PathBuf::from("../.icecast"));
     let listeners = ListenersState::new();
-    router::create_router(pool, config, Arc::new(Mutex::new(HashMap::new())), icecast_manager, listeners)
+    let lifecycle = Arc::new(surcast_backend::stations::handlers::stream::StationLifecycleLocks::default());
+    router::create_router(
+        pool,
+        config,
+        Arc::new(Mutex::new(HashMap::new())),
+        lifecycle,
+        icecast_manager,
+        listeners,
+    )
 }

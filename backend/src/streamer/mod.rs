@@ -136,8 +136,14 @@ impl StationStreamer {
     pub(crate) async fn pause(&self) -> Result<(), PipelineError> {
         self.runtime.pause().await
     }
-    pub(crate) async fn stop(&self) -> Result<(), PipelineError> {
-        self.runtime.shutdown().await
+    /// Phase A of the terminal shutdown: enqueues the `Shutdown` command
+    /// and returns its completion barrier (see
+    /// [`StationRuntime::begin_shutdown`]). Successful return = the
+    /// runtime is terminal from here on; the caller must hand the receiver
+    /// to a cancellation-independent cleanup task, without awaiting
+    /// anything in between.
+    pub(crate) async fn begin_shutdown(&self) -> Result<tokio::sync::oneshot::Receiver<Result<(), PipelineError>>, PipelineError> {
+        self.runtime.begin_shutdown().await
     }
 
     pub(crate) async fn reconnect(&self) -> Result<(), PipelineError> {

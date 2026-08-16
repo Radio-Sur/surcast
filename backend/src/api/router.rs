@@ -24,6 +24,7 @@ use crate::playlists;
 use crate::scheduling;
 use crate::songs;
 use crate::stations;
+use crate::stations::handlers::stream::StationLifecycleLocks;
 use crate::streamer::StationStreamer;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -35,6 +36,7 @@ pub struct AppState {
     pub db: PgPool,
     pub config: Config,
     pub streamers: StreamersMap,
+    pub lifecycle: Arc<StationLifecycleLocks>,
     pub icecast_manager: IcecastManager,
     pub listeners: Arc<ListenersState>,
 }
@@ -59,6 +61,12 @@ impl FromRef<AppState> for StreamersMap {
     }
 }
 
+impl FromRef<AppState> for Arc<StationLifecycleLocks> {
+    fn from_ref(state: &AppState) -> Self {
+        state.lifecycle.clone()
+    }
+}
+
 impl FromRef<AppState> for IcecastManager {
     fn from_ref(state: &AppState) -> Self {
         state.icecast_manager.clone()
@@ -75,6 +83,7 @@ pub fn create_router(
     db: PgPool,
     config: Config,
     streamers: StreamersMap,
+    lifecycle: Arc<StationLifecycleLocks>,
     icecast_manager: IcecastManager,
     listeners: Arc<ListenersState>,
 ) -> Router {
@@ -82,6 +91,7 @@ pub fn create_router(
         db,
         config,
         streamers,
+        lifecycle,
         icecast_manager,
         listeners,
     };
