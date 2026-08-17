@@ -156,6 +156,7 @@ pub(crate) enum Call {
 /// `release()` — the pipeline signals `started` and proceeds to block on
 /// `release` without yielding in between, so once `wait_started` returns the
 /// operation is guaranteed to be inside the gate.
+/// A synchronization gate for deterministic testing.
 pub(crate) struct Gate {
     pub(crate) started: Notify,
     release: Semaphore,
@@ -173,14 +174,10 @@ impl Gate {
         self.started.notified().await;
     }
 
-    /// Releases exactly one gated operation. Safe at any point of the
-    /// operation's lifetime: an early release is retained as a permit.
     pub(crate) fn release(&self) {
         self.release.add_permits(1);
     }
 
-    /// Blocks until a `release()` permit is available, then permanently
-    /// consumes it: one release lets exactly one gated operation through.
     pub(crate) async fn wait_released(&self) {
         self.release.acquire().await.expect("gate semaphore is never closed").forget();
     }
@@ -202,15 +199,15 @@ pub(crate) struct RecordingPipeline {
     rolls: Mutex<Vec<RollingPlan>>,
     fail: Mutex<HashSet<Call>>,
     fail_once: Mutex<HashSet<Call>>,
-    /// Zero-based attempt index that must fail for a call, removed after it
-    /// fires (one-shot, like `fail_once` but for the N-th invocation).
-    fail_nth: Mutex<HashMap<Call, usize>>,
+    /// Zero-based attempt indices that must fail for a call, removed after they
+    /// fire (one-shot, like `fail_once` but for specific invocations).
+    fail_nth: Mutex<HashSet<(Call, usize)>>,
     attempts: Mutex<HashMap<Call, usize>>,
     snapshot: Mutex<PipelineSnapshot>,
-    pub(crate) replace_gate: Option<Arc<Gate>>,
-    pub(crate) reconnect_gate: Option<Arc<Gate>>,
-    pub(crate) stop_gate: Option<Arc<Gate>>,
-    pub(crate) roll_gate: Option<Arc<Gate>>,
+    replace_gate: Mutex<Option<Arc<Gate>>>,
+    reconnect_gate: Mutex<Option<Arc<Gate>>>,
+    stop_gate: Mutex<Option<Arc<Gate>>>,
+    roll_gate: Mutex<Option<Arc<Gate>>>,
 }
 
 impl RecordingPipeline {
@@ -220,24 +217,24 @@ impl RecordingPipeline {
             rolls: Mutex::new(Vec::new()),
             fail: Mutex::new(HashSet::new()),
             fail_once: Mutex::new(HashSet::new()),
-            fail_nth: Mutex::new(HashMap::new()),
+            fail_nth: Mutex::new(HashSet::new()),
             attempts: Mutex::new(HashMap::new()),
             snapshot: Mutex::new(PipelineSnapshot {
                 state: PipelineState::Stopped,
                 elapsed: Duration::ZERO,
             }),
-            replace_gate: None,
-            reconnect_gate: None,
-            stop_gate: None,
-            roll_gate: None,
+            replace_gate: Mutex::new(None),
+            reconnect_gate: Mutex::new(None),
+            stop_gate: Mutex::new(None),
+            roll_gate: Mutex::new(None),
         }
     }
 
     /// A pipeline whose `replace` and `reconnect` block until released.
     pub(crate) fn with_gates() -> Self {
         Self {
-            replace_gate: Some(Gate::new()),
-            reconnect_gate: Some(Gate::new()),
+            replace_gate: Mutex::new(Some(Gate::new())),
+            reconnect_gate: Mutex::new(Some(Gate::new())),
             ..Self::new()
         }
     }
@@ -246,7 +243,7 @@ impl RecordingPipeline {
     /// terminal cleanup survives caller cancellation mid-shutdown.
     pub(crate) fn with_stop_gate(stop_gate: Arc<Gate>) -> Self {
         Self {
-            stop_gate: Some(stop_gate),
+            stop_gate: Mutex::new(Some(stop_gate)),
             ..Self::new()
         }
     }
@@ -255,9 +252,32 @@ impl RecordingPipeline {
     /// early Handover events arriving before a roll completion are accepted.
     pub(crate) fn with_roll_gate(roll_gate: Arc<Gate>) -> Self {
         Self {
-            roll_gate: Some(roll_gate),
+            roll_gate: Mutex::new(Some(roll_gate)),
             ..Self::new()
         }
+    }
+
+    pub(crate) fn replace_gate(&self) -> Option<Arc<Gate>> {
+        self.replace_gate.lock().clone()
+    }
+
+    pub(crate) fn reconnect_gate(&self) -> Option<Arc<Gate>> {
+        self.reconnect_gate.lock().clone()
+    }
+
+    pub(crate) fn stop_gate(&self) -> Option<Arc<Gate>> {
+        self.stop_gate.lock().clone()
+    }
+
+    pub(crate) fn roll_gate(&self) -> Option<Arc<Gate>> {
+        self.roll_gate.lock().clone()
+    }
+
+    pub(crate) fn set_replace_gate(&self, gate: Option<Arc<Gate>>) {
+        *self.replace_gate.lock() = gate;
+    }
+    pub(crate) fn snapshot_state(&self) -> PipelineState {
+        self.snapshot.lock().state
     }
 
     /// Every future call of `call` fails with an injected pipeline error.
@@ -273,7 +293,7 @@ impl RecordingPipeline {
     /// The `zero_based_attempt`-th invocation of `call` fails (0 = first);
     /// later calls succeed.
     pub(crate) fn fail_nth(&self, call: Call, zero_based_attempt: usize) {
-        self.fail_nth.lock().insert(call, zero_based_attempt);
+        self.fail_nth.lock().insert((call, zero_based_attempt));
     }
 
     /// How many times `call` has been invoked (including failed attempts).
@@ -299,8 +319,7 @@ impl RecordingPipeline {
             *attempt += 1;
             return Err(PipelineError::Pipeline("injected failure".into()));
         }
-        if self.fail_nth.lock().get(&call) == Some(attempt) {
-            self.fail_nth.lock().remove(&call);
+        if self.fail_nth.lock().remove(&(call, *attempt)) {
             *attempt += 1;
             return Err(PipelineError::Pipeline("injected failure".into()));
         }
@@ -314,22 +333,31 @@ impl RecordingPipeline {
 
 #[async_trait]
 impl crate::streamer::pipeline::PlaybackPipeline for RecordingPipeline {
-    async fn replace(&self, _: PairPlan) -> Result<(), PipelineError> {
-        self.record(Call::Replace)?;
-        if let Some(gate) = &self.replace_gate {
+    async fn replace(&self, plan: PairPlan) -> Result<(), PipelineError> {
+        let result = self.record(Call::Replace);
+        let gate = self.replace_gate();
+        if let Some(gate) = &gate {
             gate.started.notify_one();
             gate.wait_released().await;
+        }
+        result?;
+        let mut snapshot = self.snapshot.lock();
+        if matches!(plan.mode, crate::streamer::pipeline::ReplaceMode::InitialReplaceFromStopped)
+            || snapshot.state == PipelineState::Playing
+        {
+            snapshot.state = PipelineState::Playing;
         }
         Ok(())
     }
-
     async fn roll(&self, plan: RollingPlan) -> Result<(), PipelineError> {
         self.rolls.lock().push(plan);
-        self.record(Call::Roll)?;
-        if let Some(gate) = &self.roll_gate {
+        let result = self.record(Call::Roll);
+        let gate = self.roll_gate();
+        if let Some(gate) = &gate {
             gate.started.notify_one();
             gate.wait_released().await;
         }
+        result?;
         Ok(())
     }
 
@@ -337,16 +365,20 @@ impl crate::streamer::pipeline::PlaybackPipeline for RecordingPipeline {
         self.record(Call::ApplyOutput)
     }
 
-    async fn set_playing(&self, _: bool) -> Result<(), PipelineError> {
-        self.record(Call::SetPlaying)
+    async fn set_playing(&self, playing: bool) -> Result<(), PipelineError> {
+        self.record(Call::SetPlaying)?;
+        self.snapshot.lock().state = if playing { PipelineState::Playing } else { PipelineState::Paused };
+        Ok(())
     }
 
     async fn reconnect(&self, _: IcecastTarget) -> Result<(), PipelineError> {
-        self.record(Call::Reconnect)?;
-        if let Some(gate) = &self.reconnect_gate {
+        let result = self.record(Call::Reconnect);
+        let gate = self.reconnect_gate();
+        if let Some(gate) = &gate {
             gate.started.notify_one();
             gate.wait_released().await;
         }
+        result?;
         Ok(())
     }
 
@@ -357,10 +389,12 @@ impl crate::streamer::pipeline::PlaybackPipeline for RecordingPipeline {
 
     async fn stop(&self) -> Result<(), PipelineError> {
         self.record(Call::Stop)?;
-        if let Some(gate) = &self.stop_gate {
+        let gate = self.stop_gate();
+        if let Some(gate) = &gate {
             gate.started.notify_one();
             gate.wait_released().await;
         }
+        self.snapshot.lock().state = PipelineState::Stopped;
         Ok(())
     }
 }

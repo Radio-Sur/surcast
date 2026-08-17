@@ -42,11 +42,20 @@ pub(crate) enum StationCommand {
     PushQueueUpdate(oneshot::Sender<()>),
     TrimPlayedItems(oneshot::Sender<()>),
     Status(oneshot::Sender<Result<StatusEvent, PipelineError>>),
+    #[cfg(test)]
+    Barrier(oneshot::Sender<()>),
     /// Acknowledgment for an automatic idle resume: the executor answered
     /// after the replace ran. `attempt_id` correlates the outcome with the
     /// exact resume attempt; the controller ignores completions for
-    /// attempts that a newer user decision (or a newer resume) superseded.
     ResumeResult {
+        attempt_id: u64,
+        result: Result<(), PipelineError>,
+    },
+    /// Outcome of an initial play replace, delivered by the executor forwarder
+    /// after the replace ran. `attempt_id` correlates the outcome with the
+    /// exact play attempt; the controller commits `Playing` only after the
+    /// physical replace succeeded and stays `Stopped` on failure.
+    PlayResult {
         attempt_id: u64,
         result: Result<(), PipelineError>,
     },
@@ -375,6 +384,8 @@ fn schedule_reconnect_retry(commands: mpsc::Sender<StationCommand>, generation: 
 #[derive(Clone)]
 pub(crate) struct StationRuntime {
     commands: mpsc::Sender<StationCommand>,
+    #[cfg(test)]
+    play_result_gate: std::sync::Arc<std::sync::Mutex<Option<std::sync::Arc<crate::streamer::testsupport::Gate>>>>,
 }
 
 impl StationRuntime {
@@ -396,17 +407,23 @@ impl StationRuntime {
         tokio::spawn(run_executor(urgent, regular, executor_driver));
         // One per-station ticker wakes the runtime only while the controller
         // is idle (queue drained, waiting for AutoDJ / schedule fill), so a
-        // future schedule entry starts playback without any API interaction.
-        // The guard keeps the branch unregistered everywhere else: no wakeups
-        // and no polling while playing, paused, or manually stopped.
         let mut idle_poll = tokio::time::interval(Duration::from_secs(1));
         idle_poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        #[cfg(test)]
+        let play_result_gate = std::sync::Arc::new(std::sync::Mutex::new(None));
+        #[cfg(test)]
+        let loop_play_result_gate = play_result_gate.clone();
         tokio::spawn(async move {
             loop {
                 tokio::select! {
                     command = receiver.recv() => {
                         let Some(command) = command else { break };
+                        #[cfg(not(test))]
                         if !command.run(&mut controller, retries.clone(), &operations_regular, &operations_urgent).await {
+                            break;
+                        }
+                        #[cfg(test)]
+                        if !command.run(&mut controller, retries.clone(), &operations_regular, &operations_urgent, loop_play_result_gate.clone()).await {
                             break;
                         }
                     },
@@ -492,9 +509,22 @@ impl StationRuntime {
                 }
             }
         });
-        Self { commands }
+        Self {
+            commands,
+            #[cfg(test)]
+            play_result_gate,
+        }
     }
 
+    #[cfg(test)]
+    pub(crate) fn set_play_result_gate(&self, gate: std::sync::Arc<crate::streamer::testsupport::Gate>) {
+        *self.play_result_gate.lock().unwrap() = Some(gate);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn clear_play_result_gate(&self) {
+        *self.play_result_gate.lock().unwrap() = None;
+    }
     async fn request(
         &self,
         command: impl FnOnce(oneshot::Sender<Result<(), PipelineError>>) -> StationCommand,
@@ -512,18 +542,49 @@ impl StationRuntime {
     pub(crate) async fn play(&self) -> Result<(), PipelineError> {
         self.request(StationCommand::Play).await
     }
-
     pub(crate) async fn pause(&self) -> Result<(), PipelineError> {
         self.request(StationCommand::Pause).await
     }
 
-    /// Phase A of the terminal shutdown: enqueues the `Shutdown` command
-    /// and returns its completion barrier. A successful return means the
-    /// command was admitted by the bounded command channel — from that
-    /// moment the runtime is terminal (the command loop exits after
-    /// queueing the stop, whether the pipeline stop succeeds or not), and
-    /// the completion receiver MUST be handed to a cancellation-independent
-    /// task. The awaited send is the LAST cancellable point of the
+    /// Enqueues a command to the runtime's command channel and returns its completion
+    /// receiver without awaiting pipeline execution.
+    #[cfg(test)]
+    pub(crate) async fn begin_command(
+        &self,
+        command: impl FnOnce(oneshot::Sender<Result<(), PipelineError>>) -> StationCommand,
+    ) -> Result<oneshot::Receiver<Result<(), PipelineError>>, PipelineError> {
+        let (response, receiver) = oneshot::channel();
+        self.commands
+            .send(command(response))
+            .await
+            .map_err(|_| PipelineError::Pipeline("station runtime stopped".to_owned()))?;
+        Ok(receiver)
+    }
+
+    /// Enqueues a command and deterministically waits until the StationRuntime
+    /// command loop has admitted and processed it in the StationController.
+    /// Returns the completion receiver for the subsequent pipeline execution.
+    #[cfg(test)]
+    pub(crate) async fn barrier(&self) -> Result<(), PipelineError> {
+        let (response, receiver) = oneshot::channel();
+        self.commands
+            .send(StationCommand::Barrier(response))
+            .await
+            .map_err(|_| PipelineError::Pipeline("station runtime stopped".to_owned()))?;
+        receiver
+            .await
+            .map_err(|_| PipelineError::Pipeline("station runtime stopped".to_owned()))
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn submit_and_wait_admitted(
+        &self,
+        command: impl FnOnce(oneshot::Sender<Result<(), PipelineError>>) -> StationCommand,
+    ) -> Result<oneshot::Receiver<Result<(), PipelineError>>, PipelineError> {
+        let receiver = self.begin_command(command).await?;
+        self.barrier().await?;
+        Ok(receiver)
+    }
     /// shutdown: a caller dropped while the channel is full abandons the
     /// send and leaves the runtime untouched, with no command behind.
     pub(crate) async fn begin_shutdown(&self) -> Result<oneshot::Receiver<Result<(), PipelineError>>, PipelineError> {
@@ -617,48 +678,62 @@ impl StationCommand {
         retries: mpsc::Sender<StationCommand>,
         operations: &mpsc::UnboundedSender<ExecutorTask>,
         urgent: &mpsc::UnboundedSender<ExecutorTask>,
+        #[cfg(test)] play_result_gate: std::sync::Arc<std::sync::Mutex<Option<std::sync::Arc<crate::streamer::testsupport::Gate>>>>,
     ) -> bool {
         match self {
-            Self::Play(response) => {
-                ExecutorTask::Operation(PendingPipelineAction::operation(controller.play().await, Some(response))).submit(operations);
-                // The pipeline does not restore a connection that broke
-                // while paused: after the resume is queued, queue the
-                // reconnect for the remembered break (full automatic chain:
-                // token, output binding, retry on failure).
-                if controller.is_output_known_disconnected() {
-                    let generation = controller.generation();
-                    let output_epoch = controller.output_epoch();
-                    match controller.resume_reconnect_for_break().await {
-                        Some(Ok(super::driver::PipelineOperation::Reconnect(target))) => {
-                            let token = controller.current_reconnect_token();
-                            let token_shared = controller.reconnect_token_shared();
-                            ExecutorTask::Operation(PendingPipelineAction::reconnect(
-                                target,
-                                retries,
-                                generation,
-                                output_epoch,
-                                0,
-                                token,
-                                token_shared,
-                                None,
-                                true,
-                            ))
-                            .submit(operations);
+            Self::Play(response) => match controller.play().await {
+                Ok(prepared) => {
+                    match prepared.play_attempt_id {
+                        Some(attempt_id) => {
+                            #[cfg(test)]
+                            let gate = play_result_gate.lock().unwrap().clone();
+                            #[cfg(test)]
+                            submit_play_operation(prepared.operation, attempt_id, Some(response), operations, &retries, gate);
+                            #[cfg(not(test))]
+                            submit_play_operation(prepared.operation, attempt_id, Some(response), operations, &retries);
                         }
-                        Some(Ok(operation)) => {
-                            ExecutorTask::Operation(PendingPipelineAction::operation(operation, None)).submit(operations);
+                        None => {
+                            ExecutorTask::Operation(PendingPipelineAction::operation(prepared.operation, Some(response)))
+                                .submit(operations);
                         }
-                        Some(Err(error)) => {
-                            // Target refresh failed: retryable like a
-                            // disconnect-time refresh failure.
-                            let token = controller.current_reconnect_token();
-                            tracing::warn!(%error, generation, output_epoch, "failed to prepare reconnect after pause; scheduling a retry");
-                            schedule_reconnect_retry(retries, generation, output_epoch, 0, token);
+                    }
+                    // token, output binding, retry on failure).
+                    if controller.is_output_known_disconnected() {
+                        let generation = controller.generation();
+                        let output_epoch = controller.output_epoch();
+                        match controller.resume_reconnect_for_break().await {
+                            Some(Ok(super::driver::PipelineOperation::Reconnect(target))) => {
+                                let token = controller.current_reconnect_token();
+                                let token_shared = controller.reconnect_token_shared();
+                                ExecutorTask::Operation(PendingPipelineAction::reconnect(
+                                    target,
+                                    retries,
+                                    generation,
+                                    output_epoch,
+                                    0,
+                                    token,
+                                    token_shared,
+                                    None,
+                                    true,
+                                ))
+                                .submit(operations);
+                            }
+                            Some(Ok(operation)) => {
+                                ExecutorTask::Operation(PendingPipelineAction::operation(operation, None)).submit(operations);
+                            }
+                            Some(Err(error)) => {
+                                // Target refresh failed: retryable like a
+                                // disconnect-time refresh failure.
+                                let token = controller.current_reconnect_token();
+                                tracing::warn!(%error, generation, output_epoch, "failed to prepare reconnect after pause; scheduling a retry");
+                                schedule_reconnect_retry(retries, generation, output_epoch, 0, token);
+                            }
+                            None => {}
                         }
-                        None => {}
                     }
                 }
-            }
+                Err(error) => send(response, Err(error)),
+            },
             Self::Pause(response) => {
                 ExecutorTask::Operation(PendingPipelineAction::operation(controller.pause(), Some(response))).submit(operations);
             }
@@ -815,8 +890,15 @@ impl StationCommand {
             Self::Status(response) => {
                 let _ = response.send(controller.status().await);
             }
+            #[cfg(test)]
+            Self::Barrier(response) => {
+                let _ = response.send(());
+            }
             Self::ResumeResult { attempt_id, result } => {
                 controller.on_resume_result(attempt_id, result);
+            }
+            Self::PlayResult { attempt_id, result } => {
+                controller.commit_play(attempt_id, &result);
             }
             Self::SkipResult { attempt_id, result } => {
                 // The manual caller's response is taken only when this
@@ -886,6 +968,43 @@ fn submit_observed(
     });
 }
 
+/// Submits the initial replacement of play attempt `attempt_id` (as returned
+/// by `play()`) and routes its completion back as `StationCommand::PlayResult`
+/// for exactly that attempt. The logical state is advanced to `Playing` only
+/// after the physical replacement succeeded; a failure leaves the controller
+/// in `Stopped` so a subsequent play attempt retries the initial replacement.
+fn submit_play_operation(
+    operation: super::driver::PipelineOperation,
+    attempt_id: u64,
+    response: Option<oneshot::Sender<Result<(), PipelineError>>>,
+    lane: &mpsc::UnboundedSender<ExecutorTask>,
+    commands: &mpsc::Sender<StationCommand>,
+    #[cfg(test)] play_result_gate: Option<std::sync::Arc<crate::streamer::testsupport::Gate>>,
+) {
+    let (completion, receiver) = oneshot::channel();
+    ExecutorTask::Operation(PendingPipelineAction::operation(operation, Some(completion))).submit(lane);
+    let commands = commands.clone();
+    tokio::spawn(async move {
+        let result = receiver
+            .await
+            .unwrap_or_else(|_| Err(PipelineError::Pipeline("station runtime stopped".to_owned())));
+        #[cfg(test)]
+        if let Some(gate) = &play_result_gate {
+            gate.started.notify_one();
+            gate.wait_released().await;
+        }
+        let _ = commands
+            .send(StationCommand::PlayResult {
+                attempt_id,
+                result: result.clone(),
+            })
+            .await;
+        if let Some(response) = response {
+            send(response, result);
+        }
+    });
+}
+
 /// Submits the replacement of skip attempt `attempt_id` (as returned by
 /// the skip preparation) and routes its completion back as
 /// `StationCommand::SkipResult` for exactly that attempt. The logical skip
@@ -939,12 +1058,18 @@ fn submit_prepared(
         submit_realign_operation(prepared.operation, realign_id, lane, commands);
         return;
     }
+    if let Some(play_attempt_id) = prepared.play_attempt_id {
+        #[cfg(test)]
+        submit_play_operation(prepared.operation, play_attempt_id, None, lane, commands, None);
+        #[cfg(not(test))]
+        submit_play_operation(prepared.operation, play_attempt_id, None, lane, commands);
+        return;
+    }
     match prepared.attempt_id {
         Some(attempt_id) => submit_skip_operation(prepared.operation, attempt_id, lane, commands),
         None => ExecutorTask::Operation(PendingPipelineAction::operation(prepared.operation, None)).submit(lane),
     }
 }
-
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -1383,7 +1508,7 @@ mod tests {
 
         let (action, shared) = reconnect_action(harness.commands.clone(), 10, None, true);
         harness.submit_urgent(action);
-        let gate = pipeline.reconnect_gate.as_ref().expect("gated pipeline");
+        let gate = pipeline.reconnect_gate().expect("gated pipeline");
         tokio::time::timeout(Duration::from_secs(2), gate.wait_started())
             .await
             .expect("reconnect X must reach the pipeline");
@@ -1429,7 +1554,11 @@ mod tests {
     #[tokio::test]
     async fn begin_shutdown_parks_until_admission_and_abandoned_send_leaves_no_command_behind() {
         let (commands, mut receiver) = mpsc::channel::<StationCommand>(2);
-        let runtime = StationRuntime { commands };
+        let runtime = StationRuntime {
+            commands,
+            #[cfg(test)]
+            play_result_gate: std::sync::Arc::new(std::sync::Mutex::new(None)),
+        };
         for _ in 0..2 {
             let (dummy, _) = oneshot::channel();
             runtime.commands.send(StationCommand::PushQueueUpdate(dummy)).await.unwrap();
@@ -1477,7 +1606,11 @@ mod tests {
     #[tokio::test]
     async fn begin_shutdown_returns_the_completion_receiver_after_admission() {
         let (commands, mut receiver) = mpsc::channel::<StationCommand>(2);
-        let runtime = StationRuntime { commands };
+        let runtime = StationRuntime {
+            commands,
+            #[cfg(test)]
+            play_result_gate: std::sync::Arc::new(std::sync::Mutex::new(None)),
+        };
         let (dummy, _) = oneshot::channel();
         runtime.commands.send(StationCommand::PushQueueUpdate(dummy)).await.unwrap();
 
@@ -1508,7 +1641,11 @@ mod tests {
     async fn begin_shutdown_reports_a_runtime_whose_command_loop_is_gone() {
         let (commands, receiver) = mpsc::channel::<StationCommand>(2);
         drop(receiver);
-        let runtime = StationRuntime { commands };
+        let runtime = StationRuntime {
+            commands,
+            #[cfg(test)]
+            play_result_gate: std::sync::Arc::new(std::sync::Mutex::new(None)),
+        };
         match runtime.begin_shutdown().await {
             Err(PipelineError::Pipeline(message)) => assert!(message.contains("station runtime stopped"), "unexpected error: {message}"),
             other => panic!("expected the runtime-stopped error, got {other:?}"),
