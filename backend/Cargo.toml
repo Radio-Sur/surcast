@@ -28,7 +28,7 @@ zip = "8"
 tokio-stream = "0.1"
 base64 = "0.23"
 async-trait = "0.1"
-quick-xml = "0.37"
+quick-xml = "0.41"
 mime_guess = "2"
 autocue-rs = { path = "../autocue-rs" }
 
