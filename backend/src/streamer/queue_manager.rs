@@ -17,6 +17,30 @@ pub(crate) struct QueueManager {
     refill_attempted_for: Mutex<Option<TrackKey>>,
 }
 
+/// What a `commit_current` did with the target song. The in-memory current
+/// ALWAYS advances to the song — the caller only commits songs the physical
+/// pipeline has actually adopted, so the logical current must represent them
+/// regardless of persistence or membership. The variants only describe how
+/// the database side went.
+pub(crate) enum CommitOutcome {
+    /// The cursor (and refill) persisted and the in-memory current advanced.
+    Applied {
+        /// The next unconsumed queue item after the committed song.
+        successor: Option<SongInfo>,
+    },
+    /// Persisting the cursor failed; it is retried on the next queue reload
+    /// (dirty-cursor convention). The in-memory current advanced anyway.
+    Deferred { successor: Option<SongInfo> },
+    /// The committed song is no longer a queue member (it was removed or
+    /// replaced by a reload while a physical operation targeting it was in
+    /// flight). The in-memory current represents it as a phantom until a
+    /// handover commits a queue member — the same representation the queue
+    /// already uses for a current that vanished while playing. The cursor is
+    /// persisted best-effort (the database accepts cursors referencing
+    /// deleted queue items, the documented heal convention).
+    Missing { successor: Option<SongInfo> },
+}
+
 impl QueueManager {
     #[cfg(test)]
     pub fn new(db: PgPool, station_id: Uuid, upload_dir: String, songs: Vec<SongInfo>, initial_idx: usize) -> Self {
@@ -128,28 +152,36 @@ impl QueueManager {
         self.state.lock().unwrap_or_else(|error| error.into_inner()).anchor_after_current()
     }
 
-    pub async fn commit_current(&self, key: &TrackKey, anchor: QueueAnchor) -> Option<TrackKey> {
-        let (previous_current_queue_item_id, cursor, song) = {
+    pub async fn commit_current(&self, song: &SongInfo, anchor: QueueAnchor) -> CommitOutcome {
+        let key = TrackKey {
+            queue_item_id: song.queue_item_id,
+            song_id: song.song_id,
+        };
+        let (previous_current_queue_item_id, in_items, cursor) = {
             let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
             let previous_current_queue_item_id = state.current_song_info().map(|song| song.queue_item_id);
-            let song = state.song_by_queue_item_id(key.queue_item_id)?;
+            let in_items = state.song_by_queue_item_id(song.queue_item_id).is_some();
             // Build the cursor without mutating the in-memory state yet: the
             // database commit (cursor + AutoDJ refill) is atomic, and memory
             // must not move ahead of it — otherwise a status snapshot could
             // observe the new song index together with the pre-refill queue
-            // and report a short upcoming window.
+            // and report a short upcoming window. The cursor is built from
+            // the caller's song even when it is no longer a queue member:
+            // the pipeline has physically adopted it, and the database
+            // accepts cursors referencing deleted queue items (the heal
+            // convention for cleared queues).
             let mut consumed_queue_item_ids: Vec<_> = anchor.consumed_queue_item_ids.iter().copied().collect();
             consumed_queue_item_ids.sort_unstable();
             let cursor = QueueCursor {
-                current_queue_item_id: Some(key.queue_item_id),
+                current_queue_item_id: Some(song.queue_item_id),
                 consumed_queue_item_ids,
                 legacy_position: song.position,
             };
-            (previous_current_queue_item_id, cursor, song)
+            (previous_current_queue_item_id, in_items, cursor)
         };
         let owns_refill = reserve_refill(
             &mut self.refill_attempted_for.lock().unwrap_or_else(|error| error.into_inner()),
-            key,
+            &key,
         );
         let result = if owns_refill {
             self.repository
@@ -164,31 +196,44 @@ impl QueueManager {
             if owns_refill {
                 release_refill(
                     &mut self.refill_attempted_for.lock().unwrap_or_else(|error| error.into_inner()),
-                    key,
+                    &key,
                 );
             }
             tracing::warn!(station_id = %self.station_id(), %error, "deferring queue cursor persistence");
             *self.dirty_cursor.lock().unwrap_or_else(|error| error.into_inner()) = Some((previous_current_queue_item_id, cursor));
-            return self.successor_after(key).map(track_key);
+            // The pipeline has already adopted the song, so the in-memory
+            // current follows it even when the persist failed; the dirty
+            // cursor catches the database up on the next queue reload. The
+            // snapshot-straddle cost (new current with pre-refill queue) is
+            // transient and preferable to claiming a track the pipeline is
+            // no longer playing.
+            {
+                let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+                state.commit_current(song.clone(), anchor);
+            }
+            let successor = self.successor_after(&key);
+            return if in_items {
+                CommitOutcome::Deferred { successor }
+            } else {
+                CommitOutcome::Missing { successor }
+            };
         }
         // The database cursor and refill are committed: only now advance the
         // in-memory state so status snapshots never straddle the two.
         {
             let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
-            state.commit_current(song, anchor);
+            state.commit_current(song.clone(), anchor);
         }
         *self.dirty_cursor.lock().unwrap_or_else(|error| error.into_inner()) = None;
         if owns_refill {
             self.reload_from_db().await;
         }
-        self.successor_after(key).map(track_key)
-    }
-}
-
-fn track_key(song: SongInfo) -> TrackKey {
-    TrackKey {
-        queue_item_id: song.queue_item_id,
-        song_id: song.song_id,
+        let successor = self.successor_after(&key);
+        if in_items {
+            CommitOutcome::Applied { successor }
+        } else {
+            CommitOutcome::Missing { successor }
+        }
     }
 }
 

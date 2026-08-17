@@ -197,6 +197,9 @@ impl Gate {
 /// No test currently needs a custom snapshot, so none is settable.
 pub(crate) struct RecordingPipeline {
     calls: Mutex<Vec<Call>>,
+    /// Rolling plans as submitted, so tests can assert what branch a roll
+    /// actually (re-)stages instead of only that a roll happened.
+    rolls: Mutex<Vec<RollingPlan>>,
     fail: Mutex<HashSet<Call>>,
     fail_once: Mutex<HashSet<Call>>,
     /// Zero-based attempt index that must fail for a call, removed after it
@@ -207,12 +210,14 @@ pub(crate) struct RecordingPipeline {
     pub(crate) replace_gate: Option<Arc<Gate>>,
     pub(crate) reconnect_gate: Option<Arc<Gate>>,
     pub(crate) stop_gate: Option<Arc<Gate>>,
+    pub(crate) roll_gate: Option<Arc<Gate>>,
 }
 
 impl RecordingPipeline {
     pub(crate) fn new() -> Self {
         Self {
             calls: Mutex::new(Vec::new()),
+            rolls: Mutex::new(Vec::new()),
             fail: Mutex::new(HashSet::new()),
             fail_once: Mutex::new(HashSet::new()),
             fail_nth: Mutex::new(HashMap::new()),
@@ -224,6 +229,7 @@ impl RecordingPipeline {
             replace_gate: None,
             reconnect_gate: None,
             stop_gate: None,
+            roll_gate: None,
         }
     }
 
@@ -241,6 +247,15 @@ impl RecordingPipeline {
     pub(crate) fn with_stop_gate(stop_gate: Arc<Gate>) -> Self {
         Self {
             stop_gate: Some(stop_gate),
+            ..Self::new()
+        }
+    }
+
+    /// A pipeline whose `roll` blocks until released — used to prove that
+    /// early Handover events arriving before a roll completion are accepted.
+    pub(crate) fn with_roll_gate(roll_gate: Arc<Gate>) -> Self {
+        Self {
+            roll_gate: Some(roll_gate),
             ..Self::new()
         }
     }
@@ -269,6 +284,11 @@ impl RecordingPipeline {
     /// The exact sequence of calls, in invocation order.
     pub(crate) fn calls(&self) -> Vec<Call> {
         self.calls.lock().clone()
+    }
+
+    /// Every rolling plan submitted so far, in submission order.
+    pub(crate) fn rolls(&self) -> Vec<RollingPlan> {
+        self.rolls.lock().clone()
     }
 
     fn record(&self, call: Call) -> Result<(), PipelineError> {
@@ -303,8 +323,14 @@ impl crate::streamer::pipeline::PlaybackPipeline for RecordingPipeline {
         Ok(())
     }
 
-    async fn roll(&self, _: RollingPlan) -> Result<(), PipelineError> {
-        self.record(Call::Roll)
+    async fn roll(&self, plan: RollingPlan) -> Result<(), PipelineError> {
+        self.rolls.lock().push(plan);
+        self.record(Call::Roll)?;
+        if let Some(gate) = &self.roll_gate {
+            gate.started.notify_one();
+            gate.wait_released().await;
+        }
+        Ok(())
     }
 
     async fn apply_output(&self, _: OutputConfig) -> Result<(), PipelineError> {

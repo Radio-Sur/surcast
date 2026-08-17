@@ -50,6 +50,25 @@ pub(crate) enum StationCommand {
         attempt_id: u64,
         result: Result<(), PipelineError>,
     },
+    /// Outcome of a skip replacement, delivered by the executor forwarder
+    /// after the replace ran. `attempt_id` correlates the outcome with the
+    /// exact skip attempt; the controller ignores completions for attempts
+    /// that a newer decision superseded, and the manual caller is answered
+    /// only after the logical commit (or abandon) applied.
+    SkipResult {
+        attempt_id: u64,
+        result: Result<(), PipelineError>,
+    },
+    /// Outcome of a realign roll scheduled by a skip commit, delivered by
+    /// the executor forwarder after the roll ran. `id` correlates the
+    /// outcome with the exact realign the commit minted; `planned_next` is
+    /// only advanced by the controller once the roll succeeded while the
+    /// identity it was built for still holds — a failure, or a completion
+    /// superseded by a newer handover/skip, changes nothing.
+    RealignResult {
+        id: u64,
+        result: Result<(), PipelineError>,
+    },
 }
 
 pub(crate) struct ReconnectRetry {
@@ -394,7 +413,10 @@ impl StationRuntime {
                     event = events.recv() => match event {
                         Some(PipelineEvent::SinkDisconnected { generation, output_epoch, message }) => {
                             match controller.handle_event(PipelineEvent::SinkDisconnected { generation, output_epoch, message }).await {
-                                Some(Ok(super::driver::PipelineOperation::Reconnect(target))) => {
+                                Some(Ok(super::controller::PreparedOperation {
+                                    operation: super::driver::PipelineOperation::Reconnect(target),
+                                    ..
+                                })) => {
                                     let token = controller.current_reconnect_token();
                                     let token_shared = controller.reconnect_token_shared();
                                     ExecutorTask::Operation(PendingPipelineAction::reconnect(
@@ -410,7 +432,9 @@ impl StationRuntime {
                                     ))
                                     .submit(&operations_urgent);
                                 }
-                                Some(Ok(operation)) => ExecutorTask::Operation(PendingPipelineAction::operation(operation, None)).submit(&operations_urgent),
+                                Some(Ok(prepared)) => {
+                                    ExecutorTask::Operation(PendingPipelineAction::operation(prepared.operation, None)).submit(&operations_urgent);
+                                }
                                 Some(Err(error)) => {
                                     // The chain just started (its token is
                                     // already active), but the target refresh
@@ -425,7 +449,21 @@ impl StationRuntime {
                             }
                         },
                         Some(event) => match controller.handle_event(event).await {
-                            Some(Ok(operation)) => ExecutorTask::Operation(PendingPipelineAction::operation(operation, None)).submit(&operations_urgent),
+                            // Terminal events (CurrentEos / DecodeFailed of
+                            // the current track) prepare a skip: the
+                            // event-driven replacement gets the same
+                            // two-phase treatment as a manual one, so a
+                            // failed Replace keeps the controller on the old
+                            // track/generation while the pipeline keeps
+                            // playing it. A terminal event arriving while a
+                            // skip is already in flight is deferred inside
+                            // the controller and re-resolved when that skip
+                            // resolves. The completion binding comes from
+                            // the event handling itself: only a skip the
+                            // event prepared carries an attempt id — a
+                            // handover attach or a decode-failure roll never
+                            // produces a SkipResult.
+                            Some(Ok(prepared)) => submit_prepared(prepared, &operations_urgent, &retries),
                             Some(Err(error)) => tracing::error!(error = %error, "failed to apply pipeline event"),
                             None => {}
                         },
@@ -637,7 +675,28 @@ impl StationCommand {
                 return false;
             }
             Self::Skip(response) => match controller.skip().await {
-                Ok(operation) => ExecutorTask::Operation(PendingPipelineAction::operation(operation, Some(response))).submit(operations),
+                Ok(prepared) => {
+                    // The logical commit is deferred until the pipeline
+                    // replacement succeeded: submit with a completion and
+                    // let the loop commit when the outcome arrives. The
+                    // manual caller is answered from the SkipResult arm —
+                    // never before the commit (or abandon) ran. The attempt
+                    // id comes from the skip preparation itself: the
+                    // completion can only ever commit THIS attempt.
+                    match prepared.attempt_id {
+                        Some(attempt_id) => {
+                            controller.attach_skip_response(attempt_id, response);
+                            submit_skip_operation(prepared.operation, attempt_id, operations, &retries);
+                        }
+                        None => {
+                            // Exhausted queue: a plain stop with no skip
+                            // attempt — answer the caller directly, like
+                            // every other plain command.
+                            ExecutorTask::Operation(PendingPipelineAction::operation(prepared.operation, Some(response)))
+                                .submit(operations);
+                        }
+                    }
+                }
                 Err(error) => send(response, Err(error)),
             },
             Self::Reconnect(response) => match controller.reconnect().await {
@@ -726,11 +785,14 @@ impl StationCommand {
                 align_next,
                 response,
             } => match controller.reload(songs, align_next).await {
-                // The realignment roll runs in the sequential executor; a
-                // lost race is non-fatal (the staged next simply keeps
-                // playing), so a stale roll must not fail the API request.
-                Ok(Some(operation)) => {
-                    ExecutorTask::Operation(PendingPipelineAction::operation(operation, None)).submit(operations);
+                // The realignment roll runs in the sequential executor with
+                // the correlated completion its preparation declared
+                // (`planned_next` advances only once it physically
+                // succeeded); a lost race is non-fatal (the staged next
+                // simply keeps playing), so a stale roll must not fail the
+                // API request.
+                Ok(Some(prepared)) => {
+                    submit_prepared(prepared, operations, &retries);
                     send(response, Ok(()));
                 }
                 Ok(None) => send(response, Ok(())),
@@ -756,6 +818,41 @@ impl StationCommand {
             Self::ResumeResult { attempt_id, result } => {
                 controller.on_resume_result(attempt_id, result);
             }
+            Self::SkipResult { attempt_id, result } => {
+                // The manual caller's response is taken only when this
+                // completion still belongs to the pending attempt; the
+                // commit itself is id-correlated inside the controller. A
+                // stale completion neither commits nor answers.
+                let response = controller.take_skip_response(attempt_id);
+                let (applied, followup) = controller.commit_skip(attempt_id, &result).await;
+                if applied {
+                    if let Some(response) = response {
+                        send(response, result);
+                    }
+                }
+                // Follow-up work the commit produced, submitted with exactly
+                // the correlation the commit declared: a realign roll gets a
+                // `RealignResult` completion, a terminal retry a fresh
+                // `SkipResult` completion bound to its own attempt id, and
+                // anything else is a plain operation.
+                match followup {
+                    super::controller::SkipFollowup::None => {}
+                    super::controller::SkipFollowup::Realign { id, operation } => {
+                        submit_realign_operation(operation, id, operations, &retries);
+                    }
+                    super::controller::SkipFollowup::Operation(prepared) => {
+                        submit_prepared(prepared, operations, &retries);
+                    }
+                }
+            }
+            Self::RealignResult { id, result } => {
+                // The completion may reconcile toward the newest queue
+                // successor (a reload dirtied the alignment): submit the
+                // follow-up realign with its own fresh correlation.
+                if let Some((next_id, prepared)) = controller.commit_realign(id, &result) {
+                    submit_realign_operation(prepared.operation, next_id, operations, &retries);
+                }
+            }
         }
         true
     }
@@ -763,6 +860,89 @@ impl StationCommand {
 
 fn send(response: oneshot::Sender<Result<(), PipelineError>>, result: Result<(), PipelineError>) {
     let _ = response.send(result);
+}
+
+/// Submits a pipeline operation with a completion channel and forwards the
+/// executor's answer back into the runtime loop as `command`. The loop is
+/// NOT blocked while the executor runs the operation — commands and events
+/// keep being processed, and the caller is answered only once the commit
+/// (or abandon) ran. The completion is bound to EXACTLY the operation being
+/// submitted: the correlation (`attempt_id` for skips, `id` for realigns)
+/// travels from the operation's creation site into this function.
+fn submit_observed(
+    operation: super::driver::PipelineOperation,
+    command: impl FnOnce(Result<(), PipelineError>) -> StationCommand + Send + 'static,
+    lane: &mpsc::UnboundedSender<ExecutorTask>,
+    commands: &mpsc::Sender<StationCommand>,
+) {
+    let (completion, receiver) = oneshot::channel();
+    ExecutorTask::Operation(PendingPipelineAction::operation(operation, Some(completion))).submit(lane);
+    let commands = commands.clone();
+    tokio::spawn(async move {
+        let result = receiver
+            .await
+            .unwrap_or_else(|_| Err(PipelineError::Pipeline("station runtime stopped".to_owned())));
+        let _ = commands.send(command(result)).await;
+    });
+}
+
+/// Submits the replacement of skip attempt `attempt_id` (as returned by
+/// the skip preparation) and routes its completion back as
+/// `StationCommand::SkipResult` for exactly that attempt. The logical skip
+/// commit (queue/DB cursor, generation, notifications) is applied by the
+/// loop only after the pipeline replacement succeeded. The attempt id is
+/// NEVER inferred from a global pending state: an operation not explicitly
+/// created for attempt X cannot produce a `SkipResult` for X.
+fn submit_skip_operation(
+    operation: super::driver::PipelineOperation,
+    attempt_id: u64,
+    lane: &mpsc::UnboundedSender<ExecutorTask>,
+    commands: &mpsc::Sender<StationCommand>,
+) {
+    submit_observed(
+        operation,
+        move |result| StationCommand::SkipResult { attempt_id, result },
+        lane,
+        commands,
+    );
+}
+
+/// Submits the realign roll of realign `id` (as minted by the skip commit)
+/// and routes its completion back as `StationCommand::RealignResult` for
+/// exactly that realign: `planned_next` is only advanced once the roll
+/// succeeded while the identity still holds.
+fn submit_realign_operation(
+    operation: super::driver::PipelineOperation,
+    id: u64,
+    lane: &mpsc::UnboundedSender<ExecutorTask>,
+    commands: &mpsc::Sender<StationCommand>,
+) {
+    submit_observed(
+        operation,
+        move |result| StationCommand::RealignResult { id, result },
+        lane,
+        commands,
+    );
+}
+
+/// Submits a prepared operation with the correlation its preparation
+/// declared: a realign roll gets its own `RealignResult` completion (so
+/// `planned_next` only advances after the roll physically succeeded), a
+/// skip attempt gets its own `SkipResult` completion, anything else is
+/// submitted plainly (fire-and-forget, exactly as before).
+fn submit_prepared(
+    prepared: super::controller::PreparedOperation,
+    lane: &mpsc::UnboundedSender<ExecutorTask>,
+    commands: &mpsc::Sender<StationCommand>,
+) {
+    if let Some(realign_id) = prepared.realign_id {
+        submit_realign_operation(prepared.operation, realign_id, lane, commands);
+        return;
+    }
+    match prepared.attempt_id {
+        Some(attempt_id) => submit_skip_operation(prepared.operation, attempt_id, lane, commands),
+        None => ExecutorTask::Operation(PendingPipelineAction::operation(prepared.operation, None)).submit(lane),
+    }
 }
 
 #[cfg(test)]
