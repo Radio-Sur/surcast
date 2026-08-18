@@ -85,16 +85,33 @@ impl Drop for ReplacementCleanup {
     }
 }
 
-struct OutputReconnectGuard(Arc<AtomicBool>);
+struct OutputReconnectGuard(Arc<Mutex<SinkState>>);
 
 impl Drop for OutputReconnectGuard {
     fn drop(&mut self) {
-        self.0.store(false, Ordering::Release);
+        self.0.lock().unwrap_or_else(|error| error.into_inner()).reconnecting = false;
     }
 }
-enum SinkSlot {
+
+#[derive(Debug)]
+pub(super) enum SinkSlot {
     Active(gst::Element),
-    Replacing { _old_sink: gst::Element, _candidate: gst::Element },
+    Replacing { old_sink: gst::Element, candidate: gst::Element },
+}
+
+#[derive(Debug)]
+pub(super) struct SinkState {
+    pub(super) slot: SinkSlot,
+    pub(super) reconnecting: bool,
+}
+
+impl SinkState {
+    pub(super) fn new(sink: gst::Element) -> Self {
+        Self {
+            slot: SinkSlot::Active(sink),
+            reconnecting: false,
+        }
+    }
 }
 
 pub(crate) struct GStreamerPipeline {
@@ -103,7 +120,7 @@ pub(crate) struct GStreamerPipeline {
     output_queue: gst::Element,
     output_caps: gst::Element,
     encoder: gst::Element,
-    sink: Mutex<SinkSlot>,
+    sink: Arc<Mutex<SinkState>>,
     metadata_target: Arc<Mutex<IcecastTarget>>,
     metadata_publisher: Option<sink::MetadataPublisher>,
     clock_gate: gst::Element,
@@ -111,7 +128,6 @@ pub(crate) struct GStreamerPipeline {
     branches: Mutex<Vec<Branch>>,
     active: Arc<Mutex<Option<ActivePlan>>>,
     replacing: Arc<Mutex<Option<ReplaceCancellation>>>,
-    output_reconnecting: Arc<AtomicBool>,
     snapshot: Mutex<PipelineSnapshot>,
     events: mpsc::UnboundedSender<PipelineEvent>,
 }
@@ -304,11 +320,11 @@ impl GStreamerPipeline {
             }
         }
         if failures.is_empty() {
-            *self.sink.lock().unwrap_or_else(|error| error.into_inner()) = SinkSlot::Active(old_sink.clone());
+            self.sink.lock().unwrap_or_else(|error| error.into_inner()).slot = SinkSlot::Active(old_sink.clone());
             Ok(())
         } else {
             self.force_stopped();
-            *self.sink.lock().unwrap_or_else(|error| error.into_inner()) = SinkSlot::Active(old_sink.clone());
+            self.sink.lock().unwrap_or_else(|error| error.into_inner()).slot = SinkSlot::Active(old_sink.clone());
             Err(PipelineError::Pipeline(format!(
                 "sink replacement rollback failed: {}",
                 failures.join("; ")
@@ -316,8 +332,31 @@ impl GStreamerPipeline {
         }
     }
     fn suppress_output_events(&self) -> OutputReconnectGuard {
-        self.output_reconnecting.store(true, Ordering::Release);
-        OutputReconnectGuard(self.output_reconnecting.clone())
+        self.sink.lock().unwrap_or_else(|error| error.into_inner()).reconnecting = true;
+        OutputReconnectGuard(self.sink.clone())
+    }
+
+    #[cfg(test)]
+    pub(super) fn gst_pipeline(&self) -> &gst::Pipeline {
+        &self.pipeline
+    }
+
+    #[cfg(test)]
+    pub(super) fn current_sink_element(&self) -> gst::Element {
+        match &self.sink.lock().unwrap_or_else(|error| error.into_inner()).slot {
+            SinkSlot::Active(sink) => sink.clone(),
+            SinkSlot::Replacing { candidate, .. } => candidate.clone(),
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn mixer_element(&self) -> gst::Element {
+        self.mixer.clone()
+    }
+
+    #[cfg(test)]
+    pub(super) fn encoder_element(&self) -> gst::Element {
+        self.encoder.clone()
     }
 }
 
@@ -574,8 +613,8 @@ impl PlaybackPipeline for GStreamerPipeline {
         let _reconnect_guard = self.suppress_output_events();
         let previous_state = self.snapshot.lock().unwrap_or_else(|error| error.into_inner()).state;
         if previous_state == PipelineState::Stopped {
-            let sink = self.sink.lock().unwrap_or_else(|error| error.into_inner());
-            if let SinkSlot::Active(sink) = &*sink {
+            let state = self.sink.lock().unwrap_or_else(|error| error.into_inner());
+            if let SinkSlot::Active(sink) = &state.slot {
                 if self.sink_factory == sink::DEFAULT_FACTORY {
                     sink::configure(sink, &target);
                 }
@@ -605,8 +644,8 @@ impl PlaybackPipeline for GStreamerPipeline {
                 )));
             }
             {
-                let sink = self.sink.lock().unwrap_or_else(|error| error.into_inner());
-                let SinkSlot::Active(sink) = &*sink else {
+                let state = self.sink.lock().unwrap_or_else(|error| error.into_inner());
+                let SinkSlot::Active(sink) = &state.slot else {
                     return Err(PipelineError::StalePlan);
                 };
                 if self.sink_factory == sink::DEFAULT_FACTORY {
@@ -626,7 +665,7 @@ impl PlaybackPipeline for GStreamerPipeline {
             return self.restore_state(PipelineState::Paused);
         }
 
-        let old_sink = match &*self.sink.lock().unwrap_or_else(|error| error.into_inner()) {
+        let old_sink = match &self.sink.lock().unwrap_or_else(|error| error.into_inner()).slot {
             SinkSlot::Active(sink) => sink.clone(),
             SinkSlot::Replacing { .. } => return Err(PipelineError::StalePlan),
         };
@@ -634,9 +673,9 @@ impl PlaybackPipeline for GStreamerPipeline {
         self.pipeline
             .add(&candidate)
             .map_err(|error| PipelineError::Pipeline(error.to_string()))?;
-        *self.sink.lock().unwrap_or_else(|error| error.into_inner()) = SinkSlot::Replacing {
-            _old_sink: old_sink.clone(),
-            _candidate: candidate.clone(),
+        self.sink.lock().unwrap_or_else(|error| error.into_inner()).slot = SinkSlot::Replacing {
+            old_sink: old_sink.clone(),
+            candidate: candidate.clone(),
         };
 
         let replacement = (|| -> Result<(), PipelineError> {
@@ -671,7 +710,7 @@ impl PlaybackPipeline for GStreamerPipeline {
             return Err(error);
         }
 
-        *self.sink.lock().unwrap_or_else(|error| error.into_inner()) = SinkSlot::Active(candidate);
+        self.sink.lock().unwrap_or_else(|error| error.into_inner()).slot = SinkSlot::Active(candidate);
         *self.metadata_target.lock().unwrap_or_else(|error| error.into_inner()) = target;
         let metadata = self
             .active
@@ -705,9 +744,11 @@ impl PlaybackPipeline for GStreamerPipeline {
     }
 }
 
-#[async_trait]
-impl PlaybackPipelineFactory for GStreamerPipelineFactory {
-    async fn create(&self, config: PipelineConfig) -> Result<PipelineInstance, PipelineError> {
+impl GStreamerPipelineFactory {
+    pub(super) async fn create_pipeline(
+        &self,
+        config: PipelineConfig,
+    ) -> Result<(Arc<GStreamerPipeline>, mpsc::UnboundedReceiver<PipelineEvent>), PipelineError> {
         let graph::Backbone {
             pipeline,
             mixer,
@@ -720,45 +761,49 @@ impl PlaybackPipelineFactory for GStreamerPipelineFactory {
         let (events, receiver) = mpsc::unbounded_channel();
         let active: Arc<Mutex<Option<ActivePlan>>> = Arc::new(Mutex::new(None));
         let replacing: Arc<Mutex<Option<ReplaceCancellation>>> = Arc::new(Mutex::new(None));
-        let output_reconnecting = Arc::new(AtomicBool::new(false));
         let metadata_target = Arc::new(Mutex::new(config.target.clone()));
         let metadata_publisher = (self.sink_factory == sink::DEFAULT_FACTORY).then(sink::MetadataPublisher::spawn);
-        let sink_slot = Mutex::new(SinkSlot::Active(sink));
+        let sink_state = Arc::new(Mutex::new(SinkState::new(sink)));
         bus::install(
             &pipeline,
             &clock_gate,
+            sink_state.clone(),
             metadata_target.clone(),
             metadata_publisher.clone(),
             active.clone(),
             replacing.clone(),
-            output_reconnecting.clone(),
             events.clone(),
         )
         .expect("bus installed");
-        Ok(PipelineInstance {
-            pipeline: Arc::new(GStreamerPipeline {
-                pipeline,
-                mixer,
-                output_queue,
-                output_caps,
-                encoder,
-                sink: sink_slot,
-                metadata_target,
-                metadata_publisher,
-                clock_gate,
-                sink_factory: self.sink_factory,
-                branches: Mutex::new(Vec::new()),
-                active,
-                replacing,
-                output_reconnecting,
-                snapshot: Mutex::new(PipelineSnapshot {
-                    state: PipelineState::Stopped,
-                    elapsed: Duration::ZERO,
-                }),
-                events,
+        let pipeline = Arc::new(GStreamerPipeline {
+            pipeline,
+            mixer,
+            output_queue,
+            output_caps,
+            encoder,
+            sink: sink_state,
+            metadata_target,
+            metadata_publisher,
+            clock_gate,
+            sink_factory: self.sink_factory,
+            branches: Mutex::new(Vec::new()),
+            active,
+            replacing,
+            snapshot: Mutex::new(PipelineSnapshot {
+                state: PipelineState::Stopped,
+                elapsed: Duration::ZERO,
             }),
-            events: receiver,
-        })
+            events,
+        });
+        Ok((pipeline, receiver))
+    }
+}
+
+#[async_trait]
+impl PlaybackPipelineFactory for GStreamerPipelineFactory {
+    async fn create(&self, config: PipelineConfig) -> Result<PipelineInstance, PipelineError> {
+        let (pipeline, events) = self.create_pipeline(config).await?;
+        Ok(PipelineInstance { pipeline, events })
     }
 }
 
@@ -773,25 +818,31 @@ mod tests {
     /// Owns a real (test-sink) pipeline instance plus its event stream and
     /// keeps the temporary WAV files alive for the lifetime of the test.
     struct GstHarness {
-        pipeline: Arc<dyn PlaybackPipeline>,
+        pipeline: Arc<GStreamerPipeline>,
         events: mpsc::UnboundedReceiver<PipelineEvent>,
         files: Vec<tempfile::NamedTempFile>,
     }
 
     impl GstHarness {
         async fn new() -> Self {
-            let instance = GStreamerPipelineFactory::with_test_sink()
-                .create(testsupport::pipeline_config())
+            let (pipeline, events) = GStreamerPipelineFactory::with_test_sink()
+                .create_pipeline(testsupport::pipeline_config())
                 .await
                 .unwrap();
             Self {
-                pipeline: instance.pipeline,
-                events: instance.events,
+                pipeline,
+                events,
                 files: Vec::new(),
             }
         }
 
-        /// Writes a short tone WAV and keeps the temp file alive.
+        async fn start_playing(generation: u64) -> Self {
+            let mut harness = Self::new().await;
+            let track = harness.track(Duration::from_secs(2), 8_000, 0);
+            let plan = initial_plan(generation, track, None, TransitionPlan::Cut);
+            harness.pipeline.replace(plan).await.unwrap();
+            harness
+        }
         fn wav(&mut self, duration: Duration, sample: i16) -> PathBuf {
             let file = tempfile::NamedTempFile::new().unwrap();
             write_wav(file.path(), duration, sample);
@@ -831,11 +882,185 @@ mod tests {
             .expect("pipeline event timeout")
         }
 
+        fn post_error(&self, src: &impl IsA<gst::Object>, message: &str) {
+            let msg = gst::message::Error::builder(gst::StreamError::Failed, message).src(src).build();
+            self.pipeline
+                .gst_pipeline()
+                .bus()
+                .expect("pipeline has bus")
+                .post(msg)
+                .expect("message posted to bus");
+        }
+
+        fn try_recv_event(&mut self) -> Option<PipelineEvent> {
+            self.events.try_recv().ok()
+        }
+
         async fn stop(&self) {
             self.pipeline.stop().await.unwrap();
         }
     }
 
+    #[tokio::test]
+    async fn output_sink_error_generates_sink_disconnected() {
+        let mut harness = GstHarness::start_playing(1).await;
+        let sink = harness.pipeline.current_sink_element();
+        harness.post_error(&sink, "icecast connection lost");
+
+        let event = harness.next_event().await;
+        assert!(
+            matches!(event, PipelineEvent::SinkDisconnected { generation: 1, output_epoch: 1, ref message } if message.contains("icecast connection lost")),
+            "expected SinkDisconnected event, got {event:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn media_branch_decoder_error_does_not_generate_sink_disconnected() {
+        let mut harness = GstHarness::start_playing(1).await;
+        let decoder = gst::ElementFactory::make("audiotestsrc").name("branch-decoder").build().unwrap();
+        harness.pipeline.gst_pipeline().add(&decoder).unwrap();
+
+        harness.post_error(&decoder, "corrupt audio payload");
+
+        assert!(
+            harness.try_recv_event().is_none(),
+            "media branch error must not generate SinkDisconnected"
+        );
+    }
+
+    #[tokio::test]
+    async fn backbone_encoder_and_mixer_errors_do_not_generate_sink_disconnected() {
+        let mut harness = GstHarness::start_playing(1).await;
+        let encoder = harness.pipeline.encoder_element();
+        harness.post_error(&encoder, "encoder internal failure");
+        assert!(
+            harness.try_recv_event().is_none(),
+            "encoder error must not generate SinkDisconnected"
+        );
+
+        let mixer = harness.pipeline.mixer_element();
+        harness.post_error(&mixer, "mixer buffer drop");
+        assert!(harness.try_recv_event().is_none(), "mixer error must not generate SinkDisconnected");
+    }
+
+    #[tokio::test]
+    async fn error_classification_tracks_current_sink_across_reconnect() {
+        let mut harness = GstHarness::start_playing(1).await;
+        let old_sink = harness.pipeline.current_sink_element();
+
+        // Reconnect to a new target to replace the sink element
+        let target = testsupport::target();
+        harness.pipeline.reconnect(target).await.unwrap();
+
+        let new_sink = harness.pipeline.current_sink_element();
+        assert_ne!(old_sink, new_sink, "sink element must have been replaced");
+
+        // Old sink error must NOT generate SinkDisconnected
+        harness.post_error(&old_sink, "stale sink late error");
+        assert!(
+            harness.try_recv_event().is_none(),
+            "stale sink error must not generate SinkDisconnected"
+        );
+
+        // New active sink error MUST generate SinkDisconnected
+        harness.post_error(&new_sink, "new sink disconnected");
+        let event = harness.next_event().await;
+        assert!(
+            matches!(event, PipelineEvent::SinkDisconnected { generation: 1, output_epoch: 1, ref message } if message.contains("new sink disconnected")),
+            "expected SinkDisconnected from active replacement sink, got {event:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn old_sink_error_is_suppressed_during_reconnect_and_stale_afterward() {
+        let mut harness = GstHarness::start_playing(1).await;
+        let old_sink = harness.pipeline.current_sink_element();
+
+        // 1. Enter output reconnect suppression (as occurs during reconnect())
+        let guard = harness.pipeline.suppress_output_events();
+
+        // 2. An error arrives from the old sink while reconnect is active
+        harness.post_error(&old_sink, "old sink network drop during reconnect");
+        assert!(
+            harness.try_recv_event().is_none(),
+            "error during active reconnect must be suppressed"
+        );
+
+        // 3. Reconnect completes successfully, replacing old_sink with new_sink
+        drop(guard);
+        let target = testsupport::target();
+        harness.pipeline.reconnect(target).await.unwrap();
+
+        let new_sink = harness.pipeline.current_sink_element();
+        assert_ne!(old_sink, new_sink, "sink must be replaced");
+
+        // 4. Any subsequent error from the old stale sink must be rejected
+        harness.post_error(&old_sink, "old sink after reconnect completed");
+        assert!(
+            harness.try_recv_event().is_none(),
+            "stale old sink error must not trigger SinkDisconnected after reconnect"
+        );
+
+        // 5. New active sink error MUST generate SinkDisconnected
+        harness.post_error(&new_sink, "new active sink dropped");
+        let event = harness.next_event().await;
+        assert!(
+            matches!(event, PipelineEvent::SinkDisconnected { generation: 1, output_epoch: 1, ref message } if message.contains("new active sink dropped")),
+            "expected SinkDisconnected from new active sink, got {event:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn failed_sink_replacement_rollback_restores_old_sink_and_clears_suppression() {
+        let mut harness = GstHarness::start_playing(1).await;
+        let old_sink = harness.pipeline.current_sink_element();
+
+        // 1. Enter output reconnect suppression via RAII guard (as done in reconnect())
+        let guard = harness.pipeline.suppress_output_events();
+        assert!(
+            harness.pipeline.sink.lock().unwrap().reconnecting,
+            "suppression must be active during reconnect"
+        );
+
+        // 2. Set up a replacing candidate
+        let dummy_candidate = gst::ElementFactory::make("fakesink").name("failing-candidate").build().unwrap();
+        harness.pipeline.gst_pipeline().add(&dummy_candidate).unwrap();
+        harness.pipeline.clock_gate.unlink(&old_sink);
+        harness.pipeline.clock_gate.link(&dummy_candidate).unwrap();
+        harness.pipeline.sink.lock().unwrap().slot = SinkSlot::Replacing {
+            old_sink: old_sink.clone(),
+            candidate: dummy_candidate.clone(),
+        };
+
+        // 3. Rollback the replacement to old_sink
+        harness
+            .pipeline
+            .rollback_sink_replacement(&old_sink, &dummy_candidate, PipelineState::Playing)
+            .unwrap();
+        assert_eq!(harness.pipeline.current_sink_element(), old_sink, "old sink must be restored");
+
+        // 4. Drop the reconnect guard, which must clear suppression
+        drop(guard);
+        assert!(
+            !harness.pipeline.sink.lock().unwrap().reconnecting,
+            "suppression must be cleared after guard drop"
+        );
+
+        // 5. Candidate error must NOT trigger SinkDisconnected
+        harness.post_error(&dummy_candidate, "candidate dropped after rollback");
+        assert!(
+            harness.try_recv_event().is_none(),
+            "failed candidate must not trigger SinkDisconnected"
+        );
+
+        // 6. Restored old sink error MUST trigger SinkDisconnected
+        harness.post_error(&old_sink, "restored old sink error");
+        let event = harness.next_event().await;
+        assert!(
+            matches!(event, PipelineEvent::SinkDisconnected { generation: 1, output_epoch: 1, ref message } if message.contains("restored old sink error")),
+            "expected SinkDisconnected from restored old sink, got {event:?}"
+        );
+    }
     /// An initial replace from a stopped pipeline (output epoch 1).
     fn initial_plan(generation: u64, current: PipelineTrack, next: Option<PipelineTrack>, transition: TransitionPlan) -> PairPlan {
         PairPlan {
@@ -1388,20 +1613,19 @@ mod tests {
         let (events, receiver) = mpsc::unbounded_channel();
         let active: Arc<Mutex<Option<ActivePlan>>> = Arc::new(Mutex::new(None));
         let replacing: Arc<Mutex<Option<ReplaceCancellation>>> = Arc::new(Mutex::new(None));
-        let output_reconnecting = Arc::new(AtomicBool::new(false));
         let metadata_target = Arc::new(Mutex::new(
             IcecastTarget::parse(&format!("127.0.0.1:{metadata_port}"), "secret".into(), "test", "test".into()).unwrap(),
         ));
         let metadata_publisher = Some(sink::MetadataPublisher::spawn());
-        let sink_slot = Mutex::new(SinkSlot::Active(sink));
+        let sink_state = Arc::new(Mutex::new(SinkState::new(sink)));
         bus::install(
             &pipeline,
             &clock_gate,
+            sink_state.clone(),
             metadata_target.clone(),
             metadata_publisher.clone(),
             active.clone(),
             replacing.clone(),
-            output_reconnecting.clone(),
             events.clone(),
         )
         .expect("bus installed");
@@ -1411,7 +1635,7 @@ mod tests {
             output_queue,
             output_caps,
             encoder,
-            sink: sink_slot,
+            sink: sink_state,
             metadata_target,
             metadata_publisher,
             clock_gate,
@@ -1419,7 +1643,6 @@ mod tests {
             branches: Mutex::new(Vec::new()),
             active,
             replacing,
-            output_reconnecting,
             snapshot: Mutex::new(PipelineSnapshot {
                 state: PipelineState::Stopped,
                 elapsed: Duration::ZERO,
