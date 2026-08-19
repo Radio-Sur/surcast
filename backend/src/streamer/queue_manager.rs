@@ -137,6 +137,16 @@ impl QueueManager {
         self.state.lock().unwrap_or_else(|error| error.into_inner()).song_count()
     }
 
+    #[cfg(test)]
+    pub fn song_at(&self, index: usize) -> Option<SongInfo> {
+        self.state.lock().unwrap_or_else(|error| error.into_inner()).song_at(index)
+    }
+
+    #[cfg(test)]
+    pub fn songs(&self) -> Vec<SongInfo> {
+        self.state.lock().unwrap_or_else(|error| error.into_inner()).songs()
+    }
+
     pub fn current_song_info(&self) -> Option<SongInfo> {
         self.state.lock().unwrap_or_else(|error| error.into_inner()).current_song_info()
     }

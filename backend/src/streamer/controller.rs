@@ -2113,29 +2113,239 @@ mod tests {
     use super::*;
     use crate::streamer::driver::{PipelineDriver, PipelineOperation};
     use crate::streamer::runtime::{StationCommand, StationRuntime};
-    use crate::streamer::testsupport::{self, queued_song, queued_songs, Call, Gate, RecordingPipeline};
+    use crate::streamer::testsupport::{self, queued_song, queued_songs, Call, ExpectedPipelineOperations, Gate, RecordingPipeline};
     use tokio::sync::broadcast::error::TryRecvError;
     use tokio::sync::oneshot::error::TryRecvError as OneshotTryRecvError;
     use tokio::sync::{broadcast, mpsc};
     use uuid::Uuid;
 
+    /// A fluent builder for configuring and initializing controller test scenarios.
+    ///
+    /// Supports setting initial playback states (`Playing`, `Paused`, `Stopped`, `Idle`),
+    /// queues from titles or [`SongInfo`] slices, custom pipelines (gates/failure injection),
+    /// database pools, generation / output epoch offsets, and explicit current or staged tracks.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum ScenarioPreset {
+        Stopped,
+        Playing,
+        Paused,
+        Idle,
+    }
+
+    /// A fluent builder for configuring and initializing controller test scenarios.
+    ///
+    /// Supports setting initial playback states (`Playing`, `Paused`, `Stopped`, `Idle`),
+    /// queues from titles or [`SongInfo`] slices, custom pipelines (gates/failure injection),
+    /// database pools, generation / output epoch offsets, and explicit current or staged tracks.
+    #[allow(dead_code)]
+    struct ControllerScenario {
+        preset: ScenarioPreset,
+        db: PgPool,
+        pipeline: Arc<RecordingPipeline>,
+        songs: Vec<SongInfo>,
+        explicit_current: Option<usize>,
+        explicit_staged: Option<Option<usize>>,
+        explicit_generation: Option<u64>,
+        explicit_output_epoch: Option<u64>,
+    }
+
+    #[allow(dead_code)]
+    impl ControllerScenario {
+        /// Creates a scenario in the [`PipelineState::Stopped`] state.
+        fn stopped() -> Self {
+            Self {
+                preset: ScenarioPreset::Stopped,
+                db: testsupport::unavailable_db(),
+                pipeline: Arc::new(RecordingPipeline::new()),
+                songs: Vec::new(),
+                explicit_current: None,
+                explicit_staged: None,
+                explicit_generation: None,
+                explicit_output_epoch: None,
+            }
+        }
+
+        /// Creates a scenario in the [`PipelineState::Playing`] state over standard tracks `A -> B -> C`.
+        fn playing() -> Self {
+            Self {
+                preset: ScenarioPreset::Playing,
+                db: testsupport::unavailable_db(),
+                pipeline: Arc::new(RecordingPipeline::new()),
+                songs: testsupport::queued_songs(&["A", "B", "C"]),
+                explicit_current: None,
+                explicit_staged: None,
+                explicit_generation: None,
+                explicit_output_epoch: None,
+            }
+        }
+
+        /// Creates a scenario in the [`PipelineState::Paused`] state over standard tracks `A -> B -> C`.
+        fn paused() -> Self {
+            Self {
+                preset: ScenarioPreset::Paused,
+                db: testsupport::unavailable_db(),
+                pipeline: Arc::new(RecordingPipeline::new()),
+                songs: testsupport::queued_songs(&["A", "B", "C"]),
+                explicit_current: None,
+                explicit_staged: None,
+                explicit_generation: None,
+                explicit_output_epoch: None,
+            }
+        }
+
+        /// Creates an idle scenario (stopped due to empty queue, auto-resumable).
+        fn idle() -> Self {
+            Self {
+                preset: ScenarioPreset::Idle,
+                db: testsupport::unavailable_db(),
+                pipeline: Arc::new(RecordingPipeline::new()),
+                songs: Vec::new(),
+                explicit_current: None,
+                explicit_staged: None,
+                explicit_generation: None,
+                explicit_output_epoch: None,
+            }
+        }
+
+        fn with_queue(mut self, titles: &[&str]) -> Self {
+            self.songs = testsupport::queued_songs(titles);
+            self
+        }
+
+        fn with_songs(mut self, songs: Vec<SongInfo>) -> Self {
+            self.songs = songs;
+            self
+        }
+
+        fn with_pipeline(mut self, pipeline: Arc<RecordingPipeline>) -> Self {
+            self.pipeline = pipeline;
+            self
+        }
+
+        fn with_db(mut self, db: PgPool) -> Self {
+            self.db = db;
+            self
+        }
+
+        fn with_generation(mut self, generation: u64) -> Self {
+            self.explicit_generation = Some(generation);
+            self
+        }
+
+        fn with_output_epoch(mut self, output_epoch: u64) -> Self {
+            self.explicit_output_epoch = Some(output_epoch);
+            self
+        }
+
+        fn with_current(mut self, index: usize) -> Self {
+            self.explicit_current = Some(index);
+            self
+        }
+
+        fn with_staged_next(mut self, index: usize) -> Self {
+            self.explicit_staged = Some(Some(index));
+            self
+        }
+
+        fn with_no_staged_next(mut self) -> Self {
+            self.explicit_staged = Some(None);
+            self
+        }
+
+        /// Builds the initialized [`ControllerHarness`].
+        async fn build(self) -> ControllerHarness {
+            if let Some(current_idx) = self.explicit_current {
+                assert!(
+                    current_idx < self.songs.len(),
+                    "explicit current index {} is out of bounds for queue of length {}",
+                    current_idx,
+                    self.songs.len()
+                );
+            }
+            let initial_idx = self.explicit_current.unwrap_or(0);
+            let mut harness = match self.preset {
+                ScenarioPreset::Stopped => ControllerHarness::new_internal(self.db, self.pipeline, self.songs, initial_idx),
+                ScenarioPreset::Idle => {
+                    let mut harness = ControllerHarness::new_internal(self.db, self.pipeline, self.songs, initial_idx);
+                    harness.controller.idle = true;
+                    harness
+                }
+                ScenarioPreset::Playing => {
+                    assert!(
+                        !self.songs.is_empty(),
+                        "ControllerScenario::playing() requires at least one song in the queue"
+                    );
+                    let mut harness = ControllerHarness::new_internal(self.db, self.pipeline, self.songs, initial_idx);
+                    let prepared = harness.controller.play().await.expect("play prepare");
+                    if let Some(attempt_id) = prepared.play_attempt_id {
+                        harness.controller.commit_play(attempt_id, &Ok(()));
+                    }
+                    harness
+                }
+                ScenarioPreset::Paused => {
+                    assert!(
+                        !self.songs.is_empty(),
+                        "ControllerScenario::paused() requires at least one song in the queue"
+                    );
+                    let mut harness = ControllerHarness::new_internal(self.db, self.pipeline, self.songs, initial_idx);
+                    let prepared = harness.controller.play().await.expect("play prepare");
+                    if let Some(attempt_id) = prepared.play_attempt_id {
+                        harness.controller.commit_play(attempt_id, &Ok(()));
+                    }
+                    harness.controller.pause();
+                    harness
+                }
+            };
+
+            if let Some(gen) = self.explicit_generation {
+                harness.controller.generation = gen;
+            }
+            if let Some(epoch) = self.explicit_output_epoch {
+                harness.controller.output_epoch = epoch;
+            }
+            if let Some(staged_override) = self.explicit_staged {
+                match staged_override {
+                    Some(staged_idx) => {
+                        let song = harness.controller.queue.song_at(staged_idx).unwrap_or_else(|| {
+                            panic!(
+                                "explicit staged index {} is out of bounds for queue of length {}",
+                                staged_idx,
+                                harness.controller.queue.song_count()
+                            )
+                        });
+                        let anchor = harness.controller.queue.anchor_after_current();
+                        harness.controller.planned_next = Some((song, anchor));
+                    }
+                    None => {
+                        harness.controller.planned_next = None;
+                    }
+                }
+            }
+
+            harness
+        }
+    }
+
     /// Builds a real `StationController` around the shared recording
     /// pipeline, hiding the recurring broadcast channels, queue manager,
     /// station id, playback config, driver, target, and reconnect/resume
     /// defaults. Tests reach the controller through `harness.controller`
-    /// (fields stay private to the controller module) and read pipeline
-    /// effects through `harness.pipeline`.
-    struct Harness {
+    /// and read pipeline effects through `harness.pipeline`.
+    #[allow(dead_code)]
+    struct ControllerHarness {
         controller: StationController,
         pipeline: Arc<RecordingPipeline>,
     }
 
-    impl Harness {
-        fn new(db: PgPool, pipeline: Arc<RecordingPipeline>, songs: Vec<SongInfo>) -> Self {
+    type Harness = ControllerHarness;
+
+    #[allow(dead_code)]
+    impl ControllerHarness {
+        fn new_internal(db: PgPool, pipeline: Arc<RecordingPipeline>, songs: Vec<SongInfo>, initial_idx: usize) -> Self {
             let (status_tx, _) = broadcast::channel(1);
             let (queue_tx, _) = broadcast::channel(1);
             let station_id = Uuid::new_v4();
-            let queue = Arc::new(QueueManager::new(db.clone(), station_id, String::new(), songs, 0));
+            let queue = Arc::new(QueueManager::new(db.clone(), station_id, String::new(), songs, initial_idx));
             let controller = StationController {
                 queue,
                 db,
@@ -2172,10 +2382,19 @@ mod tests {
             Self { controller, pipeline }
         }
 
+        fn new(db: PgPool, pipeline: Arc<RecordingPipeline>, songs: Vec<SongInfo>) -> Self {
+            Self::new_internal(db, pipeline, songs, 0)
+        }
+
         /// A stopped controller with the given queue over the intentionally
         /// unavailable database.
         fn stopped(songs: Vec<SongInfo>) -> Self {
             Self::new(testsupport::unavailable_db(), Arc::new(RecordingPipeline::new()), songs)
+        }
+
+        /// A stopped controller over a queue built from track titles.
+        fn stopped_queue(titles: &[&str]) -> Self {
+            Self::stopped(testsupport::queued_songs(titles))
         }
 
         /// Like [`Harness::stopped`] but with a pre-configured pipeline
@@ -2196,17 +2415,24 @@ mod tests {
             (StationRuntime::spawn(self.controller, receiver), events)
         }
 
-        /// A playing controller: `play()` has run, reported a Replace, and
-        /// been committed with Ok.
+        /// A playing controller: canonical playing scenario initialization.
         async fn playing(songs: Vec<SongInfo>) -> Self {
-            let mut harness = Self::stopped(songs);
-            let prepared = harness.controller.play().await.expect("play prepare");
-            assert!(matches!(prepared.operation, PipelineOperation::Replace(_)));
-            let attempt_id = prepared.play_attempt_id.expect("initial play must have attempt id");
-            assert_eq!(harness.controller.state, PipelineState::Stopped);
-            harness.controller.commit_play(attempt_id, &Ok(()));
-            assert_eq!(harness.controller.state, PipelineState::Playing);
-            harness
+            ControllerScenario::playing().with_songs(songs).build().await
+        }
+
+        /// A playing controller over a queue built from track titles.
+        async fn playing_queue(titles: &[&str]) -> Self {
+            ControllerScenario::playing().with_queue(titles).build().await
+        }
+
+        /// A paused controller over the given songs.
+        async fn paused(songs: Vec<SongInfo>) -> Self {
+            ControllerScenario::paused().with_songs(songs).build().await
+        }
+
+        /// An idle controller.
+        async fn idle() -> Self {
+            ControllerScenario::idle().build().await
         }
 
         /// Splits the harness back into its controller and pipeline for
@@ -2214,6 +2440,375 @@ mod tests {
         fn into_parts(self) -> (StationController, Arc<RecordingPipeline>) {
             (self.controller, self.pipeline)
         }
+
+        // --- Helpers for ergonomic access and execution ---
+
+        fn controller(&self) -> &StationController {
+            &self.controller
+        }
+
+        fn controller_mut(&mut self) -> &mut StationController {
+            &mut self.controller
+        }
+
+        fn pipeline(&self) -> &Arc<RecordingPipeline> {
+            &self.pipeline
+        }
+
+        fn song(&self, index: usize) -> SongInfo {
+            self.controller
+                .queue
+                .song_at(index)
+                .unwrap_or_else(|| panic!("queue index {index} out of bounds (len {})", self.controller.queue.song_count()))
+        }
+
+        fn track(&self, index: usize) -> PipelineTrack {
+            StationController::track(self.song(index))
+        }
+
+        fn track_key(&self, index: usize) -> TrackKey {
+            self.track(index).key
+        }
+
+        fn songs(&self) -> Vec<SongInfo> {
+            self.controller.queue.songs()
+        }
+        // --- Controller operations ---
+
+        async fn play(&mut self) -> Result<PreparedOperation, PipelineError> {
+            self.controller.play().await
+        }
+
+        fn pause(&mut self) -> PipelineOperation {
+            self.controller.pause()
+        }
+
+        async fn skip(&mut self) -> Result<PreparedOperation, PipelineError> {
+            self.controller.skip().await
+        }
+
+        fn stop(&mut self) -> PipelineOperation {
+            self.controller.stop()
+        }
+        async fn reload(&mut self, songs: Vec<SongInfo>, align: bool) -> Result<Option<PreparedOperation>, PipelineError> {
+            self.controller.reload(songs, align).await
+        }
+
+        async fn reload_titles(&mut self, titles: &[&str], align: bool) -> Result<Option<PreparedOperation>, PipelineError> {
+            self.controller.reload(testsupport::queued_songs(titles), align).await
+        }
+
+        async fn handle_event(&mut self, event: PipelineEvent) -> Option<Result<PreparedOperation, PipelineError>> {
+            self.controller.handle_event(event).await
+        }
+
+        async fn inject_decode_failure(&mut self, generation: u64, track: &TrackKey, message: &str) -> Option<PreparedOperation> {
+            inject_decode_failure(&mut self.controller, generation, track, message).await
+        }
+
+        async fn staged_decode_failure(&mut self, track: TrackKey, message: &str) -> Option<PreparedOperation> {
+            staged_decode_failure(&mut self.controller, track, message).await
+        }
+
+        fn commit_play(&mut self, id: u64, res: &Result<(), PipelineError>) -> bool {
+            self.controller.commit_play(id, res)
+        }
+
+        async fn commit_skip(&mut self, id: u64, res: &Result<(), PipelineError>) -> (bool, SkipFollowup) {
+            self.controller.commit_skip(id, res).await
+        }
+
+        fn commit_realign(&mut self, id: u64, res: &Result<(), PipelineError>) -> Option<(u64, PreparedOperation)> {
+            self.controller.commit_realign(id, res)
+        }
+
+        // --- State assertions ---
+
+        fn assert_state(&self, expected: PipelineState) {
+            assert_eq!(self.controller.state, expected, "state mismatch");
+        }
+
+        fn assert_generation(&self, expected: u64) {
+            assert_eq!(self.controller.generation, expected, "generation mismatch");
+        }
+
+        fn assert_output_epoch(&self, expected: u64) {
+            assert_eq!(self.controller.output_epoch, expected, "output_epoch mismatch");
+        }
+
+        fn assert_idle(&self, expected: bool) {
+            assert_eq!(self.controller.idle, expected, "idle mismatch");
+        }
+
+        fn assert_current_song(&self, expected_title: &str) {
+            let actual = self.controller.queue.current_song_info().map(|s| s.title);
+            assert_eq!(actual.as_deref(), Some(expected_title), "current song title mismatch");
+        }
+
+        fn assert_staged_next(&self, expected_title: &str) {
+            let actual = self.controller.planned_next.as_ref().map(|(s, _)| s.title.as_str());
+            assert_eq!(actual, Some(expected_title), "staged next song title mismatch");
+        }
+
+        fn assert_no_staged_next(&self) {
+            assert!(
+                self.controller.planned_next.is_none(),
+                "expected no staged next, got {:?}",
+                self.controller.planned_next
+            );
+        }
+
+        fn assert_pending_skip(&self, expected: bool) {
+            assert_eq!(self.controller.pending_skip.is_some(), expected, "pending_skip presence mismatch");
+        }
+
+        fn assert_pending_play(&self, expected: bool) {
+            assert_eq!(self.controller.pending_play.is_some(), expected, "pending_play presence mismatch");
+        }
+
+        fn assert_pending_realign(&self, expected: bool) {
+            assert_eq!(
+                self.controller.pending_realign.is_some(),
+                expected,
+                "pending_realign presence mismatch"
+            );
+        }
+
+        fn assert_pipeline(&self, expected: &testsupport::ExpectedPipelineOperations) {
+            self.pipeline.assert_matches(expected);
+        }
+
+        fn assert_matches(&self, expected: &ExpectedState<'_>) {
+            if let Some(state) = expected.state {
+                self.assert_state(state);
+            }
+            if let Some(generation) = expected.generation {
+                self.assert_generation(generation);
+            }
+            if let Some(output_epoch) = expected.output_epoch {
+                self.assert_output_epoch(output_epoch);
+            }
+            if let Some(idle) = expected.idle {
+                self.assert_idle(idle);
+            }
+            if let Some(current) = expected.current {
+                self.assert_current_song(current);
+            }
+            if let Some(staged) = &expected.staged {
+                match staged {
+                    Some(title) => self.assert_staged_next(title),
+                    None => self.assert_no_staged_next(),
+                }
+            }
+            if let Some(pending_skip) = expected.pending_skip {
+                self.assert_pending_skip(pending_skip);
+            }
+            if let Some(pending_play) = expected.pending_play {
+                self.assert_pending_play(pending_play);
+            }
+            if let Some(pending_realign) = expected.pending_realign {
+                self.assert_pending_realign(pending_realign);
+            }
+        }
+    }
+
+    /// Declarative expectations for [`StationController`] state.
+    #[allow(dead_code)]
+    #[derive(Clone, Debug, Default)]
+    struct ExpectedState<'a> {
+        state: Option<PipelineState>,
+        generation: Option<u64>,
+        output_epoch: Option<u64>,
+        idle: Option<bool>,
+        current: Option<&'a str>,
+        staged: Option<Option<&'a str>>,
+        pending_skip: Option<bool>,
+        pending_play: Option<bool>,
+        pending_realign: Option<bool>,
+    }
+
+    #[allow(dead_code)]
+    impl<'a> ExpectedState<'a> {
+        fn new() -> Self {
+            Self::default()
+        }
+
+        fn playing() -> Self {
+            Self {
+                state: Some(PipelineState::Playing),
+                ..Self::default()
+            }
+        }
+
+        fn paused() -> Self {
+            Self {
+                state: Some(PipelineState::Paused),
+                ..Self::default()
+            }
+        }
+
+        fn stopped() -> Self {
+            Self {
+                state: Some(PipelineState::Stopped),
+                ..Self::default()
+            }
+        }
+
+        fn idle() -> Self {
+            Self {
+                state: Some(PipelineState::Stopped),
+                idle: Some(true),
+                ..Self::default()
+            }
+        }
+
+        fn state(mut self, state: PipelineState) -> Self {
+            self.state = Some(state);
+            self
+        }
+
+        fn generation(mut self, generation: u64) -> Self {
+            self.generation = Some(generation);
+            self
+        }
+
+        fn output_epoch(mut self, output_epoch: u64) -> Self {
+            self.output_epoch = Some(output_epoch);
+            self
+        }
+
+        fn current(mut self, title: &'a str) -> Self {
+            self.current = Some(title);
+            self
+        }
+
+        fn staged(mut self, title: &'a str) -> Self {
+            self.staged = Some(Some(title));
+            self
+        }
+
+        fn no_staged(mut self) -> Self {
+            self.staged = Some(None);
+            self
+        }
+
+        fn pending_skip(mut self, pending: bool) -> Self {
+            self.pending_skip = Some(pending);
+            self
+        }
+
+        fn pending_play(mut self, pending: bool) -> Self {
+            self.pending_play = Some(pending);
+            self
+        }
+
+        fn pending_realign(mut self, pending: bool) -> Self {
+            self.pending_realign = Some(pending);
+            self
+        }
+    }
+    #[tokio::test]
+    async fn controller_harness_track_and_song_access_reflects_reloaded_queue() {
+        let mut harness = ControllerScenario::playing().with_queue(&["A", "B", "C"]).build().await;
+
+        assert_eq!(harness.song(0).title, "A");
+        assert_eq!(harness.song(1).title, "B");
+        assert_eq!(harness.song(2).title, "C");
+        harness.assert_current_song("A");
+        harness.assert_staged_next("B");
+
+        // Reload the queue with a completely new set of titles
+        harness.reload_titles(&["X", "Y", "Z"], true).await.unwrap();
+
+        // The harness helper queries the live queue and must reflect the new tracks
+        assert_eq!(harness.song(0).title, "X");
+        assert_eq!(harness.song(1).title, "Y");
+        assert_eq!(harness.song(2).title, "Z");
+        assert_eq!(harness.track(0).metadata.title, "X");
+        assert_eq!(harness.track_key(0).song_id, harness.song(0).song_id);
+    }
+
+    #[tokio::test]
+    async fn controller_scenario_presets_build_expected_states() {
+        // Stopped scenario with queue
+        let stopped = ControllerScenario::stopped().with_queue(&["A", "B", "C"]).build().await;
+        stopped.assert_matches(&ExpectedState::stopped().no_staged());
+        assert_eq!(stopped.song(0).title, "A");
+
+        // Playing scenario with queue
+        let playing = ControllerScenario::playing().with_queue(&["A", "B", "C"]).build().await;
+        playing.assert_matches(&ExpectedState::playing().current("A").staged("B"));
+
+        // Paused scenario with queue
+        let paused = ControllerScenario::paused().with_queue(&["A", "B", "C"]).build().await;
+        paused.assert_matches(&ExpectedState::paused().current("A").staged("B"));
+
+        // Idle scenario
+        let idle = ControllerScenario::idle().build().await;
+        idle.assert_matches(&ExpectedState::idle().no_staged());
+    }
+
+    #[tokio::test]
+    #[should_panic(expected = "ControllerScenario::playing() requires at least one song in the queue")]
+    async fn controller_scenario_playing_on_empty_queue_panics() {
+        let _ = ControllerScenario::playing().with_queue(&[]).build().await;
+    }
+
+    #[tokio::test]
+    #[should_panic(expected = "ControllerScenario::paused() requires at least one song in the queue")]
+    async fn controller_scenario_paused_on_empty_queue_panics() {
+        let _ = ControllerScenario::paused().with_queue(&[]).build().await;
+    }
+
+    #[tokio::test]
+    #[should_panic(expected = "explicit staged index 99 is out of bounds for queue of length 3")]
+    async fn controller_scenario_out_of_bounds_staged_index_panics() {
+        let _ = ControllerScenario::playing()
+            .with_queue(&["A", "B", "C"])
+            .with_staged_next(99)
+            .build()
+            .await;
+    }
+
+    #[tokio::test]
+    #[should_panic(expected = "explicit current index 5 is out of bounds for queue of length 3")]
+    async fn controller_scenario_out_of_bounds_current_index_panics() {
+        let _ = ControllerScenario::playing()
+            .with_queue(&["A", "B", "C"])
+            .with_current(5)
+            .build()
+            .await;
+    }
+
+    #[tokio::test]
+    async fn controller_scenario_setter_order_independence() {
+        // Order 1: with_current before with_queue
+        let h1 = ControllerScenario::playing()
+            .with_current(1)
+            .with_queue(&["A", "B", "C"])
+            .with_staged_next(2)
+            .with_generation(5)
+            .with_output_epoch(7)
+            .build()
+            .await;
+
+        // Order 2: with_queue before with_current, with_output_epoch before with_generation
+        let h2 = ControllerScenario::playing()
+            .with_output_epoch(7)
+            .with_queue(&["A", "B", "C"])
+            .with_generation(5)
+            .with_staged_next(2)
+            .with_current(1)
+            .build()
+            .await;
+
+        assert_eq!(h1.controller.state, h2.controller.state);
+        assert_eq!(h1.controller.generation, h2.controller.generation);
+        assert_eq!(h1.controller.output_epoch, h2.controller.output_epoch);
+        assert_eq!(h1.song(h1.controller.queue.current_song_index()).title, "B");
+        assert_eq!(h2.song(h2.controller.queue.current_song_index()).title, "B");
+        assert_eq!(h1.controller.planned_next.as_ref().unwrap().0.title, "C");
+        assert_eq!(h2.controller.planned_next.as_ref().unwrap().0.title, "C");
     }
 
     #[tokio::test]
@@ -2243,32 +2838,25 @@ mod tests {
 
     #[tokio::test]
     async fn play_with_an_empty_queue_keeps_the_controller_stopped() {
-        // No database is reachable here, so the AutoDJ refill attempt inside
-        // play() cannot produce songs and the controller must stay Stopped
-        // (the E2E suite covers the case where the refill succeeds).
-        let harness = Harness::stopped(Vec::new());
-        let mut controller = harness.controller;
-        let pipeline = harness.pipeline;
+        let mut harness = ControllerScenario::stopped().build().await;
+        let operation = harness.play().await.unwrap();
 
-        assert!(matches!(controller.play().await.unwrap().operation, PipelineOperation::Stop));
-        assert_eq!(controller.state, PipelineState::Stopped);
-        assert_eq!(pipeline.count(Call::Replace), 0);
+        assert!(matches!(operation.operation, PipelineOperation::Stop));
+        harness.assert_matches(&ExpectedState::stopped());
+        harness.assert_pipeline(&ExpectedPipelineOperations::none());
     }
 
     #[tokio::test]
     async fn next_decode_failure_replaces_only_the_failed_terminal_branch() {
-        let current = queued_song("", 0);
-        let failed = queued_song("", 1);
-        let successor = queued_song("", 2);
-        let harness = Harness::stopped(vec![current.clone(), failed.clone(), successor.clone()]);
-        let mut controller = harness.controller;
-        let failed_key = StationController::track(failed.clone()).key;
-        controller.state = PipelineState::Playing;
-        controller.generation = 1;
-        controller.output_epoch = 1;
-        controller.planned_next = Some((failed.clone(), controller.queue.anchor_after_current()));
+        let mut harness = ControllerScenario::playing()
+            .with_queue(&["current", "failed", "successor"])
+            .build()
+            .await;
 
-        let operation = controller
+        let failed_key = harness.track_key(1);
+        let successor_key = harness.track_key(2);
+
+        let operation = harness
             .handle_event(PipelineEvent::DecodeFailed {
                 generation: 1,
                 track: failed_key.clone(),
@@ -2282,7 +2870,7 @@ mod tests {
         };
         let realign_id = operation.realign_id.expect("the replacement roll must be correlated");
         assert!(operation.attempt_id.is_none(), "a decode replacement is never a skip operation");
-        assert_eq!(plan.current.queue_item_id, current.queue_item_id);
+        assert_eq!(plan.current.queue_item_id, harness.song(0).queue_item_id);
         let RollingChange::ReplaceNext {
             expected_next,
             replacement: Some(replacement),
@@ -2291,32 +2879,25 @@ mod tests {
             panic!("next failure must replace its terminal branch");
         };
         assert_eq!(expected_next, failed_key);
-        assert_eq!(replacement.track.key.queue_item_id, successor.queue_item_id);
-        assert_eq!(
-            controller.planned_next.as_ref().unwrap().0.queue_item_id,
-            failed.queue_item_id,
-            "planned_next keeps the failed staged branch until the replacement roll succeeded"
-        );
+        assert_eq!(replacement.track.key, successor_key);
+        harness.assert_staged_next("failed");
 
         // The replacement roll succeeds: planned_next advances to the
         // successor; a failed roll would keep the failed branch.
-        assert!(controller.commit_realign(realign_id, &Ok(())).is_none());
-        assert_eq!(controller.planned_next.as_ref().unwrap().0.queue_item_id, successor.queue_item_id);
+        assert!(harness.commit_realign(realign_id, &Ok(())).is_none());
+        harness.assert_staged_next("successor");
     }
 
     #[tokio::test]
     async fn current_media_branch_fatal_error_skips_to_next_song() {
-        let current = queued_song("current", 0);
-        let next = queued_song("next", 1);
-        let harness = Harness::playing(vec![current.clone(), next.clone()]).await;
-        let (mut controller, _) = harness.into_parts();
-        let current_key = StationController::track(current.clone()).key;
+        let mut harness = ControllerHarness::playing_queue(&["current", "next"]).await;
+        let current_key = harness.track_key(0);
 
         // Current media branch emits DecodeFailed / fatal error
-        let operation = controller
+        let operation = harness
             .handle_event(PipelineEvent::DecodeFailed {
                 generation: 1,
-                track: current_key.clone(),
+                track: current_key,
                 message: "media read error".into(),
             })
             .await
@@ -2327,42 +2908,43 @@ mod tests {
             panic!("current track fatal error must issue a replace (skip) operation");
         };
         let attempt_id = operation.attempt_id.expect("skip operation must carry attempt id");
-        assert_eq!(plan.current.key.queue_item_id, next.queue_item_id);
+        assert_eq!(plan.current.key.queue_item_id, harness.song(1).queue_item_id);
 
         // Commit the skip
-        let (applied, _) = controller.commit_skip(attempt_id, &Ok(())).await;
+        let (applied, _) = harness.commit_skip(attempt_id, &Ok(())).await;
         assert!(applied, "skip must be committed");
-        assert_eq!(controller.queue.current_song_info().unwrap().queue_item_id, next.queue_item_id);
+        harness.assert_current_song("next");
     }
 
     #[tokio::test]
     async fn fatal_pipeline_event_prepares_stop() {
-        let song = queued_song("current", 0);
-        let harness = Harness::playing(vec![song.clone()]).await;
-        let (mut controller, _) = harness.into_parts();
-        assert_eq!(controller.state, PipelineState::Playing);
+        let mut harness = ControllerHarness::playing_queue(&["current"]).await;
+        harness.assert_state(PipelineState::Playing);
 
         // Backbone error arrives
-        let operation = controller
+        let operation = harness
             .handle_event(PipelineEvent::FatalPipeline {
-                pipeline_epoch: controller.output_epoch,
+                pipeline_epoch: harness.controller().output_epoch,
                 message: "encoder crashed".into(),
             })
             .await
             .expect("fatal pipeline event must produce an operation")
             .expect("stop operation should succeed");
         assert!(matches!(operation.operation, PipelineOperation::Stop));
-        assert_eq!(controller.state, PipelineState::Stopped);
+        harness.assert_matches(&ExpectedState::stopped());
     }
 
     #[tokio::test]
     async fn backbone_fatal_error_at_runtime_stops_station_and_pipeline() {
-        let song = queued_song("current", 0);
         let pipeline = Arc::new(RecordingPipeline::new());
-        let harness = Harness::with_pipeline(pipeline.clone(), vec![song.clone()]);
+        let harness = ControllerScenario::stopped()
+            .with_queue(&["current"])
+            .with_pipeline(pipeline.clone())
+            .build()
+            .await;
         let (runtime, events) = harness.into_runtime();
         runtime.play().await.unwrap();
-        assert_eq!(pipeline.count(Call::Replace), 1);
+        pipeline.assert_count(Call::Replace, 1);
 
         events
             .send(PipelineEvent::FatalPipeline {

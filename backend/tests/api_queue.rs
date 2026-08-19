@@ -253,7 +253,7 @@ async fn test_add_songs_trims_consumed_queue_items(pool: PgPool) {
          current_song_index = 1, current_queue_cursor_format = 1 WHERE id = $3",
     )
     .bind(stale_item_id)
-    .bind(&vec![stale_item_id])
+    .bind(vec![stale_item_id])
     .bind(station_id)
     .execute(&pool)
     .await
@@ -338,7 +338,7 @@ async fn test_reorder_then_add_keeps_upcoming_songs(pool: PgPool) {
          current_song_index = 10, current_queue_cursor_format = 1 WHERE id = $3",
     )
     .bind(current_item_id)
-    .bind(&vec![played_item_id])
+    .bind(vec![played_item_id])
     .bind(station_id)
     .execute(&pool)
     .await

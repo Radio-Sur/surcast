@@ -77,6 +77,16 @@ impl QueueState {
         self.items.len()
     }
 
+    #[cfg(test)]
+    pub(crate) fn song_at(&self, index: usize) -> Option<SongInfo> {
+        self.items.get(index).cloned()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn songs(&self) -> Vec<SongInfo> {
+        self.items.clone()
+    }
+
     pub(crate) fn current_song_info(&self) -> Option<SongInfo> {
         self.current.clone()
     }

@@ -271,7 +271,7 @@ async fn test_trim_consumed_queue_items_ignores_stale_position_cutoff(db: PgPool
          current_song_index = 10, current_queue_cursor_format = 1 WHERE id = $3",
     )
     .bind(current_id)
-    .bind(&vec![played_id])
+    .bind(vec![played_id])
     .bind(station_id)
     .execute(&db)
     .await
@@ -314,7 +314,7 @@ async fn test_renumber_syncs_current_song_index(db: PgPool) {
          current_song_index = 6, current_queue_cursor_format = 1 WHERE id = $3",
     )
     .bind(current_id)
-    .bind(&Vec::<Uuid>::new())
+    .bind(Vec::<Uuid>::new())
     .bind(station_id)
     .execute(&db)
     .await

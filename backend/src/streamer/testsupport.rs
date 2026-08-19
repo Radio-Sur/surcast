@@ -328,6 +328,31 @@ impl RecordingPipeline {
     pub(crate) fn rolls(&self) -> Vec<RollingPlan> {
         self.rolls.lock().clone()
     }
+    /// Asserts that `call` was invoked exactly `expected` times.
+    #[allow(dead_code)]
+    pub(crate) fn assert_count(&self, call: Call, expected: usize) {
+        assert_eq!(self.count(call), expected, "unexpected count for {call:?}");
+    }
+
+    /// Asserts that recorded calls match the given declarative expectations.
+    #[allow(dead_code)]
+    pub(crate) fn assert_matches(&self, expected: &ExpectedPipelineOperations) {
+        if let Some(expected_replace) = expected.replace {
+            assert_eq!(self.count(Call::Replace), expected_replace, "pipeline Replace count mismatch");
+        }
+        if let Some(expected_roll) = expected.roll {
+            assert_eq!(self.count(Call::Roll), expected_roll, "pipeline Roll count mismatch");
+        }
+        if let Some(expected_stop) = expected.stop {
+            assert_eq!(self.count(Call::Stop), expected_stop, "pipeline Stop count mismatch");
+        }
+        if let Some(expected_reconnect) = expected.reconnect {
+            assert_eq!(self.count(Call::Reconnect), expected_reconnect, "pipeline Reconnect count mismatch");
+        }
+        if let Some(exact) = &expected.exact_calls {
+            assert_eq!(&self.calls(), exact, "pipeline exact calls mismatch");
+        }
+    }
 
     fn record(&self, call: Call) -> Result<(), PipelineError> {
         self.calls.lock().push(call);
@@ -346,6 +371,57 @@ impl RecordingPipeline {
             return Err(PipelineError::Pipeline("injected failure".into()));
         }
         Ok(())
+    }
+}
+
+/// Declarative expectations on operations recorded by [`RecordingPipeline`].
+#[allow(dead_code)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct ExpectedPipelineOperations {
+    pub(crate) replace: Option<usize>,
+    pub(crate) roll: Option<usize>,
+    pub(crate) stop: Option<usize>,
+    pub(crate) reconnect: Option<usize>,
+    pub(crate) exact_calls: Option<Vec<Call>>,
+}
+
+#[allow(dead_code)]
+impl ExpectedPipelineOperations {
+    pub(crate) fn new() -> Self {
+        Self::default()
+    }
+
+    /// Asserts that no pipeline calls were recorded at all.
+    pub(crate) fn none() -> Self {
+        Self {
+            exact_calls: Some(Vec::new()),
+            ..Self::default()
+        }
+    }
+
+    pub(crate) fn replace(mut self, count: usize) -> Self {
+        self.replace = Some(count);
+        self
+    }
+
+    pub(crate) fn roll(mut self, count: usize) -> Self {
+        self.roll = Some(count);
+        self
+    }
+
+    pub(crate) fn stop(mut self, count: usize) -> Self {
+        self.stop = Some(count);
+        self
+    }
+
+    pub(crate) fn reconnect(mut self, count: usize) -> Self {
+        self.reconnect = Some(count);
+        self
+    }
+
+    pub(crate) fn exact(mut self, calls: &[Call]) -> Self {
+        self.exact_calls = Some(calls.to_vec());
+        self
     }
 }
 

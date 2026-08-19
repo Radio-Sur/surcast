@@ -467,7 +467,7 @@ mod tests {
             // Only the unrelated row may survive; the deleted songs must have
             // no queue rows left anywhere.
             let deleted_remaining: i64 = sqlx::query_scalar("SELECT count(*) FROM station_queue WHERE song_id = ANY($1)")
-                .bind(&[song_a, song_b])
+                .bind([song_a, song_b])
                 .fetch_one(&db.pool)
                 .await
                 .expect("deleted-songs readback");

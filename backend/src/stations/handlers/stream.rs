@@ -1571,7 +1571,7 @@ mod tests {
             let mut notifications = lifecycle.subscribe_notifications();
             let guard = lifecycle.lock(station_id).await;
             let operation = tokio::spawn(run_committed_delete(pool.pool.clone(), Arc::clone(&lifecycle), station_id, guard));
-            let caller = tokio::spawn(async move { operation.await });
+            let caller = tokio::spawn(operation);
 
             // The request caller dies mid-operation (cancellation during the
             // DB await is covered by the spawn-before-mutation structure) —

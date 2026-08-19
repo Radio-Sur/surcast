@@ -136,7 +136,7 @@ impl WsInbox {
         F: Fn(&serde_json::Value) -> bool,
     {
         use futures::StreamExt;
-        if self.pending.iter().any(|msg| is_bad(msg)) {
+        if self.pending.iter().any(&is_bad) {
             return Err(failure(format!("{what}: unexpected buffered message")));
         }
         let deadline = tokio::time::Instant::now() + window;
