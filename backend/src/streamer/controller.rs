@@ -2498,6 +2498,25 @@ mod tests {
             self.controller.reload(testsupport::queued_songs(titles), align).await
         }
 
+        fn make_reloaded_songs(&self, titles: &[&str]) -> Vec<SongInfo> {
+            let existing = self.controller.queue.songs();
+            let mut result = Vec::with_capacity(titles.len());
+            for (next_pos, &title) in titles.iter().enumerate() {
+                if let Some(s) = existing.iter().find(|s| s.title == title) {
+                    let mut song = s.clone();
+                    song.position = next_pos as i32;
+                    result.push(song);
+                } else {
+                    result.push(testsupport::queued_song(title, next_pos as i32));
+                }
+            }
+            result
+        }
+
+        async fn reload_reordered(&mut self, titles: &[&str], align: bool) -> Result<Option<PreparedOperation>, PipelineError> {
+            let songs = self.make_reloaded_songs(titles);
+            self.controller.reload(songs, align).await
+        }
         async fn handle_event(&mut self, event: PipelineEvent) -> Option<Result<PreparedOperation, PipelineError>> {
             self.controller.handle_event(event).await
         }
@@ -2683,6 +2702,58 @@ mod tests {
             self.pipeline.assert_matches(expected);
         }
 
+        fn assert_queue_titles(&self, expected: &[&str]) {
+            let actual: Vec<String> = self.controller.queue.songs().into_iter().map(|s| s.title).collect();
+            assert_eq!(actual, expected, "queue titles mismatch");
+        }
+
+        fn assert_planned_next_key(&self, expected: Option<&TrackKey>) {
+            assert_eq!(self.controller.planned_next().as_ref(), expected, "planned_next key mismatch");
+        }
+
+        fn assert_pending_realign_id(&self, expected: Option<u64>) {
+            assert_eq!(self.controller.pending_realign(), expected, "pending_realign mismatch");
+        }
+
+        fn assert_current_song_key(&self, expected: &TrackKey) {
+            let actual = self.controller.queue.current_song_info().as_ref().map(StationController::key_of);
+            assert_eq!(actual.as_ref(), Some(expected), "current song key mismatch");
+        }
+
+        fn assert_rolling_replace_next(&self, prepared: &PreparedOperation, expected: &TrackKey, replacement: Option<&TrackKey>) -> u64 {
+            let PipelineOperation::Roll(plan) = &prepared.operation else {
+                panic!("expected Roll operation, got {:?}", prepared.operation);
+            };
+            let realign_id = prepared.realign_id.expect("the roll must be correlated");
+            match &plan.change {
+                RollingChange::ReplaceNext {
+                    expected_next: actual_expected,
+                    replacement: actual_replacement,
+                } => {
+                    assert_eq!(actual_expected, expected, "expected_next mismatch");
+                    assert_eq!(
+                        actual_replacement.as_ref().map(|p| &p.track.key),
+                        replacement,
+                        "replacement mismatch"
+                    );
+                }
+                other => panic!("expected ReplaceNext, got {other:?}"),
+            }
+            realign_id
+        }
+        fn assert_rolling_attach(&self, prepared: &PreparedOperation, target: &TrackKey) -> u64 {
+            let PipelineOperation::Roll(plan) = &prepared.operation else {
+                panic!("expected Roll operation, got {:?}", prepared.operation);
+            };
+            let realign_id = prepared.realign_id.expect("the roll must be correlated");
+            match &plan.change {
+                RollingChange::Attach(next) => {
+                    assert_eq!(&next.track.key, target, "attach target mismatch");
+                }
+                other => panic!("expected Attach, got {other:?}"),
+            }
+            realign_id
+        }
         fn assert_matches(&self, expected: &ExpectedState<'_>) {
             if let Some(state) = expected.state {
                 self.assert_state(state);
@@ -2810,6 +2881,125 @@ mod tests {
         fn pending_realign(mut self, pending: bool) -> Self {
             self.pending_realign = Some(pending);
             self
+        }
+    }
+
+    #[allow(dead_code)]
+    #[derive(Clone, Debug)]
+    enum ExpectedReloadOp<'a> {
+        None,
+        ReplaceNext { expected: &'a str, replacement: Option<&'a str> },
+        Attach { target: &'a str },
+    }
+
+    #[allow(dead_code)]
+    #[derive(Clone, Debug)]
+    struct ReloadCase<'a> {
+        name: &'static str,
+        initial_queue: &'a [&'a str],
+        new_queue: &'a [&'a str],
+        align: bool,
+        expected_op: ExpectedReloadOp<'a>,
+        expected_staged_before_commit: Option<&'a str>,
+        commit: Option<Result<(), PipelineError>>,
+        expected_final_staged: Option<&'a str>,
+    }
+
+    async fn run_reload_case(case: ReloadCase<'_>) {
+        let mut harness = ControllerScenario::playing().with_queue(case.initial_queue).build().await;
+        let initial_current_key = harness.track_key(0);
+        let initial_staged_key = harness.controller.planned_next().clone();
+
+        let reloaded_songs = harness.make_reloaded_songs(case.new_queue);
+        let prepared = harness
+            .controller
+            .reload(reloaded_songs.clone(), case.align)
+            .await
+            .expect("reload must not error");
+
+        match case.expected_op {
+            ExpectedReloadOp::None => {
+                assert!(
+                    prepared.is_none(),
+                    "{}: expected no operation from reload, got {prepared:?}",
+                    case.name
+                );
+            }
+            ExpectedReloadOp::ReplaceNext { expected, replacement } => {
+                let prepared = prepared.unwrap_or_else(|| panic!("{}: expected ReplaceNext, got None", case.name));
+                let PipelineOperation::Roll(plan) = &prepared.operation else {
+                    panic!("{}: expected Roll operation, got {:?}", case.name, prepared.operation);
+                };
+                assert_eq!(plan.current, initial_current_key, "{}: plan.current mismatch", case.name);
+                assert_eq!(plan.generation, 1, "{}: plan.generation mismatch", case.name);
+
+                let expected_key = initial_staged_key
+                    .as_ref()
+                    .unwrap_or_else(|| panic!("{}: expected initial staged next for ReplaceNext", case.name));
+                assert_eq!(
+                    case.initial_queue.get(1).copied(),
+                    Some(expected),
+                    "{}: expected title mismatch",
+                    case.name
+                );
+
+                let replacement_key = replacement.map(|rep_title| {
+                    let song = reloaded_songs
+                        .iter()
+                        .find(|s| s.title == rep_title)
+                        .unwrap_or_else(|| panic!("{}: replacement title {rep_title} not in reloaded songs", case.name));
+                    StationController::key_of(song)
+                });
+
+                let realign_id = harness.assert_rolling_replace_next(&prepared, expected_key, replacement_key.as_ref());
+
+                if let Some(staged_before) = case.expected_staged_before_commit {
+                    harness.assert_staged_next(staged_before);
+                }
+
+                if let Some(res) = case.commit {
+                    let followup = harness.commit_realign(realign_id, &res);
+                    assert!(
+                        followup.is_none(),
+                        "{}: expected no followup after commit, got {followup:?}",
+                        case.name
+                    );
+                }
+            }
+            ExpectedReloadOp::Attach { target } => {
+                let prepared = prepared.unwrap_or_else(|| panic!("{}: expected Attach, got None", case.name));
+                let PipelineOperation::Roll(plan) = &prepared.operation else {
+                    panic!("{}: expected Roll operation, got {:?}", case.name, prepared.operation);
+                };
+                assert_eq!(plan.current, initial_current_key, "{}: plan.current mismatch", case.name);
+                assert_eq!(plan.generation, 1, "{}: plan.generation mismatch", case.name);
+
+                let target_song = reloaded_songs
+                    .iter()
+                    .find(|s| s.title == target)
+                    .unwrap_or_else(|| panic!("{}: attach target {target} not in reloaded songs", case.name));
+                let target_key = StationController::key_of(target_song);
+
+                let realign_id = harness.assert_rolling_attach(&prepared, &target_key);
+
+                if let Some(staged_before) = case.expected_staged_before_commit {
+                    harness.assert_staged_next(staged_before);
+                }
+
+                if let Some(res) = case.commit {
+                    let followup = harness.commit_realign(realign_id, &res);
+                    assert!(
+                        followup.is_none(),
+                        "{}: expected no followup after commit, got {followup:?}",
+                        case.name
+                    );
+                }
+            }
+        }
+        if let Some(staged) = case.expected_final_staged {
+            harness.assert_staged_next(staged);
+        } else {
+            harness.assert_no_staged_next();
         }
     }
     #[tokio::test]
@@ -3375,175 +3565,130 @@ mod tests {
 
     #[tokio::test]
     async fn reload_into_a_stopped_controller_starts_playback_once_songs_arrive() {
-        let a = queued_song("A", 0);
-        let mut harness = Harness::stopped(Vec::new());
-        assert!(matches!(
-            harness.controller.play().await.unwrap().operation,
-            PipelineOperation::Stop
-        ));
-        assert_eq!(harness.controller.state, PipelineState::Stopped);
-        let pipeline = harness.pipeline.clone();
+        let mut harness = ControllerScenario::stopped().build().await;
+        assert!(matches!(harness.play().await.unwrap().operation, PipelineOperation::Stop));
+        harness.assert_state(PipelineState::Stopped);
 
-        let operation = harness.controller.reload(vec![a], false).await.unwrap();
-        let Some(prepared) = operation else {
-            panic!("reload into a stopped controller with songs must issue a replace");
-        };
-        let PipelineOperation::Replace(plan) = prepared.operation else {
+        let prepared = harness
+            .reload_titles(&["A"], false)
+            .await
+            .unwrap()
+            .expect("reload into a stopped controller with songs must issue a replace");
+        let PipelineOperation::Replace(plan) = &prepared.operation else {
             panic!("reload into a stopped controller with songs must issue a replace");
         };
         assert!(matches!(plan.mode, ReplaceMode::InitialReplaceFromStopped));
-        assert_eq!(harness.controller.state, PipelineState::Stopped);
+        harness.assert_state(PipelineState::Stopped);
         let play_id = prepared.play_attempt_id.expect("play attempt id");
-        harness.controller.commit_play(play_id, &Ok(()));
-        assert_eq!(harness.controller.state, PipelineState::Playing);
+        assert!(harness.commit_play(play_id, &Ok(())));
+        harness.assert_state(PipelineState::Playing);
+        harness.assert_current_song("A");
         assert_eq!(
-            pipeline.count(Call::Replace),
+            harness.pipeline.count(Call::Replace),
             0,
             "replace is executed by the runtime, not the controller"
         );
 
-        let mut harness = Harness::stopped(Vec::new());
-        assert!(matches!(
-            harness.controller.play().await.unwrap().operation,
-            PipelineOperation::Stop
-        ));
-        let operation = harness.controller.reload(vec![], false).await.unwrap();
+        let mut empty_harness = ControllerScenario::stopped().build().await;
+        assert!(matches!(empty_harness.play().await.unwrap().operation, PipelineOperation::Stop));
+        let operation = empty_harness.reload_titles(&[], false).await.unwrap();
         assert!(operation.is_none(), "an empty reload must not start anything");
-        assert_eq!(harness.controller.state, PipelineState::Stopped);
+        empty_harness.assert_state(PipelineState::Stopped);
     }
 
     #[tokio::test]
     async fn reload_realigns_staged_next_to_reordered_head() {
-        let a = queued_song("A", 0);
-        let b = queued_song("B", 1);
-        let c = queued_song("C", 2);
-        let x = queued_song("X", 3);
-        let (mut controller, _) = Harness::playing(vec![a.clone(), b.clone(), c.clone()]).await.into_parts();
-        assert_eq!(controller.planned_next.as_ref().unwrap().0.queue_item_id, b.queue_item_id);
-
-        // Ordinary reload realignment is two-phase: the reload prepares the
-        // roll (with a correlated completion) but `planned_next` keeps the
-        // staged branch until the roll physically succeeded.
-        let operation = controller
-            .reload(vec![a.clone(), x.clone(), b.clone(), c.clone()], true)
-            .await
-            .unwrap();
-        let Some(prepared) = operation else {
-            panic!("reorder reload must issue a rolling replacement");
-        };
-        let PipelineOperation::Roll(plan) = prepared.operation else {
-            panic!("reorder reload must issue a rolling replacement");
-        };
-        let realign_id = prepared.realign_id.expect("the reload roll must be correlated");
-        assert_eq!(plan.current.queue_item_id, a.queue_item_id);
-        let RollingChange::ReplaceNext {
-            expected_next,
-            replacement,
-        } = plan.change
-        else {
-            panic!("reorder reload must use ReplaceNext");
-        };
-        assert_eq!(expected_next.queue_item_id, b.queue_item_id);
-        let replacement = replacement.expect("replacement must be staged");
-        assert_eq!(replacement.track.key.queue_item_id, x.queue_item_id);
-        assert_eq!(
-            controller.planned_next.as_ref().unwrap().0.queue_item_id,
-            b.queue_item_id,
-            "planned_next must keep the physically staged branch until the roll succeeded"
-        );
-
-        // The roll succeeds: planned_next advances to the new successor.
-        assert!(
-            controller.commit_realign(realign_id, &Ok(())).is_none(),
-            "no follow-up without a dirty reload"
-        );
-        assert_eq!(controller.planned_next.as_ref().unwrap().0.queue_item_id, x.queue_item_id);
+        run_reload_case(ReloadCase {
+            name: "reload realigns staged next to reordered head",
+            initial_queue: &["A", "B", "C"],
+            new_queue: &["A", "X", "B", "C"],
+            align: true,
+            expected_op: ExpectedReloadOp::ReplaceNext {
+                expected: "B",
+                replacement: Some("X"),
+            },
+            expected_staged_before_commit: Some("B"),
+            commit: Some(Ok(())),
+            expected_final_staged: Some("X"),
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn reload_without_align_keeps_the_staged_next() {
-        let a = queued_song("A", 0);
-        let b = queued_song("B", 1);
-        let x = queued_song("X", 3);
-        let (mut controller, _) = Harness::playing(vec![a.clone(), b.clone()]).await.into_parts();
-        let operation = controller.reload(vec![a, x, b.clone()], false).await.unwrap();
-        assert!(operation.is_none(), "non-aligning reload must not touch the pipeline");
-        assert_eq!(controller.planned_next.as_ref().unwrap().0.queue_item_id, b.queue_item_id);
+        run_reload_case(ReloadCase {
+            name: "reload without align keeps the staged next",
+            initial_queue: &["A", "B"],
+            new_queue: &["A", "X", "B"],
+            align: false,
+            expected_op: ExpectedReloadOp::None,
+            expected_staged_before_commit: None,
+            commit: None,
+            expected_final_staged: Some("B"),
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn reload_with_unchanged_head_does_not_roll() {
-        let a = queued_song("A", 0);
-        let b = queued_song("B", 1);
-        let c = queued_song("C", 2);
-        let x = queued_song("X", 3);
-        let (mut controller, _) = Harness::playing(vec![a.clone(), b.clone(), c.clone()]).await.into_parts();
-        let operation = controller.reload(vec![a, b.clone(), c.clone(), x], true).await.unwrap();
-        assert!(operation.is_none(), "append-only reload must not roll");
-        assert_eq!(controller.planned_next.as_ref().unwrap().0.queue_item_id, b.queue_item_id);
+        run_reload_case(ReloadCase {
+            name: "reload with unchanged head does not roll",
+            initial_queue: &["A", "B", "C"],
+            new_queue: &["A", "B", "C", "X"],
+            align: true,
+            expected_op: ExpectedReloadOp::None,
+            expected_staged_before_commit: None,
+            commit: None,
+            expected_final_staged: Some("B"),
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn reload_exhausting_queue_drops_the_staged_next() {
-        let a = queued_song("A", 0);
-        let b = queued_song("B", 1);
-        let (mut controller, _) = Harness::playing(vec![a.clone(), b.clone()]).await.into_parts();
-        let operation = controller.reload(vec![a.clone()], true).await.unwrap();
-        let Some(prepared) = operation else {
-            panic!("exhausting reload must issue a roll");
-        };
-        let PipelineOperation::Roll(plan) = prepared.operation else {
-            panic!("exhausting reload must issue a roll");
-        };
-        let realign_id = prepared.realign_id.expect("the drop roll must be correlated");
-        let RollingChange::ReplaceNext {
-            expected_next,
-            replacement,
-        } = plan.change
-        else {
-            panic!("exhausting reload must use ReplaceNext");
-        };
-        assert_eq!(expected_next.queue_item_id, b.queue_item_id);
-        assert!(replacement.is_none(), "no successor may be staged after exhaustion");
-        assert_eq!(
-            controller.planned_next.as_ref().unwrap().0.queue_item_id,
-            b.queue_item_id,
-            "planned_next keeps the staged branch until the drop roll succeeded"
-        );
-
-        // The drop roll succeeds: the staged claim is dropped.
-        assert!(controller.commit_realign(realign_id, &Ok(())).is_none());
-        assert!(controller.planned_next.is_none());
+        run_reload_case(ReloadCase {
+            name: "reload exhausting queue drops the staged next",
+            initial_queue: &["A", "B"],
+            new_queue: &["A"],
+            align: true,
+            expected_op: ExpectedReloadOp::ReplaceNext {
+                expected: "B",
+                replacement: None,
+            },
+            expected_staged_before_commit: Some("B"),
+            commit: Some(Ok(())),
+            expected_final_staged: None,
+        })
+        .await;
     }
 
     #[tokio::test]
     async fn stale_handover_after_realignment_is_ignored() {
-        let a = queued_song("A", 0);
-        let b = queued_song("B", 1);
+        let mut harness = ControllerHarness::playing_queue(&["A", "B"]).await;
+        let a = harness.song(0);
+        let b = harness.song(1);
+        let b_key = harness.track_key(1);
         let x = queued_song("X", 3);
-        let (mut controller, _) = Harness::playing(vec![a.clone(), b.clone()]).await.into_parts();
-        let b_key = StationController::track(b.clone()).key;
-        let prepared = controller
-            .reload(vec![a.clone(), x.clone(), b.clone()], true)
+        let x_key = StationController::track(x.clone()).key;
+        let prepared = harness
+            .reload(vec![a, x, b], true)
             .await
             .unwrap()
             .expect("the swap reload must issue a roll");
-        let realign_id = prepared.realign_id.expect("the reload roll must be correlated");
-        // The roll succeeded: the staged claim moved to X.
-        assert!(controller.commit_realign(realign_id, &Ok(())).is_none());
-        assert_eq!(controller.planned_next.as_ref().unwrap().0.queue_item_id, x.queue_item_id);
-
+        let realign_id = harness.assert_rolling_replace_next(&prepared, &b_key, Some(&x_key));
+        assert!(harness.commit_realign(realign_id, &Ok(())).is_none());
+        harness.assert_planned_next_key(Some(&x_key));
         // The pipeline handed over to the OLD staged next (B) right after the swap:
         // the queue must not consume B because it will never play.
-        let operation = controller
+        let operation = harness
             .handle_event(PipelineEvent::Handover {
                 generation: 1,
                 current: b_key,
             })
             .await;
         assert!(operation.is_none(), "stale handover must be ignored");
-        assert_eq!(controller.queue.current_song_info().unwrap().queue_item_id, a.queue_item_id);
-        assert_eq!(controller.planned_next.as_ref().unwrap().0.queue_item_id, x.queue_item_id);
+        harness.assert_current_song("A");
+        harness.assert_staged_next("X");
     }
 
     #[tokio::test]
@@ -4222,22 +4367,6 @@ mod tests {
         }
     }
 
-    /// Unpacks a prepared post-handover Attach operation, asserting that it is a
-    /// Roll with an Attach of `expected_track`, and returning its correlated realign id.
-    fn expect_attach(prepared: PreparedOperation, expected_track: &TrackKey) -> u64 {
-        let id = prepared.realign_id.expect("an Attach operation must carry a realign id");
-        match prepared.operation {
-            PipelineOperation::Roll(plan) => match plan.change {
-                RollingChange::Attach(planned) => {
-                    assert_eq!(&planned.track.key, expected_track, "the Attach must target the expected successor");
-                }
-                other => panic!("expected RollingChange::Attach, got {other:?}"),
-            },
-            other => panic!("expected PipelineOperation::Roll, got {other:?}"),
-        }
-        id
-    }
-
     /// Sends a staged DecodeFailed for `track` (generation 1) and returns
     /// the prepared replacement operation — or None when the event was
     /// remembered by an in-flight realign (no new operation is minted).
@@ -4275,20 +4404,6 @@ mod tests {
             .await
             .expect("a handover of the staged branch must be accepted")
             .expect("the handover must not fail")
-    }
-
-    /// Starts a playing controller over `songs` where songs[1] (B) fails
-    /// decoding, returning the controller, track keys for B and C, and the
-    /// correlated realign id R1.
-    async fn prepare_broken_b_playing(songs: &[SongInfo]) -> (StationController, TrackKey, TrackKey, u64) {
-        let (mut controller, _) = Harness::playing(songs.to_vec()).await.into_parts();
-        let b_key = StationController::track(songs[1].clone()).key;
-        let c_key = StationController::track(songs[2].clone()).key;
-        let prepared = staged_decode_failure(&mut controller, b_key.clone(), "broken next")
-            .await
-            .expect("the first decode failure must prepare a roll");
-        let r1 = prepared.realign_id.expect("the replacement must be correlated");
-        (controller, b_key, c_key, r1)
     }
 
     #[tokio::test]
@@ -6069,29 +6184,26 @@ mod tests {
     /// being dropped as a stale realignment.
     #[tokio::test]
     async fn failed_reload_realign_keeps_the_staged_claim() {
-        let a = queued_song("A", 0);
-        let b = queued_song("B", 1);
+        let mut harness = ControllerHarness::playing_queue(&["A", "B"]).await;
+        let b_key = harness.track_key(1);
         let x = queued_song("X", 3);
-        let (mut controller, _) = Harness::playing(vec![a.clone(), b.clone()]).await.into_parts();
-        let b_key = StationController::track(b.clone()).key;
         let x_key = StationController::track(x.clone()).key;
 
-        let prepared = controller
-            .reload(vec![a.clone(), x.clone(), b.clone()], true)
+        let prepared = harness
+            .reload(vec![harness.song(0), x, harness.song(1)], true)
             .await
             .unwrap()
             .expect("the swap reload must issue a roll");
-        let realign_id = prepared.realign_id.expect("the reload roll must be correlated");
+        let realign_id = harness.assert_rolling_replace_next(&prepared, &b_key, Some(&x_key));
 
-        // The roll fails: the pipeline still stages B, so planned_next stays
-        // B — never an optimistic X.
-        assert!(controller
+        // The roll fails: the pipeline still stages B, so planned_next stays B.
+        assert!(harness
             .commit_realign(realign_id, &Err(PipelineError::Pipeline("boom".into())))
             .is_none());
-        assert_eq!(controller.planned_next().as_ref(), Some(&b_key));
+        harness.assert_planned_next_key(Some(&b_key));
 
         // A handover of the still-staged B is physically valid and accepted.
-        let handover = controller
+        let handover = harness
             .handle_event(PipelineEvent::Handover {
                 generation: 1,
                 current: b_key,
@@ -6100,17 +6212,10 @@ mod tests {
             .expect("a handover of the still-staged branch must be accepted")
             .expect("the handover must not fail");
         assert!(handover.attempt_id.is_none());
-        // The accepted handover's Attach of X is two-phase: planned_next
-        // stays None — the pipeline stages nothing yet — until the attach
-        // roll succeeds.
-        let attach_id = handover.realign_id.expect("the handover's attach must be a correlated realign");
-        assert_eq!(controller.planned_next(), None, "the attach must not be claimed optimistically");
-        assert!(controller.commit_realign(attach_id, &Ok(())).is_none());
-        assert_eq!(
-            controller.planned_next().as_ref(),
-            Some(&x_key),
-            "the successful attach claims the queue successor"
-        );
+        let attach_id = harness.assert_rolling_attach(&handover, &x_key);
+        harness.assert_no_staged_next();
+        assert!(harness.commit_realign(attach_id, &Ok(())).is_none());
+        harness.assert_planned_next_key(Some(&x_key));
     }
 
     /// End-to-end: a failed ordinary reload realign (fault injection) keeps
@@ -6186,49 +6291,24 @@ mod tests {
     /// then is the queue successor claimed.
     #[tokio::test]
     async fn handover_attach_is_two_phase_until_the_roll_succeeds() {
-        let a = queued_song("A", 0);
-        let b = queued_song("B", 1);
-        let x = queued_song("X", 2);
-        let (mut controller, _) = Harness::playing(vec![a.clone(), b.clone(), x.clone()]).await.into_parts();
-        let b_key = StationController::track(b.clone()).key;
-        let x_key = StationController::track(x.clone()).key;
+        let mut harness = ControllerHarness::playing_queue(&["A", "B", "X"]).await;
+        let b_key = harness.track_key(1);
+        let x_key = harness.track_key(2);
 
-        let prepared = prepare_handover_attach(&mut controller, b_key.clone()).await;
-        let attach_id = prepared.realign_id.expect("the handover's attach must be a correlated realign");
-        assert!(prepared.attempt_id.is_none(), "a handover is never a skip operation");
-        assert_eq!(
-            controller
-                .queue
-                .current_song_info()
-                .expect("a committed handover has a current")
-                .queue_item_id,
-            b.queue_item_id
-        );
-        assert_eq!(
-            controller.pending_realign(),
-            Some(attach_id),
-            "the handover must register the attach realign"
-        );
-        assert_eq!(
-            controller.planned_next(),
-            None,
-            "planned_next must stay None while the attach is in flight"
-        );
-        let PipelineOperation::Roll(plan) = prepared.operation else {
+        let prepared = prepare_handover_attach(harness.controller_mut(), b_key.clone()).await;
+        let PipelineOperation::Roll(plan) = &prepared.operation else {
             panic!("the handover must issue an attach roll");
         };
         assert_eq!(plan.generation, 1);
         assert_eq!(plan.current, b_key);
-        match plan.change {
-            RollingChange::Attach(next) => {
-                assert_eq!(next.track.key, x_key, "the attach must target the queue successor");
-            }
-            other => panic!("expected an Attach, got {other:?}"),
-        }
-
+        let attach_id = harness.assert_rolling_attach(&prepared, &x_key);
+        assert!(prepared.attempt_id.is_none());
+        harness.assert_current_song("B");
+        harness.assert_pending_realign_id(Some(attach_id));
+        harness.assert_no_staged_next();
         // The attach roll succeeds: the queue successor is claimed.
-        assert!(controller.commit_realign(attach_id, &Ok(())).is_none());
-        assert_eq!(controller.planned_next().as_ref(), Some(&x_key));
+        assert!(harness.commit_realign(attach_id, &Ok(())).is_none());
+        harness.assert_planned_next_key(Some(&x_key));
     }
 
     /// A failed Handover Attach claims nothing: `planned_next` stays None,
@@ -6236,52 +6316,32 @@ mod tests {
     /// attaches it again through the same correlated mechanism.
     #[tokio::test]
     async fn failed_handover_attach_claims_nothing_and_a_reload_recovers() {
-        let a = queued_song("A", 0);
-        let b = queued_song("B", 1);
-        let x = queued_song("X", 2);
-        let (mut controller, _) = Harness::playing(vec![a.clone(), b.clone(), x.clone()]).await.into_parts();
-        let b_key = StationController::track(b.clone()).key;
-        let x_key = StationController::track(x.clone()).key;
+        let mut harness = ControllerHarness::playing_queue(&["A", "B", "X"]).await;
+        let b_key = harness.track_key(1);
+        let x_key = harness.track_key(2);
 
-        let prepared = prepare_handover_attach(&mut controller, b_key.clone()).await;
-        let attach_id = prepared.realign_id.expect("the handover's attach must be a correlated realign");
+        let prepared = prepare_handover_attach(harness.controller_mut(), b_key.clone()).await;
+        let attach_id = harness.assert_rolling_attach(&prepared, &x_key);
 
         // The attach fails: nothing is claimed.
-        assert!(controller
+        assert!(harness
             .commit_realign(attach_id, &Err(PipelineError::Pipeline("boom".into())))
             .is_none());
-        assert_eq!(controller.planned_next(), None, "a failed attach must claim nothing");
-        assert_eq!(controller.pending_realign(), None);
-        assert_eq!(
-            controller
-                .queue
-                .current_song_info()
-                .expect("a committed handover has a current")
-                .queue_item_id,
-            b.queue_item_id
-        );
+        harness.assert_no_staged_next();
+        harness.assert_pending_realign_id(None);
+        harness.assert_current_song("B");
 
-        // A later reload reconciles: the orphaned successor is attached
-        // again with a fresh correlated realign (still two-phase).
-        let prepared = controller
-            .reload(vec![a.clone(), b.clone(), x.clone()], true)
+        // A later reload reconciles: the orphaned successor is attached again with a fresh correlated realign.
+        let prepared = harness
+            .reload_reordered(&["A", "B", "X"], true)
             .await
             .unwrap()
             .expect("the reload must attach the orphaned successor");
-        let recovery_id = prepared.realign_id.expect("the recovery attach must be correlated");
+        let recovery_id = harness.assert_rolling_attach(&prepared, &x_key);
         assert_ne!(recovery_id, attach_id, "the recovery is a fresh realign");
-        let PipelineOperation::Roll(plan) = prepared.operation else {
-            panic!("the reload must issue an attach roll");
-        };
-        match plan.change {
-            RollingChange::Attach(next) => {
-                assert_eq!(next.track.key, x_key, "the recovery must attach the queue successor");
-            }
-            other => panic!("expected an Attach, got {other:?}"),
-        }
-        assert_eq!(controller.planned_next(), None, "the recovery attach is also two-phase");
-        assert!(controller.commit_realign(recovery_id, &Ok(())).is_none());
-        assert_eq!(controller.planned_next().as_ref(), Some(&x_key));
+        harness.assert_no_staged_next();
+        assert!(harness.commit_realign(recovery_id, &Ok(())).is_none());
+        harness.assert_planned_next_key(Some(&x_key));
     }
 
     /// The single-slot serialization rule: a duplicate staged DecodeFailed
@@ -6293,39 +6353,26 @@ mod tests {
     /// be the queue head).
     #[tokio::test]
     async fn duplicate_decode_failure_does_not_overwrite_the_in_flight_realign() {
-        let a = queued_song("A", 0);
-        let b = queued_song("B", 1);
-        let c = queued_song("C", 2);
-        let (mut controller, _) = Harness::playing(vec![a.clone(), b.clone(), c.clone()]).await.into_parts();
-        let b_key = StationController::track(b.clone()).key;
-        let c_key = StationController::track(c.clone()).key;
+        let mut harness = ControllerHarness::playing_queue(&["A", "B", "C"]).await;
+        let b_key = harness.track_key(1);
+        let c_key = harness.track_key(2);
 
-        let prepared = staged_decode_failure(&mut controller, b_key.clone(), "broken next")
+        let prepared = harness
+            .staged_decode_failure(b_key.clone(), "broken next")
             .await
             .expect("the first decode failure must prepare a roll");
-        let r1 = prepared.realign_id.expect("the replacement must be correlated");
-        assert_eq!(controller.pending_realign(), Some(r1));
-        assert_eq!(controller.planned_next().as_ref(), Some(&b_key));
+        let r1 = harness.assert_rolling_replace_next(&prepared, &b_key, Some(&c_key));
+        harness.assert_pending_realign_id(Some(r1));
+        harness.assert_planned_next_key(Some(&b_key));
 
-        // The same staged branch fails again before R1 completes: absorbed —
-        // no second operation, no second record, R1 keeps ownership.
-        assert!(
-            staged_decode_failure(&mut controller, b_key.clone(), "broken next again")
-                .await
-                .is_none(),
-            "a duplicate decode failure must not mint a second operation"
-        );
-        assert_eq!(controller.pending_realign(), Some(r1), "R1 must keep ownership");
-        assert_eq!(controller.planned_next().as_ref(), Some(&b_key));
+        // The same staged branch fails again before R1 completes: absorbed.
+        assert!(harness.staged_decode_failure(b_key.clone(), "broken next again").await.is_none());
+        harness.assert_pending_realign_id(Some(r1));
+        harness.assert_planned_next_key(Some(&b_key));
 
-        // R1 succeeds: no recovery work — the absorbed event is satisfied
-        // (the broken branch is gone) — and the successor is claimed
-        // exactly once.
-        assert!(
-            controller.commit_realign(r1, &Ok(())).is_none(),
-            "a satisfied decode failure must not produce follow-up work"
-        );
-        assert_eq!(controller.planned_next().as_ref(), Some(&c_key));
+        // R1 succeeds: no recovery work.
+        assert!(harness.commit_realign(r1, &Ok(())).is_none());
+        harness.assert_planned_next_key(Some(&c_key));
     }
 
     /// A staged DecodeFailed while a RELOAD realign for the same staged
@@ -6333,36 +6380,27 @@ mod tests {
     /// the physical change.
     #[tokio::test]
     async fn decode_failure_during_a_reload_realign_keeps_the_record() {
-        let a = queued_song("A", 0);
-        let b = queued_song("B", 1);
-        let c = queued_song("C", 2);
-        let d = queued_song("D", 3);
-        let (mut controller, _) = Harness::playing(vec![a.clone(), b.clone(), c.clone(), d.clone()])
-            .await
-            .into_parts();
-        let b_key = StationController::track(b.clone()).key;
-        let c_key = StationController::track(c.clone()).key;
+        let mut harness = ControllerHarness::playing_queue(&["A", "B", "C", "D"]).await;
+        let b_key = harness.track_key(1);
+        let c_key = harness.track_key(2);
 
-        // The queue reorders so the successor becomes C: the reload realigns
-        // the staged B -> C.
-        let prepared = controller
-            .reload(vec![a.clone(), c.clone(), b.clone(), d.clone()], true)
+        // The queue reorders so successor becomes C.
+        let prepared = harness
+            .reload_reordered(&["A", "C", "B", "D"], true)
             .await
             .unwrap()
             .expect("the reordered reload must issue a roll");
-        let r1 = prepared.realign_id.expect("the reload roll must be correlated");
-        assert_eq!(controller.pending_realign(), Some(r1));
+        let r1 = harness.assert_rolling_replace_next(&prepared, &b_key, Some(&c_key));
+        harness.assert_pending_realign_id(Some(r1));
 
-        // The still-staged B fails to decode while the reload roll is in
-        // flight: absorbed — no second roll, R1 keeps ownership (and the
-        // decode fact is remembered on the record).
-        assert!(staged_decode_failure(&mut controller, b_key.clone(), "broken next").await.is_none());
-        assert_eq!(controller.pending_realign(), Some(r1), "R1 must keep ownership");
-        assert_eq!(controller.planned_next().as_ref(), Some(&b_key));
+        // The still-staged B fails to decode: absorbed.
+        assert!(harness.staged_decode_failure(b_key.clone(), "broken next").await.is_none());
+        harness.assert_pending_realign_id(Some(r1));
+        harness.assert_planned_next_key(Some(&b_key));
 
-        // R1 succeeds: the reordered successor is claimed.
-        assert!(controller.commit_realign(r1, &Ok(())).is_none());
-        assert_eq!(controller.planned_next().as_ref(), Some(&c_key));
+        // R1 succeeds: successor is claimed.
+        assert!(harness.commit_realign(r1, &Ok(())).is_none());
+        harness.assert_planned_next_key(Some(&c_key));
     }
 
     /// A decode-failure intent that arrives while a realign is in flight is
@@ -6371,58 +6409,33 @@ mod tests {
     /// never on a stale second record.
     #[tokio::test]
     async fn decode_failure_intent_is_reconciled_after_the_in_flight_realign() {
-        let a = queued_song("A", 0);
-        let b = queued_song("B", 1);
-        let c = queued_song("C", 2);
-        let d = queued_song("D", 2);
-        let (mut controller, _) = Harness::playing(vec![a.clone(), b.clone(), c.clone()]).await.into_parts();
-        let b_key = StationController::track(b.clone()).key;
-        let c_key = StationController::track(c.clone()).key;
-        let d_key = StationController::track(d.clone()).key;
+        let mut harness = ControllerHarness::playing_queue(&["A", "B", "C"]).await;
+        let b_key = harness.track_key(1);
+        let c_key = harness.track_key(2);
 
-        // The staged B fails: R1 replaces it with C.
-        let prepared = staged_decode_failure(&mut controller, b_key.clone(), "broken next")
+        let prepared = harness
+            .staged_decode_failure(b_key.clone(), "broken next")
             .await
             .expect("the first decode failure must prepare a roll");
-        let r1 = prepared.realign_id.expect("the replacement must be correlated");
+        let r1 = harness.assert_rolling_replace_next(&prepared, &b_key, Some(&c_key));
 
-        // The queue drops B and offers D while R1 is in flight, and a
-        // duplicate DecodeFailed(B) arrives too: both intents are absorbed —
-        // R1 keeps ownership, and the dirty mark reconciles the newest
-        // successor after the completion.
-        assert!(controller.reload(vec![a.clone(), d.clone()], true).await.unwrap().is_none());
-        assert!(staged_decode_failure(&mut controller, b_key, "broken next again").await.is_none());
-        assert_eq!(controller.pending_realign(), Some(r1));
+        // The queue drops B and offers D while R1 is in flight.
+        let d = queued_song("D", 2);
+        let d_key = StationController::track(d.clone()).key;
+        assert!(harness.reload(vec![harness.song(0), d], true).await.unwrap().is_none());
+        assert!(harness.staged_decode_failure(b_key, "broken next again").await.is_none());
+        harness.assert_pending_realign_id(Some(r1));
 
-        // R1 succeeds: the pipeline physically stages C, so planned_next
-        // advances to C — and the follow-up realign replaces C with the
-        // newest successor D.
-        let (r2, followup) = controller
-            .commit_realign(r1, &Ok(()))
-            .expect("the dirty realign must produce the follow-up");
-        assert_eq!(
-            controller.planned_next().as_ref(),
-            Some(&c_key),
-            "planned_next must describe the physically staged C, not D"
-        );
-        let PipelineOperation::Roll(plan) = followup.operation else {
-            panic!("the follow-up must be a roll");
-        };
-        match plan.change {
-            RollingChange::ReplaceNext {
-                expected_next,
-                replacement,
-            } => {
-                assert_eq!(expected_next, c_key, "the follow-up must target the physically staged branch");
-                assert_eq!(replacement.expect("D must be staged").track.key, d_key);
-            }
-            other => panic!("expected ReplaceNext, got {other:?}"),
-        }
-        assert_eq!(controller.pending_realign(), Some(r2));
+        // R1 succeeds -> follow-up C -> D.
+        let (r2, followup) = harness.commit_realign(r1, &Ok(())).expect("dirty realign follow-up");
+        harness.assert_planned_next_key(Some(&c_key));
+        let r2_id = harness.assert_rolling_replace_next(&followup, &c_key, Some(&d_key));
+        assert_eq!(r2, r2_id);
+        harness.assert_pending_realign_id(Some(r2));
 
-        // The follow-up succeeds: the newest successor is claimed.
-        assert!(controller.commit_realign(r2, &Ok(())).is_none());
-        assert_eq!(controller.planned_next().as_ref(), Some(&d_key));
+        // Follow-up succeeds: newest successor D claimed.
+        assert!(harness.commit_realign(r2, &Ok(())).is_none());
+        harness.assert_planned_next_key(Some(&d_key));
     }
 
     /// The absorbed duplicate staged DecodeFailed is NOT lost when the
@@ -6432,64 +6445,33 @@ mod tests {
     /// operation while R1 is unresolved.
     #[tokio::test]
     async fn duplicate_decode_failure_retries_after_the_first_realign_fails() {
-        let a = queued_song("A", 0);
-        let b = queued_song("B", 1);
-        let c = queued_song("C", 2);
-        let (mut controller, _) = Harness::playing(vec![a.clone(), b.clone(), c.clone()]).await.into_parts();
-        let b_key = StationController::track(b.clone()).key;
-        let c_key = StationController::track(c.clone()).key;
+        let mut harness = ControllerHarness::playing_queue(&["A", "B", "C"]).await;
+        let b_key = harness.track_key(1);
+        let c_key = harness.track_key(2);
 
-        // First DecodeFailed(B): R1 replaces the staged B with C.
-        let prepared = staged_decode_failure(&mut controller, b_key.clone(), "broken next")
+        let prepared = harness
+            .staged_decode_failure(b_key.clone(), "broken next")
             .await
             .expect("the first decode failure must prepare a roll");
-        let r1 = prepared.realign_id.expect("the replacement must be correlated");
-        assert_eq!(controller.pending_realign(), Some(r1));
-        assert_eq!(controller.planned_next().as_ref(), Some(&b_key));
+        let r1 = harness.assert_rolling_replace_next(&prepared, &b_key, Some(&c_key));
+        harness.assert_pending_realign_id(Some(r1));
+        harness.assert_planned_next_key(Some(&b_key));
 
-        // A duplicate DecodeFailed(B) before R1 completes: no second roll,
-        // R1 keeps ownership — but the failure fact is remembered.
-        assert!(
-            staged_decode_failure(&mut controller, b_key.clone(), "broken next again")
-                .await
-                .is_none(),
-            "a duplicate decode failure must not mint a second operation"
-        );
-        assert_eq!(controller.pending_realign(), Some(r1), "R1 must keep ownership");
+        assert!(harness.staged_decode_failure(b_key.clone(), "broken next again").await.is_none());
+        harness.assert_pending_realign_id(Some(r1));
 
-        // R1 FAILS: the pipeline still stages the broken B — the absorbed
-        // event is preserved as a fresh correlated recovery R2.
-        let (r2, followup) = controller
+        // R1 FAILS: preserved as fresh recovery R2.
+        let (r2, followup) = harness
             .commit_realign(r1, &Err(PipelineError::Pipeline("boom".into())))
             .expect("the failed realign must produce the recovery");
-        assert_ne!(r2, r1, "the recovery is a fresh realign");
-        assert_eq!(
-            controller.planned_next().as_ref(),
-            Some(&b_key),
-            "planned_next must keep describing the still-staged broken B until R2 succeeds"
-        );
-        let PipelineOperation::Roll(plan) = followup.operation else {
-            panic!("the recovery must be a roll");
-        };
-        match plan.change {
-            RollingChange::ReplaceNext {
-                expected_next,
-                replacement,
-            } => {
-                assert_eq!(expected_next, b_key, "the recovery must target the still-staged broken branch");
-                assert_eq!(replacement.expect("C must be staged").track.key, c_key);
-            }
-            other => panic!("expected ReplaceNext, got {other:?}"),
-        }
-        assert_eq!(
-            controller.pending_realign(),
-            Some(r2),
-            "the recovery must be registered and correlated"
-        );
+        assert_ne!(r2, r1);
+        harness.assert_planned_next_key(Some(&b_key));
+        let r2_id = harness.assert_rolling_replace_next(&followup, &b_key, Some(&c_key));
+        assert_eq!(r2, r2_id);
+        harness.assert_pending_realign_id(Some(r2));
 
-        // R2 succeeds: the replacement is claimed exactly once.
-        assert!(controller.commit_realign(r2, &Ok(())).is_none());
-        assert_eq!(controller.planned_next().as_ref(), Some(&c_key));
+        assert!(harness.commit_realign(r2, &Ok(())).is_none());
+        harness.assert_planned_next_key(Some(&c_key));
     }
 
     /// Queue-dirty reconciliation and the preserved decode-failure fact
@@ -6499,62 +6481,38 @@ mod tests {
     /// rolls.
     #[tokio::test]
     async fn dirty_queue_and_duplicate_decode_failure_compose_into_one_recovery() {
-        let a = queued_song("A", 0);
-        let b = queued_song("B", 1);
-        let c = queued_song("C", 2);
+        let mut harness = ControllerHarness::playing_queue(&["A", "B", "C"]).await;
+        let b_key = harness.track_key(1);
         let d = queued_song("D", 2);
-        let (mut controller, _) = Harness::playing(vec![a.clone(), b.clone(), c.clone()]).await.into_parts();
-        let b_key = StationController::track(b.clone()).key;
         let d_key = StationController::track(d.clone()).key;
 
-        // R1 replaces the staged broken B with C; a duplicate DecodeFailed
-        // arrives too (remembered on the record).
-        let prepared = staged_decode_failure(&mut controller, b_key.clone(), "broken next")
+        let prepared = harness
+            .staged_decode_failure(b_key.clone(), "broken next")
             .await
             .expect("the first decode failure must prepare a roll");
-        let r1 = prepared.realign_id.expect("the replacement must be correlated");
-        assert!(staged_decode_failure(&mut controller, b_key.clone(), "broken next again")
-            .await
-            .is_none());
-        assert_eq!(controller.pending_realign(), Some(r1));
+        let r1 = harness.assert_rolling_replace_next(&prepared, &b_key, Some(&harness.track_key(2)));
+        assert!(harness.staged_decode_failure(b_key.clone(), "broken next again").await.is_none());
+        harness.assert_pending_realign_id(Some(r1));
 
-        // A reload changes the queue (C -> D) while R1 is unresolved: the
-        // alignment is marked dirty on the record.
-        assert!(controller
-            .reload(vec![a.clone(), b.clone(), d.clone()], true)
+        // Reload changes queue (C -> D) while R1 unresolved.
+        assert!(harness
+            .reload(vec![harness.song(0), harness.song(1), d], true)
             .await
             .unwrap()
             .is_none());
 
-        // R1 FAILS: exactly ONE next operation — the decode recovery toward
-        // the latest queue's successor after the broken B (D).
-        let (r2, followup) = controller
+        // R1 FAILS: exactly ONE recovery roll toward D.
+        let (r2, followup) = harness
             .commit_realign(r1, &Err(PipelineError::Pipeline("boom".into())))
-            .expect("the failed realign must produce exactly one recovery");
-        assert_ne!(r2, r1, "the recovery is a fresh realign");
-        assert_eq!(controller.planned_next().as_ref(), Some(&b_key));
-        let PipelineOperation::Roll(plan) = followup.operation else {
-            panic!("the recovery must be a roll");
-        };
-        match plan.change {
-            RollingChange::ReplaceNext {
-                expected_next,
-                replacement,
-            } => {
-                assert_eq!(expected_next, b_key, "the recovery must target the still-staged broken branch");
-                assert_eq!(
-                    replacement.expect("D must be staged").track.key,
-                    d_key,
-                    "the recovery must follow the latest queue"
-                );
-            }
-            other => panic!("expected ReplaceNext, got {other:?}"),
-        }
-        assert_eq!(controller.pending_realign(), Some(r2), "exactly one correlated record");
+            .expect("failed realign recovery");
+        assert_ne!(r2, r1);
+        harness.assert_planned_next_key(Some(&b_key));
+        let r2_id = harness.assert_rolling_replace_next(&followup, &b_key, Some(&d_key));
+        assert_eq!(r2, r2_id);
+        harness.assert_pending_realign_id(Some(r2));
 
-        // R2 succeeds: the newest successor is claimed.
-        assert!(controller.commit_realign(r2, &Ok(())).is_none());
-        assert_eq!(controller.planned_next().as_ref(), Some(&d_key));
+        assert!(harness.commit_realign(r2, &Ok(())).is_none());
+        harness.assert_planned_next_key(Some(&d_key));
     }
 
     /// End-to-end: a duplicate staged DecodeFailed is preserved through a
@@ -6638,95 +6596,49 @@ mod tests {
     /// must align to E (never re-staging the broken B).
     #[tokio::test]
     async fn decode_exclusion_survives_a_successful_dirty_follow_up_chain() {
-        let a = queued_song("A", 0);
-        let b = queued_song("B", 1);
-        let c = queued_song("C", 2);
+        let mut harness = ControllerHarness::playing_queue(&["A", "B", "C"]).await;
+        let a = harness.song(0);
+        let b = harness.song(1);
+        let b_key = harness.track_key(1);
+        let c_key = harness.track_key(2);
         let d = queued_song("D", 3);
-        let e = queued_song("E", 4);
-        let (mut controller, _) = Harness::playing(vec![a.clone(), b.clone(), c.clone()]).await.into_parts();
-        let b_key = StationController::track(b.clone()).key;
-        let c_key = StationController::track(c.clone()).key;
         let d_key = StationController::track(d.clone()).key;
+        let e = queued_song("E", 4);
         let e_key = StationController::track(e.clone()).key;
 
         // R1: staged B fails to decode -> replaces with C.
-        let prepared = staged_decode_failure(&mut controller, b_key.clone(), "broken next")
+        let prepared = harness
+            .staged_decode_failure(b_key.clone(), "broken next")
             .await
             .expect("the first decode failure must prepare a roll");
-        let r1 = prepared.realign_id.expect("the replacement must be correlated");
+        let r1 = harness.assert_rolling_replace_next(&prepared, &b_key, Some(&c_key));
 
         // While R1 is in flight: reload queue to [A, B, D] (B is still raw head).
-        // R1 becomes dirty toward D.
-        assert!(controller
-            .reload(vec![a.clone(), b.clone(), d.clone()], true)
-            .await
-            .unwrap()
-            .is_none());
-        assert_eq!(controller.pending_realign(), Some(r1));
+        assert!(harness.reload(vec![a.clone(), b.clone(), d], true).await.unwrap().is_none());
+        harness.assert_pending_realign_id(Some(r1));
 
-        // R1 succeeds: physical state is now C, planned_next becomes C.
-        // Follow-up R2 is minted toward D (skipping B).
-        let (r2, followup) = controller
-            .commit_realign(r1, &Ok(()))
-            .expect("the dirty realign must produce follow-up R2");
+        // R1 succeeds: follow-up R2 is minted toward D (skipping B).
+        let (r2, followup) = harness.commit_realign(r1, &Ok(())).expect("dirty realign follow-up R2");
         assert_ne!(r2, r1);
-        assert_eq!(controller.planned_next().as_ref(), Some(&c_key));
-        match followup.operation {
-            PipelineOperation::Roll(plan) => match plan.change {
-                RollingChange::ReplaceNext {
-                    expected_next,
-                    replacement,
-                } => {
-                    assert_eq!(expected_next, c_key);
-                    assert_eq!(replacement.expect("D must be desired").track.key, d_key);
-                }
-                other => panic!("expected ReplaceNext, got {other:?}"),
-            },
-            other => panic!("expected Roll, got {other:?}"),
-        }
-        assert_eq!(controller.pending_realign(), Some(r2));
+        harness.assert_planned_next_key(Some(&c_key));
+        let r2_id = harness.assert_rolling_replace_next(&followup, &c_key, Some(&d_key));
+        assert_eq!(r2, r2_id);
+        harness.assert_pending_realign_id(Some(r2));
 
         // While R2 is in flight: reload queue to [A, B, E] (B is still raw head).
-        // R2 becomes dirty toward E.
-        assert!(controller
-            .reload(vec![a.clone(), b.clone(), e.clone()], true)
-            .await
-            .unwrap()
-            .is_none());
+        assert!(harness.reload(vec![a, b, e], true).await.unwrap().is_none());
 
-        // R2 succeeds: physical state is now D, planned_next becomes D.
-        // Follow-up R3 MUST be minted toward E (NEVER B!).
-        let (r3, followup) = controller
-            .commit_realign(r2, &Ok(()))
-            .expect("the dirty realign must produce follow-up R3");
+        // R2 succeeds: follow-up R3 MUST be minted toward E (NEVER B!).
+        let (r3, followup) = harness.commit_realign(r2, &Ok(())).expect("dirty realign follow-up R3");
         assert_ne!(r3, r2);
-        assert_eq!(
-            controller.planned_next().as_ref(),
-            Some(&d_key),
-            "planned_next must describe physically staged D before R3 succeeds"
-        );
-        match followup.operation {
-            PipelineOperation::Roll(plan) => match plan.change {
-                RollingChange::ReplaceNext {
-                    expected_next,
-                    replacement,
-                } => {
-                    assert_eq!(expected_next, d_key, "R3 must replace physically staged D");
-                    assert_eq!(
-                        replacement.expect("E must be desired").track.key,
-                        e_key,
-                        "R3 must select E, never resurrecting broken B"
-                    );
-                }
-                other => panic!("expected ReplaceNext, got {other:?}"),
-            },
-            other => panic!("expected Roll, got {other:?}"),
-        }
-        assert_eq!(controller.pending_realign(), Some(r3));
+        harness.assert_planned_next_key(Some(&d_key));
+        let r3_id = harness.assert_rolling_replace_next(&followup, &d_key, Some(&e_key));
+        assert_eq!(r3, r3_id);
+        harness.assert_pending_realign_id(Some(r3));
 
         // R3 succeeds: no further follow-up; planned_next becomes E.
-        assert!(controller.commit_realign(r3, &Ok(())).is_none());
-        assert_eq!(controller.planned_next().as_ref(), Some(&e_key));
+        assert!(harness.commit_realign(r3, &Ok(())).is_none());
+        harness.assert_planned_next_key(Some(&e_key));
     }
 
     /// If a dirty follow-up (R2: C -> D) fails after a reload to [A, B, E],
@@ -6734,73 +6646,38 @@ mod tests {
     /// (never resurrecting broken B).
     #[tokio::test]
     async fn decode_exclusion_survives_follow_up_failure() {
-        let a = queued_song("A", 0);
-        let b = queued_song("B", 1);
-        let c = queued_song("C", 2);
+        let mut harness = ControllerHarness::playing_queue(&["A", "B", "C"]).await;
+        let a = harness.song(0);
+        let b = harness.song(1);
+        let b_key = harness.track_key(1);
+        let c_key = harness.track_key(2);
         let d = queued_song("D", 3);
+        let d_key = StationController::track(d.clone()).key;
         let e = queued_song("E", 4);
-        let (mut controller, _) = Harness::playing(vec![a.clone(), b.clone(), c.clone()]).await.into_parts();
-        let b_key = StationController::track(b.clone()).key;
-        let c_key = StationController::track(c.clone()).key;
         let e_key = StationController::track(e.clone()).key;
 
-        // R1: staged B fails to decode -> replaces with C.
-        let prepared = staged_decode_failure(&mut controller, b_key.clone(), "broken next")
-            .await
-            .expect("the first decode failure must prepare a roll");
-        let r1 = prepared.realign_id.expect("the replacement must be correlated");
+        let prepared = harness.staged_decode_failure(b_key.clone(), "broken next").await.expect("roll");
+        let r1 = harness.assert_rolling_replace_next(&prepared, &b_key, Some(&c_key));
 
-        // Reload to [A, B, D] while R1 is in flight.
-        assert!(controller
-            .reload(vec![a.clone(), b.clone(), d.clone()], true)
-            .await
-            .unwrap()
-            .is_none());
+        assert!(harness.reload(vec![a.clone(), b.clone(), d], true).await.unwrap().is_none());
+        let (r2, followup) = harness.commit_realign(r1, &Ok(())).expect("R2");
+        let r2_id = harness.assert_rolling_replace_next(&followup, &c_key, Some(&d_key));
+        assert_eq!(r2, r2_id);
 
-        // R1 succeeds -> R2 (C -> D).
-        let (r2, _) = controller
-            .commit_realign(r1, &Ok(()))
-            .expect("R1 success must produce follow-up R2");
+        assert!(harness.reload(vec![a, b, e], true).await.unwrap().is_none());
 
-        // While R2 is in flight: reload to [A, B, E].
-        assert!(controller
-            .reload(vec![a.clone(), b.clone(), e.clone()], true)
-            .await
-            .unwrap()
-            .is_none());
-
-        // R2 FAILS: physical state is still C. Follow-up must be C -> E.
-        let (r3, followup) = controller
+        // R2 FAILS: physical state is still C. Follow-up must be C -> E (never B).
+        let (r3, followup) = harness
             .commit_realign(r2, &Err(PipelineError::Pipeline("R2 failed".into())))
             .expect("failed R2 must produce dirty follow-up");
         assert_ne!(r3, r2);
-        assert_eq!(
-            controller.planned_next().as_ref(),
-            Some(&c_key),
-            "planned_next must keep describing physically staged C"
-        );
-        match followup.operation {
-            PipelineOperation::Roll(plan) => match plan.change {
-                RollingChange::ReplaceNext {
-                    expected_next,
-                    replacement,
-                } => {
-                    assert_eq!(expected_next, c_key, "follow-up must replace still-staged C");
-                    assert_eq!(
-                        replacement.expect("E must be desired").track.key,
-                        e_key,
-                        "follow-up must target E, never broken B"
-                    );
-                }
-                other => panic!("expected ReplaceNext, got {other:?}"),
-            },
-            other => panic!("expected Roll, got {other:?}"),
-        }
-        assert_eq!(controller.pending_realign(), Some(r3));
+        harness.assert_planned_next_key(Some(&c_key));
+        let r3_id = harness.assert_rolling_replace_next(&followup, &c_key, Some(&e_key));
+        assert_eq!(r3, r3_id);
+        harness.assert_pending_realign_id(Some(r3));
 
-        // Follow-up succeeds: planned_next becomes E.
-        assert!(controller.commit_realign(r3, &Ok(())).is_none());
-        assert_eq!(controller.planned_next().as_ref(), Some(&e_key));
+        assert!(harness.commit_realign(r3, &Ok(())).is_none());
+        harness.assert_planned_next_key(Some(&e_key));
     }
 
     /// An unchanged reload during a decode follow-up must not mark the
@@ -6808,86 +6685,64 @@ mod tests {
     /// dirty detection compares against the effective desired successor.
     #[tokio::test]
     async fn unchanged_reload_does_not_spuriously_dirty_a_decode_realign_chain() {
-        let a = queued_song("A", 0);
-        let b = queued_song("B", 1);
-        let c = queued_song("C", 2);
+        let mut harness = ControllerHarness::playing_queue(&["A", "B", "C"]).await;
+        let a = harness.song(0);
+        let b = harness.song(1);
+        let b_key = harness.track_key(1);
+        let c_key = harness.track_key(2);
         let d = queued_song("D", 3);
-        let (mut controller, _) = Harness::playing(vec![a.clone(), b.clone(), c.clone()]).await.into_parts();
-        let b_key = StationController::track(b.clone()).key;
         let d_key = StationController::track(d.clone()).key;
 
-        // R1: staged B fails to decode -> replaces with C.
-        let prepared = staged_decode_failure(&mut controller, b_key.clone(), "broken next")
-            .await
-            .expect("the first decode failure must prepare a roll");
-        let r1 = prepared.realign_id.expect("the replacement must be correlated");
+        let prepared = harness.staged_decode_failure(b_key.clone(), "broken next").await.expect("roll");
+        let r1 = harness.assert_rolling_replace_next(&prepared, &b_key, Some(&c_key));
 
-        // Reload to [A, B, D] while R1 is in flight.
-        assert!(controller
-            .reload(vec![a.clone(), b.clone(), d.clone()], true)
-            .await
-            .unwrap()
-            .is_none());
+        assert!(harness.reload(vec![a.clone(), b.clone(), d.clone()], true).await.unwrap().is_none());
+        let (r2, followup) = harness.commit_realign(r1, &Ok(())).expect("R2");
+        let r2_id = harness.assert_rolling_replace_next(&followup, &c_key, Some(&d_key));
+        assert_eq!(r2, r2_id);
 
-        // R1 succeeds -> R2 (C -> D), desired is D, excluded_broken is B.
-        let (r2, _) = controller
-            .commit_realign(r1, &Ok(()))
-            .expect("R1 success must produce follow-up R2");
+        // An UNCHANGED reload with the same effective queue [A, B, D]: NOT dirty!
+        assert!(harness.reload(vec![a, b, d], true).await.unwrap().is_none());
 
-        // An UNCHANGED reload with the same effective queue [A, B, D]:
-        // effective desired is D == realign.desired (D) -> NOT dirty!
-        assert!(controller
-            .reload(vec![a.clone(), b.clone(), d.clone()], true)
-            .await
-            .unwrap()
-            .is_none());
-
-        // R2 succeeds: must NOT manufacture an unwanted R3!
         assert!(
-            controller.commit_realign(r2, &Ok(())).is_none(),
+            harness.commit_realign(r2, &Ok(())).is_none(),
             "an unchanged reload must not manufacture spurious follow-up work"
         );
-        assert_eq!(controller.planned_next().as_ref(), Some(&d_key));
+        harness.assert_planned_next_key(Some(&d_key));
     }
 
     /// A reload of an unchanged queue during an automatic decode retry must
     /// not manufacture a dirty mark and bypass the bounded retry budget.
     #[tokio::test]
     async fn retry_budget_is_not_bypassed_by_an_unchanged_reload() {
-        let a = queued_song("A", 0);
-        let b = queued_song("B", 1);
-        let c = queued_song("C", 2);
-        let (mut controller, _) = Harness::playing(vec![a.clone(), b.clone(), c.clone()]).await.into_parts();
-        let b_key = StationController::track(b.clone()).key;
+        let mut harness = ControllerHarness::playing_queue(&["A", "B", "C"]).await;
+        let a = harness.song(0);
+        let b = harness.song(1);
+        let c = harness.song(2);
+        let b_key = harness.track_key(1);
+        let c_key = harness.track_key(2);
 
-        // R1: staged B fails to decode -> replaces with C.
-        let prepared = staged_decode_failure(&mut controller, b_key.clone(), "broken next")
-            .await
-            .expect("the first decode failure must prepare a roll");
-        let r1 = prepared.realign_id.expect("the replacement must be correlated");
+        let prepared = harness.staged_decode_failure(b_key.clone(), "broken next").await.expect("roll");
+        let r1 = harness.assert_rolling_replace_next(&prepared, &b_key, Some(&c_key));
 
         // R1 FAILS -> bounded retry R2 (B -> C), budget now 0.
-        let (r2, _) = controller
+        let (r2, followup) = harness
             .commit_realign(r1, &Err(PipelineError::Pipeline("R1 failed".into())))
             .expect("failed R1 must produce retry R2");
+        let r2_id = harness.assert_rolling_replace_next(&followup, &b_key, Some(&c_key));
+        assert_eq!(r2, r2_id);
 
-        // An UNCHANGED reload [A, B, C] while R2 is in flight:
-        // effective desired is C == realign.desired (C) -> NOT dirty!
-        assert!(controller
-            .reload(vec![a.clone(), b.clone(), c.clone()], true)
-            .await
-            .unwrap()
-            .is_none());
+        // An UNCHANGED reload [A, B, C] while R2 is in flight: NOT dirty!
+        assert!(harness.reload(vec![a, b, c], true).await.unwrap().is_none());
 
-        // R2 FAILS with exhausted budget: no R3, no hot loop, planned_next
-        // remains physical B.
+        // R2 FAILS with exhausted budget: no R3, no hot loop.
         assert!(
-            controller
+            harness
                 .commit_realign(r2, &Err(PipelineError::Pipeline("R2 failed".into())))
                 .is_none(),
             "exhausted retry budget with no queue change must produce no further roll"
         );
-        assert_eq!(controller.planned_next().as_ref(), Some(&b_key));
+        harness.assert_planned_next_key(Some(&b_key));
     }
 
     /// If an explicit reload genuinely changes the effective desired successor
@@ -6896,68 +6751,43 @@ mod tests {
     /// (without re-arming an automatic decode retry budget).
     #[tokio::test]
     async fn changed_reload_reconciles_after_retry_budget_exhaustion() {
-        let a = queued_song("A", 0);
-        let b = queued_song("B", 1);
-        let c = queued_song("C", 2);
+        let mut harness = ControllerHarness::playing_queue(&["A", "B", "C"]).await;
+        let a = harness.song(0);
+        let b = harness.song(1);
+        let b_key = harness.track_key(1);
+        let c_key = harness.track_key(2);
         let d = queued_song("D", 3);
-        let (mut controller, _) = Harness::playing(vec![a.clone(), b.clone(), c.clone()]).await.into_parts();
-        let b_key = StationController::track(b.clone()).key;
         let d_key = StationController::track(d.clone()).key;
 
-        // R1: staged B fails to decode -> replaces with C.
-        let prepared = staged_decode_failure(&mut controller, b_key.clone(), "broken next")
-            .await
-            .expect("the first decode failure must prepare a roll");
-        let r1 = prepared.realign_id.expect("the replacement must be correlated");
+        let prepared = harness.staged_decode_failure(b_key.clone(), "broken next").await.expect("roll");
+        let r1 = harness.assert_rolling_replace_next(&prepared, &b_key, Some(&c_key));
 
-        // R1 FAILS -> bounded retry R2 (B -> C), budget now 0.
-        let (r2, _) = controller
+        let (r2, followup) = harness
             .commit_realign(r1, &Err(PipelineError::Pipeline("R1 failed".into())))
             .expect("failed R1 must produce retry R2");
+        let r2_id = harness.assert_rolling_replace_next(&followup, &b_key, Some(&c_key));
+        assert_eq!(r2, r2_id);
 
-        // A GENUINE queue change [A, B, D] while R2 is in flight:
-        // effective desired becomes D != realign.desired (C) -> dirty!
-        assert!(controller
-            .reload(vec![a.clone(), b.clone(), d.clone()], true)
-            .await
-            .unwrap()
-            .is_none());
+        // Genuine queue change [A, B, D] while R2 is in flight: dirty!
+        assert!(harness.reload(vec![a, b, d], true).await.unwrap().is_none());
 
-        // R2 FAILS: retry budget is exhausted, but dirty reconciliation
-        // produces exactly ONE roll toward D (skipping broken B).
-        let (r3, followup) = controller
+        // R2 FAILS: retry budget exhausted, dirty queue reconciles toward D.
+        let (r3, followup) = harness
             .commit_realign(r2, &Err(PipelineError::Pipeline("R2 failed".into())))
             .expect("dirty queue change must reconcile toward D");
         assert_ne!(r3, r2);
-        assert_eq!(controller.planned_next().as_ref(), Some(&b_key));
-        match followup.operation {
-            PipelineOperation::Roll(plan) => match plan.change {
-                RollingChange::ReplaceNext {
-                    expected_next,
-                    replacement,
-                } => {
-                    assert_eq!(expected_next, b_key, "must replace still-staged B");
-                    assert_eq!(
-                        replacement.expect("D must be desired").track.key,
-                        d_key,
-                        "must select newest successor D"
-                    );
-                }
-                other => panic!("expected ReplaceNext, got {other:?}"),
-            },
-            other => panic!("expected Roll, got {other:?}"),
-        }
-        assert_eq!(controller.pending_realign(), Some(r3));
+        harness.assert_planned_next_key(Some(&b_key));
+        let r3_id = harness.assert_rolling_replace_next(&followup, &b_key, Some(&d_key));
+        assert_eq!(r3, r3_id);
+        harness.assert_pending_realign_id(Some(r3));
 
-        // R3 fails: because R3 was a queue-driven follow-up (not armed with decode
-        // retry budget), it produces NO further automatic roll.
         assert!(
-            controller
+            harness
                 .commit_realign(r3, &Err(PipelineError::Pipeline("R3 failed".into())))
                 .is_none(),
             "exhausted queue follow-up must not loop"
         );
-        assert_eq!(controller.planned_next().as_ref(), Some(&b_key));
+        harness.assert_planned_next_key(Some(&b_key));
     }
 
     /// Problem 1 regression: when R1 (B -> C) succeeds with no dirty
@@ -6966,20 +6796,23 @@ mod tests {
     /// under current A, choosing C (no roll, planned_next stays C).
     #[tokio::test]
     async fn decode_exclusion_survives_idle_gap_after_roll_success() {
-        let songs = queued_songs(&["A", "B", "C"]);
-        let (mut controller, _b_key, c_key, r1) = prepare_broken_b_playing(&songs).await;
+        let mut harness = ControllerHarness::playing_queue(&["A", "B", "C"]).await;
+        let b_key = harness.track_key(1);
+        let c_key = harness.track_key(2);
+
+        let prepared = harness.staged_decode_failure(b_key, "broken next").await.expect("roll");
+        let r1 = harness.assert_rolling_replace_next(&prepared, &harness.track_key(1), Some(&c_key));
 
         // R1 succeeds: pending_realign is cleared; planned_next advances to C.
-        assert!(controller.commit_realign(r1, &Ok(())).is_none());
-        assert_eq!(controller.pending_realign(), None);
-        assert_eq!(controller.planned_next().as_ref(), Some(&c_key));
+        assert!(harness.commit_realign(r1, &Ok(())).is_none());
+        harness.assert_pending_realign_id(None);
+        harness.assert_planned_next_key(Some(&c_key));
 
-        // Unchanged reload across the idle gap: effective successor is C,
-        // which already matches the staged C -> no roll prepared!
-        let result = controller.reload(songs.clone(), true).await.unwrap();
+        // Unchanged reload across the idle gap: effective successor is C -> no roll prepared!
+        let result = harness.reload_reordered(&["A", "B", "C"], true).await.unwrap();
         assert!(result.is_none(), "unchanged reload after idle gap must not prepare a roll");
-        assert_eq!(controller.pending_realign(), None);
-        assert_eq!(controller.planned_next().as_ref(), Some(&c_key));
+        harness.assert_pending_realign_id(None);
+        harness.assert_planned_next_key(Some(&c_key));
     }
 
     /// Problem 1 regression: after an idle gap following R1 success, a
@@ -6987,41 +6820,28 @@ mod tests {
     /// raw queue head) and prepare ReplaceNext(C -> D), never C -> B.
     #[tokio::test]
     async fn changed_reload_after_idle_gap_still_skips_excluded_branch() {
-        let songs = queued_songs(&["A", "B", "C"]);
-        let (mut controller, _b_key, c_key, r1) = prepare_broken_b_playing(&songs).await;
+        let mut harness = ControllerHarness::playing_queue(&["A", "B", "C"]).await;
+        let b_key = harness.track_key(1);
+        let c_key = harness.track_key(2);
 
-        // R1 succeeds -> idle gap with staged C.
-        assert!(controller.commit_realign(r1, &Ok(())).is_none());
-        assert_eq!(controller.planned_next().as_ref(), Some(&c_key));
+        let prepared = harness.staged_decode_failure(b_key, "broken next").await.expect("roll");
+        let r1 = harness.assert_rolling_replace_next(&prepared, &harness.track_key(1), Some(&c_key));
+
+        assert!(harness.commit_realign(r1, &Ok(())).is_none());
+        harness.assert_planned_next_key(Some(&c_key));
 
         // Reload to [A, B, D] across the idle gap:
         let d = queued_song("D", 3);
         let d_key = StationController::track(d.clone()).key;
-        let prepared = controller
-            .reload(vec![songs[0].clone(), songs[1].clone(), d.clone()], true)
+        let prepared = harness
+            .reload(vec![harness.song(0), harness.song(1), d], true)
             .await
             .unwrap()
             .expect("changed reload must prepare a roll");
-        let r2 = prepared.realign_id.expect("the roll must be correlated");
+        let r2 = harness.assert_rolling_replace_next(&prepared, &c_key, Some(&d_key));
 
-        // The roll must replace staged C with D, NEVER B!
-        match prepared.operation {
-            PipelineOperation::Roll(plan) => match plan.change {
-                RollingChange::ReplaceNext {
-                    expected_next,
-                    replacement,
-                } => {
-                    assert_eq!(expected_next, c_key);
-                    assert_eq!(replacement.expect("D must be desired").track.key, d_key);
-                }
-                other => panic!("expected ReplaceNext, got {other:?}"),
-            },
-            other => panic!("expected Roll, got {other:?}"),
-        }
-
-        // R2 succeeds -> planned_next becomes D.
-        assert!(controller.commit_realign(r2, &Ok(())).is_none());
-        assert_eq!(controller.planned_next().as_ref(), Some(&d_key));
+        assert!(harness.commit_realign(r2, &Ok(())).is_none());
+        harness.assert_planned_next_key(Some(&d_key));
     }
 
     /// Problem 2 regression: multiple staged branches can fail decoding
@@ -7030,42 +6850,24 @@ mod tests {
     /// replacement must choose D (never C -> B).
     #[tokio::test]
     async fn consecutive_decode_failures_skip_all_broken_branches() {
-        let songs = queued_songs(&["A", "B", "C", "D"]);
-        let (mut controller, _b_key, c_key, r1) = prepare_broken_b_playing(&songs).await;
-        let d_key = StationController::track(songs[3].clone()).key;
+        let mut harness = ControllerHarness::playing_queue(&["A", "B", "C", "D"]).await;
+        let b_key = harness.track_key(1);
+        let c_key = harness.track_key(2);
+        let d_key = harness.track_key(3);
+
+        let prepared = harness.staged_decode_failure(b_key, "broken next").await.expect("roll");
+        let r1 = harness.assert_rolling_replace_next(&prepared, &harness.track_key(1), Some(&c_key));
 
         // R1 (B -> C) succeeds: physical staged is now C.
-        assert!(controller.commit_realign(r1, &Ok(())).is_none());
-        assert_eq!(controller.planned_next().as_ref(), Some(&c_key));
+        assert!(harness.commit_realign(r1, &Ok(())).is_none());
+        harness.assert_planned_next_key(Some(&c_key));
 
         // Now C also fails decoding!
-        let prepared = staged_decode_failure(&mut controller, c_key.clone(), "C failed too")
-            .await
-            .expect("second decode failure must prepare a roll");
-        let r2 = prepared.realign_id.expect("second replacement must be correlated");
+        let prepared = harness.staged_decode_failure(c_key.clone(), "C failed too").await.expect("roll");
+        let r2 = harness.assert_rolling_replace_next(&prepared, &c_key, Some(&d_key));
 
-        // The second roll must replace C with D (skipping BOTH B and C)!
-        match prepared.operation {
-            PipelineOperation::Roll(plan) => match plan.change {
-                RollingChange::ReplaceNext {
-                    expected_next,
-                    replacement,
-                } => {
-                    assert_eq!(expected_next, c_key);
-                    assert_eq!(
-                        replacement.expect("D must be desired").track.key,
-                        d_key,
-                        "replacement must be D, skipping both B and C"
-                    );
-                }
-                other => panic!("expected ReplaceNext, got {other:?}"),
-            },
-            other => panic!("expected Roll, got {other:?}"),
-        }
-
-        // R2 succeeds: planned_next becomes D.
-        assert!(controller.commit_realign(r2, &Ok(())).is_none());
-        assert_eq!(controller.planned_next().as_ref(), Some(&d_key));
+        assert!(harness.commit_realign(r2, &Ok(())).is_none());
+        harness.assert_planned_next_key(Some(&d_key));
     }
 
     /// Problem 2 regression: after both B and C have failed and D is
@@ -7073,51 +6875,32 @@ mod tests {
     /// and choose E (preparing ReplaceNext(D -> E), never D -> B or D -> C).
     #[tokio::test]
     async fn multiple_excluded_branches_survive_reload() {
-        let songs = queued_songs(&["A", "B", "C", "D"]);
-        let (mut controller, _b_key, c_key, r1) = prepare_broken_b_playing(&songs).await;
-        let d_key = StationController::track(songs[3].clone()).key;
+        let mut harness = ControllerHarness::playing_queue(&["A", "B", "C", "D"]).await;
+        let b_key = harness.track_key(1);
+        let c_key = harness.track_key(2);
+        let d_key = harness.track_key(3);
 
-        // R1 succeeds -> staged C.
-        assert!(controller.commit_realign(r1, &Ok(())).is_none());
+        let prepared = harness.staged_decode_failure(b_key, "broken B").await.expect("roll");
+        let r1 = harness.assert_rolling_replace_next(&prepared, &harness.track_key(1), Some(&c_key));
+        assert!(harness.commit_realign(r1, &Ok(())).is_none());
 
-        // C fails -> R2 (C -> D).
-        let prepared = staged_decode_failure(&mut controller, c_key.clone(), "C broken")
-            .await
-            .expect("C failure must prepare roll");
-        let r2 = prepared.realign_id.unwrap();
-        assert!(controller.commit_realign(r2, &Ok(())).is_none());
-        assert_eq!(controller.planned_next().as_ref(), Some(&d_key));
+        let prepared = harness.staged_decode_failure(c_key.clone(), "broken C").await.expect("roll");
+        let r2 = harness.assert_rolling_replace_next(&prepared, &c_key, Some(&d_key));
+        assert!(harness.commit_realign(r2, &Ok(())).is_none());
+        harness.assert_planned_next_key(Some(&d_key));
 
         // Reload to [A, B, C, E]:
         let e = queued_song("E", 4);
         let e_key = StationController::track(e.clone()).key;
-        let prepared = controller
-            .reload(vec![songs[0].clone(), songs[1].clone(), songs[2].clone(), e.clone()], true)
+        let prepared = harness
+            .reload(vec![harness.song(0), harness.song(1), harness.song(2), e], true)
             .await
             .unwrap()
             .expect("reload must prepare a roll toward E");
-        let r3 = prepared.realign_id.unwrap();
+        let r3 = harness.assert_rolling_replace_next(&prepared, &d_key, Some(&e_key));
 
-        match prepared.operation {
-            PipelineOperation::Roll(plan) => match plan.change {
-                RollingChange::ReplaceNext {
-                    expected_next,
-                    replacement,
-                } => {
-                    assert_eq!(expected_next, d_key);
-                    assert_eq!(
-                        replacement.expect("E must be desired").track.key,
-                        e_key,
-                        "must choose E, skipping both B and C"
-                    );
-                }
-                other => panic!("expected ReplaceNext, got {other:?}"),
-            },
-            other => panic!("expected Roll, got {other:?}"),
-        }
-
-        assert!(controller.commit_realign(r3, &Ok(())).is_none());
-        assert_eq!(controller.planned_next().as_ref(), Some(&e_key));
+        assert!(harness.commit_realign(r3, &Ok(())).is_none());
+        harness.assert_planned_next_key(Some(&e_key));
     }
 
     /// When B is already excluded and R2 (C -> E) is in flight, a DecodeFailed(C)
@@ -7127,58 +6910,37 @@ mod tests {
     /// non-excluded successor (skipping both B and C).
     #[tokio::test]
     async fn second_broken_branch_while_realign_is_in_flight() {
-        let songs = queued_songs(&["A", "B", "C", "D"]);
-        let (mut controller, _b_key, c_key, r1) = prepare_broken_b_playing(&songs).await;
+        let mut harness = ControllerHarness::playing_queue(&["A", "B", "C", "D"]).await;
+        let b_key = harness.track_key(1);
+        let c_key = harness.track_key(2);
+        let d_key = harness.track_key(3);
 
-        // R1 succeeds -> staged C.
-        assert!(controller.commit_realign(r1, &Ok(())).is_none());
+        let prepared = harness.staged_decode_failure(b_key, "broken B").await.expect("roll");
+        let r1 = harness.assert_rolling_replace_next(&prepared, &harness.track_key(1), Some(&c_key));
+        assert!(harness.commit_realign(r1, &Ok(())).is_none());
 
         // Reload to [A, B, D] so R2 (C -> D) is in flight.
-        let d = queued_song("D", 3);
-        let d_key = StationController::track(d.clone()).key;
-        let prepared = controller
-            .reload(vec![songs[0].clone(), songs[1].clone(), d.clone()], true)
+        let prepared = harness.reload_reordered(&["A", "B", "D"], true).await.unwrap().expect("C -> D");
+        let r2 = harness.assert_rolling_replace_next(&prepared, &c_key, Some(&d_key));
+
+        // While R2 (C -> D) is in flight, C emits DecodeFailed: absorbed.
+        assert!(harness
+            .staged_decode_failure(c_key.clone(), "C failed during realign")
             .await
-            .unwrap()
-            .expect("reload must prepare C -> D");
-        let r2 = prepared.realign_id.unwrap();
+            .is_none());
+        harness.assert_pending_realign_id(Some(r2));
 
-        // While R2 (C -> D) is in flight, C emits DecodeFailed:
-        assert!(
-            staged_decode_failure(&mut controller, c_key.clone(), "C failed during realign")
-                .await
-                .is_none(),
-            "DecodeFailed for expected_next while realign in flight must be absorbed"
-        );
-        assert_eq!(controller.pending_realign(), Some(r2));
-
-        // R2 FAILS: C is physically broken, so commit_realign triggers a bounded
-        // retry from physical C toward the effective successor (D), skipping B and C.
-        let (r3, followup) = controller
+        // R2 FAILS: bounded retry from physical C toward D, skipping B and C.
+        let (r3, followup) = harness
             .commit_realign(r2, &Err(PipelineError::Pipeline("R2 failed".into())))
             .expect("failed roll on broken expected must produce retry roll");
         assert_ne!(r3, r2);
-        assert_eq!(controller.planned_next().as_ref(), Some(&c_key));
+        harness.assert_planned_next_key(Some(&c_key));
+        let r3_id = harness.assert_rolling_replace_next(&followup, &c_key, Some(&d_key));
+        assert_eq!(r3, r3_id);
 
-        match followup.operation {
-            PipelineOperation::Roll(plan) => match plan.change {
-                RollingChange::ReplaceNext {
-                    expected_next,
-                    replacement,
-                } => {
-                    assert_eq!(expected_next, c_key, "retry must replace still-staged C");
-                    assert_eq!(
-                        replacement.expect("D must be desired").track.key,
-                        d_key,
-                        "retry must target D, skipping both B and C"
-                    );
-                }
-                other => panic!("expected ReplaceNext, got {other:?}"),
-            },
-            other => panic!("expected Roll, got {other:?}"),
-        }
-        assert!(controller.commit_realign(r3, &Ok(())).is_none());
-        assert_eq!(controller.planned_next().as_ref(), Some(&d_key));
+        assert!(harness.commit_realign(r3, &Ok(())).is_none());
+        harness.assert_planned_next_key(Some(&d_key));
     }
 
     /// A transition to a new current identity (Handover) clears the decode
@@ -7186,42 +6948,27 @@ mod tests {
     /// eligible again as a successor under current C.
     #[tokio::test]
     async fn exclusions_clear_on_new_current_identity_after_handover() {
-        let songs = queued_songs(&["A", "B", "C"]);
-        let (mut controller, b_key, c_key, r1) = prepare_broken_b_playing(&songs).await;
+        let mut harness = ControllerHarness::playing_queue(&["A", "B", "C"]).await;
+        let a = harness.song(0);
+        let b = harness.song(1);
+        let c = harness.song(2);
+        let b_key = harness.track_key(1);
+        let c_key = harness.track_key(2);
 
-        // R1 (B -> C) succeeds: physical staged is now C, B is excluded under current A.
-        assert!(controller.commit_realign(r1, &Ok(())).is_none());
-        assert_eq!(controller.planned_next().as_ref(), Some(&c_key));
+        let prepared = harness.staged_decode_failure(b_key.clone(), "broken B").await.expect("roll");
+        let r1 = harness.assert_rolling_replace_next(&prepared, &b_key, Some(&c_key));
+        assert!(harness.commit_realign(r1, &Ok(())).is_none());
+        harness.assert_planned_next_key(Some(&c_key));
 
-        // The queue is reloaded so B is placed after C: [A, C, B].
-        assert!(controller
-            .reload(vec![songs[0].clone(), songs[2].clone(), songs[1].clone()], true)
-            .await
-            .unwrap()
-            .is_none());
+        // Reload so B is placed after C: [A, C, B].
+        assert!(harness.reload(vec![a, c, b], true).await.unwrap().is_none());
 
-        // Handover to C occurs: C becomes current, identity changes to (generation 1, current C).
-        // The handover Attach is prepared for the next song in queue (B).
-        let prepared = prepare_handover_attach(&mut controller, c_key.clone()).await;
-        let r2 = prepared.realign_id.expect("attach must be correlated");
+        // Handover to C occurs: Attach for B prepared under current C (exclusions from A cleared).
+        let prepared = prepare_handover_attach(harness.controller_mut(), c_key.clone()).await;
+        let r2 = harness.assert_rolling_attach(&prepared, &b_key);
 
-        // The Attach for the new current C must select B (exclusions from A were cleared!).
-        match prepared.operation {
-            PipelineOperation::Roll(plan) => match plan.change {
-                RollingChange::Attach(planned) => {
-                    assert_eq!(
-                        planned.track.key, b_key,
-                        "under current C, B is no longer excluded and must be attached"
-                    );
-                }
-                other => panic!("expected Attach, got {other:?}"),
-            },
-            other => panic!("expected Roll, got {other:?}"),
-        }
-
-        // Attach succeeds -> planned_next becomes B under current C.
-        assert!(controller.commit_realign(r2, &Ok(())).is_none());
-        assert_eq!(controller.planned_next().as_ref(), Some(&b_key));
+        assert!(harness.commit_realign(r2, &Ok(())).is_none());
+        harness.assert_planned_next_key(Some(&b_key));
     }
 
     /// When a physical ReplaceNext roll succeeds and the pipeline hands over
@@ -7231,24 +6978,26 @@ mod tests {
     /// completions for that realign are inert.
     #[tokio::test]
     async fn replacenext_desired_hands_over_before_completion() {
-        let songs = queued_songs(&["A", "B", "C", "D"]);
-        let (mut controller, _) = Harness::playing(vec![songs[0].clone(), songs[1].clone()]).await.into_parts();
-        let b_key = StationController::track(songs[1].clone()).key;
-        let c_key = StationController::track(songs[2].clone()).key;
-        let d_key = StationController::track(songs[3].clone()).key;
+        let mut harness = ControllerHarness::playing_queue(&["A", "B"]).await;
+        let a = harness.song(0);
+        let b_key = harness.track_key(1);
+        let c = queued_song("C", 2);
+        let c_key = StationController::track(c.clone()).key;
+        let d = queued_song("D", 3);
+        let d_key = StationController::track(d.clone()).key;
 
         // Reload to [A, C, D] prepares ReplaceNext(B -> C):
-        let prepared = controller
-            .reload(vec![songs[0].clone(), songs[2].clone(), songs[3].clone()], true)
+        let prepared = harness
+            .reload(vec![a, c, d], true)
             .await
             .unwrap()
             .expect("reload must prepare B -> C");
-        let r1 = prepared.realign_id.expect("realign id must be present");
-        assert_eq!(controller.planned_next().as_ref(), Some(&b_key));
-        assert_eq!(controller.pending_realign(), Some(r1));
+        let r1 = harness.assert_rolling_replace_next(&prepared, &b_key, Some(&c_key));
+        harness.assert_planned_next_key(Some(&b_key));
+        harness.assert_pending_realign_id(Some(r1));
 
         // Deliver Handover(C) BEFORE commit_realign(r1, ...):
-        let handover_op = controller
+        let handover_op = harness
             .handle_event(PipelineEvent::Handover {
                 generation: 1,
                 current: c_key.clone(),
@@ -7257,35 +7006,24 @@ mod tests {
             .expect("Handover of pending desired branch must be accepted")
             .expect("the handover must not fail");
 
-        // Handover is accepted and C is the logical current:
-        assert_eq!(
-            controller.queue.current_song_info().as_ref().map(StationController::key_of),
-            Some(c_key)
-        );
-        // planned_next is None while the post-handover attach is unresolved:
-        assert_eq!(controller.planned_next(), None);
+        harness.assert_current_song_key(&c_key);
+        harness.assert_no_staged_next();
 
-        // Returned work is the post-handover Attach for D with a fresh realign id:
-        let r2 = expect_attach(handover_op, &d_key);
+        let r2 = harness.assert_rolling_attach(&handover_op, &d_key);
         assert_ne!(r2, r1);
 
-        // Late R1 completions (Ok and Err) must be completely inert and must not touch R2:
-        assert!(controller.commit_realign(r1, &Ok(())).is_none(), "late R1 Ok must be inert");
+        // Late R1 completions (Ok and Err) must be completely inert:
+        assert!(harness.commit_realign(r1, &Ok(())).is_none(), "late R1 Ok must be inert");
         assert!(
-            controller
+            harness
                 .commit_realign(r1, &Err(PipelineError::Pipeline("late err".into())))
                 .is_none(),
             "late R1 Err must be inert"
         );
-        assert_eq!(
-            controller.pending_realign(),
-            Some(r2),
-            "late R1 must not destroy post-handover Attach record R2"
-        );
+        harness.assert_pending_realign_id(Some(r2));
 
-        // Completing the post-handover Attach advances planned_next to D:
-        assert!(controller.commit_realign(r2, &Ok(())).is_none());
-        assert_eq!(controller.planned_next().as_ref(), Some(&d_key));
+        assert!(harness.commit_realign(r2, &Ok(())).is_none());
+        harness.assert_planned_next_key(Some(&d_key));
     }
 
     /// When an in-flight ReplaceNext becomes dirty via a Reload, but the
@@ -7294,28 +7032,27 @@ mod tests {
     /// and the new current identity derives its successor fresh.
     #[tokio::test]
     async fn dirty_replacenext_desired_hands_over_before_completion() {
-        let songs = queued_songs(&["A", "B", "C", "D", "E"]);
-        let (mut controller, _) = Harness::playing(vec![songs[0].clone(), songs[1].clone()]).await.into_parts();
-        let c_key = StationController::track(songs[2].clone()).key;
-        let e_key = StationController::track(songs[4].clone()).key;
+        let mut harness = ControllerHarness::playing_queue(&["A", "B"]).await;
+        let a = harness.song(0);
+        let b_key = harness.track_key(1);
+        let c = queued_song("C", 2);
+        let c_key = StationController::track(c.clone()).key;
+        let d = queued_song("D", 3);
+        let e = queued_song("E", 4);
+        let e_key = StationController::track(e.clone()).key;
 
-        // R1: B -> C prepared via reload [A, C, D]:
-        let prepared = controller
-            .reload(vec![songs[0].clone(), songs[2].clone(), songs[3].clone()], true)
+        let prepared = harness
+            .reload(vec![a.clone(), c.clone(), d.clone()], true)
             .await
             .unwrap()
             .expect("reload prepare");
-        let r1 = prepared.realign_id.unwrap();
+        let r1 = harness.assert_rolling_replace_next(&prepared, &b_key, Some(&c_key));
 
-        // Reload while R1 is in flight: change queue to [A, E, D] -> R1 becomes dirty!
-        assert!(controller
-            .reload(vec![songs[0].clone(), songs[4].clone(), songs[3].clone()], true)
-            .await
-            .unwrap()
-            .is_none());
+        // Reload while R1 in flight: [A, E, D] -> dirty.
+        assert!(harness.reload(vec![a, e, d], true).await.unwrap().is_none());
 
-        // Before committing R1, Handover(C) arrives:
-        let handover_op = controller
+        // Handover(C) arrives before committing R1:
+        let handover_op = harness
             .handle_event(PipelineEvent::Handover {
                 generation: 1,
                 current: c_key.clone(),
@@ -7324,30 +7061,23 @@ mod tests {
             .expect("Handover of C must be accepted")
             .expect("must not fail");
 
-        // C becomes logical current:
-        assert_eq!(
-            controller.queue.current_song_info().as_ref().map(StationController::key_of),
-            Some(c_key)
-        );
-        assert_eq!(controller.planned_next(), None);
+        harness.assert_current_song_key(&c_key);
+        harness.assert_no_staged_next();
 
-        // The returned operation is an Attach of the new current C's successor (E):
-        let r2 = expect_attach(handover_op, &e_key);
+        let r2 = harness.assert_rolling_attach(&handover_op, &e_key);
         assert_ne!(r2, r1);
 
-        // Late R1 completion (Ok and Err) is inert:
-        assert!(controller.commit_realign(r1, &Ok(())).is_none(), "late R1 Ok must be inert");
+        assert!(harness.commit_realign(r1, &Ok(())).is_none(), "late R1 Ok must be inert");
         assert!(
-            controller
+            harness
                 .commit_realign(r1, &Err(PipelineError::Pipeline("late err".into())))
                 .is_none(),
             "late R1 Err must be inert"
         );
-        assert_eq!(controller.pending_realign(), Some(r2));
+        harness.assert_pending_realign_id(Some(r2));
 
-        // Completing R2 advances planned_next to E:
-        assert!(controller.commit_realign(r2, &Ok(())).is_none());
-        assert_eq!(controller.planned_next().as_ref(), Some(&e_key));
+        assert!(harness.commit_realign(r2, &Ok(())).is_none());
+        harness.assert_planned_next_key(Some(&e_key));
     }
 
     /// When a post-Handover Attach physically succeeds and hands over before
@@ -7355,16 +7085,13 @@ mod tests {
     /// previous attach realign superseded, and late completions made inert.
     #[tokio::test]
     async fn post_handover_attach_desired_hands_over_before_completion() {
-        let songs = queued_songs(&["A", "B", "C", "D"]);
-        let (mut controller, _) = Harness::playing(vec![songs[0].clone(), songs[1].clone(), songs[2].clone(), songs[3].clone()])
-            .await
-            .into_parts();
-        let b_key = StationController::track(songs[1].clone()).key;
-        let c_key = StationController::track(songs[2].clone()).key;
-        let d_key = StationController::track(songs[3].clone()).key;
+        let mut harness = ControllerHarness::playing_queue(&["A", "B", "C", "D"]).await;
+        let b_key = harness.track_key(1);
+        let c_key = harness.track_key(2);
+        let d_key = harness.track_key(3);
 
-        // Handover(B) arrives -> current becomes B, planned_next becomes None, returns Attach(C) with realign id R1:
-        let handover_op = controller
+        // Handover(B) arrives -> current B, staged None, returns Attach(C) with R1:
+        let handover_op = harness
             .handle_event(PipelineEvent::Handover {
                 generation: 1,
                 current: b_key.clone(),
@@ -7372,60 +7099,50 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        let r1 = expect_attach(handover_op, &c_key);
-        assert_eq!(controller.planned_next(), None);
-        assert_eq!(controller.pending_realign(), Some(r1));
+        let r1 = harness.assert_rolling_attach(&handover_op, &c_key);
+        harness.assert_no_staged_next();
+        harness.assert_pending_realign_id(Some(r1));
 
         // Deliver Handover(C) BEFORE commit_realign(r1, Ok):
-        let handover_c = controller
+        let handover_c = harness
             .handle_event(PipelineEvent::Handover {
                 generation: 1,
                 current: c_key.clone(),
             })
             .await
-            .expect("Handover of C (pending desired of Attach) must be accepted")
+            .expect("Handover of C must be accepted")
             .expect("must not fail");
 
-        // C is accepted as current:
-        assert_eq!(
-            controller.queue.current_song_info().as_ref().map(StationController::key_of),
-            Some(c_key)
-        );
-        // R1 is superseded:
-        assert_ne!(controller.pending_realign(), Some(r1));
-        // Attach for D is minted under current C:
-        let r2 = expect_attach(handover_c, &d_key);
+        harness.assert_current_song_key(&c_key);
+        assert_ne!(harness.controller.pending_realign(), Some(r1));
+        let r2 = harness.assert_rolling_attach(&handover_c, &d_key);
         assert_ne!(r2, r1);
 
-        // Late R1 completion is inert and does not touch R2:
-        assert!(controller.commit_realign(r1, &Ok(())).is_none());
-        assert_eq!(controller.pending_realign(), Some(r2));
-        assert!(controller.commit_realign(r2, &Ok(())).is_none());
-        assert_eq!(controller.planned_next().as_ref(), Some(&d_key));
+        assert!(harness.commit_realign(r1, &Ok(())).is_none());
+        harness.assert_pending_realign_id(Some(r2));
+        assert!(harness.commit_realign(r2, &Ok(())).is_none());
+        harness.assert_planned_next_key(Some(&d_key));
     }
 
     /// A Handover for an unrelated track or a stale generation must be
     /// rejected without mutating current, planned_next, or pending realign state.
     #[tokio::test]
     async fn invalid_or_stale_handover_is_rejected() {
-        let songs = queued_songs(&["A", "B", "C"]);
-        let (mut controller, _) = Harness::playing(vec![songs[0].clone(), songs[1].clone()]).await.into_parts();
-        let a_key = StationController::track(songs[0].clone()).key;
-        let b_key = StationController::track(songs[1].clone()).key;
+        let mut harness = ControllerHarness::playing_queue(&["A", "B"]).await;
+        let a = harness.song(0);
+        let a_key = harness.track_key(0);
+        let b_key = harness.track_key(1);
+        let c = queued_song("C", 2);
+        let c_key = StationController::track(c.clone()).key;
         let z = queued_song("Z", 99);
         let z_key = StationController::track(z).key;
 
-        // R1: B -> C
-        let prepared = controller
-            .reload(vec![songs[0].clone(), songs[2].clone()], true)
-            .await
-            .unwrap()
-            .expect("reload prepare");
-        let r1 = prepared.realign_id.unwrap();
+        let prepared = harness.reload(vec![a, c], true).await.unwrap().expect("reload prepare");
+        let r1 = harness.assert_rolling_replace_next(&prepared, &b_key, Some(&c_key));
 
         // Unrelated track Z:
         assert!(
-            controller
+            harness
                 .handle_event(PipelineEvent::Handover {
                     generation: 1,
                     current: z_key.clone(),
@@ -7437,7 +7154,7 @@ mod tests {
 
         // Stale generation:
         assert!(
-            controller
+            harness
                 .handle_event(PipelineEvent::Handover {
                     generation: 99,
                     current: b_key.clone(),
@@ -7447,13 +7164,9 @@ mod tests {
             "stale generation handover must be rejected"
         );
 
-        // State is completely untouched:
-        assert_eq!(
-            controller.queue.current_song_info().as_ref().map(StationController::key_of),
-            Some(a_key)
-        );
-        assert_eq!(controller.planned_next().as_ref(), Some(&b_key));
-        assert_eq!(controller.pending_realign(), Some(r1));
+        harness.assert_current_song_key(&a_key);
+        harness.assert_planned_next_key(Some(&b_key));
+        harness.assert_pending_realign_id(Some(r1));
     }
 
     /// When a realign is in flight (e.g. ReplaceNext B -> C), but the old
@@ -7461,20 +7174,18 @@ mod tests {
     /// race), B must be accepted as current and supersede R1.
     #[tokio::test]
     async fn old_expected_branch_handover_is_accepted_while_realign_unresolved() {
-        let songs = queued_songs(&["A", "B", "C", "D"]);
-        let (mut controller, _) = Harness::playing(vec![songs[0].clone(), songs[1].clone()]).await.into_parts();
-        let b_key = StationController::track(songs[1].clone()).key;
+        let mut harness = ControllerHarness::playing_queue(&["A", "B"]).await;
+        let a = harness.song(0);
+        let b_key = harness.track_key(1);
+        let c = queued_song("C", 2);
+        let c_key = StationController::track(c.clone()).key;
+        let d = queued_song("D", 3);
 
-        // R1: B -> C
-        let prepared = controller
-            .reload(vec![songs[0].clone(), songs[2].clone(), songs[3].clone()], true)
-            .await
-            .unwrap()
-            .expect("reload prepare");
-        let r1 = prepared.realign_id.unwrap();
+        let prepared = harness.reload(vec![a, c, d], true).await.unwrap().expect("reload prepare");
+        let r1 = harness.assert_rolling_replace_next(&prepared, &b_key, Some(&c_key));
 
         // Old expected branch B hands over:
-        let _ = controller
+        let _ = harness
             .handle_event(PipelineEvent::Handover {
                 generation: 1,
                 current: b_key.clone(),
@@ -7483,13 +7194,9 @@ mod tests {
             .expect("old expected branch B must be accepted")
             .expect("must not fail");
 
-        // B becomes current, R1 is superseded:
-        assert_eq!(
-            controller.queue.current_song_info().as_ref().map(StationController::key_of),
-            Some(b_key)
-        );
-        assert_ne!(controller.pending_realign(), Some(r1));
-        assert!(controller.commit_realign(r1, &Ok(())).is_none());
+        harness.assert_current_song_key(&b_key);
+        assert_ne!(harness.controller.pending_realign(), Some(r1));
+        assert!(harness.commit_realign(r1, &Ok(())).is_none());
     }
 
     /// Runtime ordering regression: at runtime, when ReplaceNext(B -> C)
