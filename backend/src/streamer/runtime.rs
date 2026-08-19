@@ -3,12 +3,28 @@ use std::time::Duration;
 use tokio::sync::{mpsc, oneshot};
 
 use super::controller::StationController;
+#[cfg(test)]
+use super::pipeline::TrackKey;
 use super::pipeline::{PipelineError, PipelineEvent, StationPlaybackConfig};
 use super::{SongInfo, StatusEvent};
 
+#[cfg(test)]
+#[derive(Debug, Clone)]
+pub(crate) struct StationTestSnapshot {
+    pub generation: u64,
+    pub pending_skip: Option<u64>,
+    pub pending_skip_target: Option<TrackKey>,
+    pub pending_skip_failures: Option<(Option<TrackKey>, Option<TrackKey>)>,
+    pub pending_realign: Option<u64>,
+    pub planned_next: Option<TrackKey>,
+    pub state: super::pipeline::PipelineState,
+    pub deferred_terminal: Option<(u64, TrackKey, u8)>,
+}
 pub(crate) enum StationCommand {
     Play(oneshot::Sender<Result<(), PipelineError>>),
     Pause(oneshot::Sender<Result<(), PipelineError>>),
+    #[cfg(test)]
+    Stop(oneshot::Sender<Result<(), PipelineError>>),
     Shutdown(oneshot::Sender<Result<(), PipelineError>>),
     Skip(oneshot::Sender<Result<(), PipelineError>>),
     Reconnect(oneshot::Sender<Result<(), PipelineError>>),
@@ -44,6 +60,10 @@ pub(crate) enum StationCommand {
     Status(oneshot::Sender<Result<StatusEvent, PipelineError>>),
     #[cfg(test)]
     Barrier(oneshot::Sender<()>),
+    #[cfg(test)]
+    State(oneshot::Sender<super::pipeline::PipelineState>),
+    #[cfg(test)]
+    TestSnapshot(oneshot::Sender<StationTestSnapshot>),
     /// Acknowledgment for an automatic idle resume: the executor answered
     /// after the replace ran. `attempt_id` correlates the outcome with the
     /// exact resume attempt; the controller ignores completions for
@@ -428,6 +448,10 @@ impl StationRuntime {
                         }
                     },
                     event = events.recv() => match event {
+                        #[cfg(test)]
+                        Some(PipelineEvent::TestBarrier(notify)) => {
+                            notify.notify_one();
+                        }
                         Some(PipelineEvent::SinkDisconnected { generation, output_epoch, message }) => {
                             match controller.handle_event(PipelineEvent::SinkDisconnected { generation, output_epoch, message }).await {
                                 Some(Ok(super::controller::PreparedOperation {
@@ -464,22 +488,12 @@ impl StationRuntime {
                                 }
                                 None => {}
                             }
-                        },
+                        }
+                        // Pipeline events (DecodeFailed, CurrentEos, Handover, FatalPipeline)
+                        // are processed through the controller. When an event matches the target
+                        // generation of an in-flight two-phase skip, the failure is recorded on
+                        // the pending skip record (deferred) and applied at commit time.
                         Some(event) => match controller.handle_event(event).await {
-                            // Terminal events (CurrentEos / DecodeFailed of
-                            // the current track) prepare a skip: the
-                            // event-driven replacement gets the same
-                            // two-phase treatment as a manual one, so a
-                            // failed Replace keeps the controller on the old
-                            // track/generation while the pipeline keeps
-                            // playing it. A terminal event arriving while a
-                            // skip is already in flight is deferred inside
-                            // the controller and re-resolved when that skip
-                            // resolves. The completion binding comes from
-                            // the event handling itself: only a skip the
-                            // event prepared carries an attempt id — a
-                            // handover attach or a decode-failure roll never
-                            // produces a SkipResult.
                             Some(Ok(prepared)) => submit_prepared(prepared, &operations_urgent, &retries),
                             Some(Err(error)) => tracing::error!(error = %error, "failed to apply pipeline event"),
                             None => {}
@@ -545,6 +559,11 @@ impl StationRuntime {
     pub(crate) async fn pause(&self) -> Result<(), PipelineError> {
         self.request(StationCommand::Pause).await
     }
+    #[cfg(test)]
+    #[allow(dead_code)]
+    pub(crate) async fn stop(&self) -> Result<(), PipelineError> {
+        self.request(StationCommand::Stop).await
+    }
 
     /// Enqueues a command to the runtime's command channel and returns its completion
     /// receiver without awaiting pipeline execution.
@@ -569,6 +588,30 @@ impl StationRuntime {
         let (response, receiver) = oneshot::channel();
         self.commands
             .send(StationCommand::Barrier(response))
+            .await
+            .map_err(|_| PipelineError::Pipeline("station runtime stopped".to_owned()))?;
+        receiver
+            .await
+            .map_err(|_| PipelineError::Pipeline("station runtime stopped".to_owned()))
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn state(&self) -> Result<super::pipeline::PipelineState, PipelineError> {
+        let (response, receiver) = oneshot::channel();
+        self.commands
+            .send(StationCommand::State(response))
+            .await
+            .map_err(|_| PipelineError::Pipeline("station runtime stopped".to_owned()))?;
+        receiver
+            .await
+            .map_err(|_| PipelineError::Pipeline("station runtime stopped".to_owned()))
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn test_snapshot(&self) -> Result<StationTestSnapshot, PipelineError> {
+        let (response, receiver) = oneshot::channel();
+        self.commands
+            .send(StationCommand::TestSnapshot(response))
             .await
             .map_err(|_| PipelineError::Pipeline("station runtime stopped".to_owned()))?;
         receiver
@@ -692,10 +735,16 @@ impl StationCommand {
                             #[cfg(not(test))]
                             submit_play_operation(prepared.operation, attempt_id, Some(response), operations, &retries);
                         }
-                        None => {
-                            ExecutorTask::Operation(PendingPipelineAction::operation(prepared.operation, Some(response)))
-                                .submit(operations);
-                        }
+                        None => match prepared.attempt_id {
+                            Some(attempt_id) => {
+                                controller.attach_skip_response(attempt_id, response);
+                                submit_skip_operation(prepared.operation, attempt_id, operations, &retries);
+                            }
+                            None => {
+                                ExecutorTask::Operation(PendingPipelineAction::operation(prepared.operation, Some(response)))
+                                    .submit(operations);
+                            }
+                        },
                     }
                     // token, output binding, retry on failure).
                     if controller.is_output_known_disconnected() {
@@ -737,6 +786,10 @@ impl StationCommand {
             Self::Pause(response) => {
                 ExecutorTask::Operation(PendingPipelineAction::operation(controller.pause(), Some(response))).submit(operations);
             }
+            #[cfg(test)]
+            Self::Stop(response) => {
+                ExecutorTask::Operation(PendingPipelineAction::operation(controller.stop(), Some(response))).submit(urgent);
+            }
             Self::Shutdown(response) => {
                 // The stop runs through the same sequential executor as every
                 // other pipeline operation; the barrier goes to the urgent
@@ -750,28 +803,22 @@ impl StationCommand {
                 return false;
             }
             Self::Skip(response) => match controller.skip().await {
-                Ok(prepared) => {
-                    // The logical commit is deferred until the pipeline
-                    // replacement succeeded: submit with a completion and
-                    // let the loop commit when the outcome arrives. The
-                    // manual caller is answered from the SkipResult arm —
-                    // never before the commit (or abandon) ran. The attempt
-                    // id comes from the skip preparation itself: the
-                    // completion can only ever commit THIS attempt.
-                    match prepared.attempt_id {
-                        Some(attempt_id) => {
-                            controller.attach_skip_response(attempt_id, response);
-                            submit_skip_operation(prepared.operation, attempt_id, operations, &retries);
-                        }
-                        None => {
-                            // Exhausted queue: a plain stop with no skip
-                            // attempt — answer the caller directly, like
-                            // every other plain command.
-                            ExecutorTask::Operation(PendingPipelineAction::operation(prepared.operation, Some(response)))
-                                .submit(operations);
-                        }
+                Ok(prepared) => match prepared.attempt_id {
+                    Some(attempt_id) => {
+                        // The logical commit is deferred until the pipeline
+                        // replacement succeeded: submit with a completion and
+                        // let the loop commit when the outcome arrives. The
+                        // manual caller is answered from the SkipResult arm —
+                        // never before the commit (or abandon) ran. The attempt
+                        // id lets the controller route the outcome back to
+                        // exactly this skip preparation.
+                        controller.attach_skip_response(attempt_id, response);
+                        submit_skip_operation(prepared.operation, attempt_id, operations, &retries);
                     }
-                }
+                    None => {
+                        ExecutorTask::Operation(PendingPipelineAction::operation(prepared.operation, Some(response))).submit(operations);
+                    }
+                },
                 Err(error) => send(response, Err(error)),
             },
             Self::Reconnect(response) => match controller.reconnect().await {
@@ -893,6 +940,23 @@ impl StationCommand {
             #[cfg(test)]
             Self::Barrier(response) => {
                 let _ = response.send(());
+            }
+            #[cfg(test)]
+            Self::State(response) => {
+                let _ = response.send(controller.state());
+            }
+            #[cfg(test)]
+            Self::TestSnapshot(response) => {
+                let _ = response.send(StationTestSnapshot {
+                    generation: controller.generation(),
+                    pending_skip: controller.pending_skip(),
+                    pending_skip_target: controller.pending_skip_target(),
+                    pending_skip_failures: controller.pending_skip_failures(),
+                    pending_realign: controller.pending_realign(),
+                    planned_next: controller.planned_next(),
+                    state: controller.state(),
+                    deferred_terminal: controller.deferred_terminal_info(),
+                });
             }
             Self::ResumeResult { attempt_id, result } => {
                 controller.on_resume_result(attempt_id, result);

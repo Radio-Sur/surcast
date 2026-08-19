@@ -32,7 +32,7 @@ pub(crate) struct StationController {
     /// always describes physical reality, never a desired future state —
     /// it only advances once the pipeline actually adopted the branch.
     planned_next: Option<(SongInfo, super::queue_state::QueueAnchor)>,
-    /// The queue drained and the station stopped waiting for new content
+    /// True when the station is stopped because its queue was empty
     /// (AutoDJ / schedule fill), as opposed to a manual stop. Only this
     /// state may auto-resume playback once the queue fills again.
     idle: bool,
@@ -213,6 +213,7 @@ pub(crate) enum SkipFollowup {
 /// refill/reload can change the queue successor under the staged plan).
 struct PendingSkip {
     attempt_id: u64,
+    target_generation: u64,
     /// The song the physical Replace will adopt — its full metadata lets the
     /// commit represent it as the logical current even when a reload removed
     /// it from the queue while the Replace was in flight.
@@ -237,6 +238,9 @@ struct PendingSkip {
     /// If a newer `pause()` or `stop()` intervened, this field is cleared
     /// to None so the late skip completion preserves `Paused`/`Stopped`.
     resolving_play_attempt: Option<u64>,
+    failed_current: Option<TrackKey>,
+    failed_staged_next: Option<TrackKey>,
+    is_play_resume: bool,
 }
 
 /// A deferred terminal event: generation/track of the ended track and how
@@ -401,7 +405,56 @@ impl StationController {
             instance.events,
         ))
     }
+}
+#[cfg(test)]
+pub(crate) fn test_controller(pipeline: Arc<dyn super::pipeline::PlaybackPipeline>, songs: Vec<SongInfo>) -> StationController {
+    use super::testsupport;
+    let (status_tx, _) = broadcast::channel(1);
+    let (queue_tx, _) = broadcast::channel(1);
+    let station_id = uuid::Uuid::new_v4();
+    let queue = Arc::new(QueueManager::new(
+        testsupport::unavailable_db(),
+        station_id,
+        String::new(),
+        songs,
+        0,
+    ));
+    StationController {
+        queue,
+        db: testsupport::unavailable_db(),
+        station_id,
+        playback: testsupport::playback_config(),
+        driver: PipelineDriver::spawn(pipeline),
+        target: testsupport::target(),
+        state: PipelineState::Stopped,
+        status_tx,
+        queue_tx,
+        generation: 0,
+        output_epoch: 0,
+        planned_next: None,
+        idle: false,
+        pending_resume: None,
+        resume_attempt_seq: 0,
+        pending_play: None,
+        play_attempt_seq: 0,
+        last_failed_play: None,
+        resolved_play_success: None,
+        pending_play_resolved_by_skip: None,
+        pending_skip: None,
+        skip_attempt_seq: 0,
+        pending_realign: None,
+        realign_seq: 0,
+        deferred_terminal: None,
+        active_reconnect_retry: None,
+        reconnect_retry_seq: 0,
+        active_reconnect_output: None,
+        reconnect_token_shared: std::sync::Arc::default(),
+        known_disconnected_output: None,
+        decode_exclusions: None,
+    }
+}
 
+impl StationController {
     pub(crate) async fn handle_event(&mut self, event: PipelineEvent) -> Option<Result<PreparedOperation, PipelineError>> {
         match event {
             PipelineEvent::DecodeFailed {
@@ -454,6 +507,18 @@ impl StationController {
                             1,
                         )?;
                         return Some(Ok(prepared));
+                    }
+                }
+                if let Some(pending) = self.pending_skip.as_mut() {
+                    if generation == pending.target_generation {
+                        if Self::key_of(&pending.next_song) == track {
+                            pending.failed_current = Some(track);
+                            return None;
+                        }
+                        if pending.staged_next.as_ref().is_some_and(|song| Self::key_of(song) == track) {
+                            pending.failed_staged_next = Some(track);
+                            return None;
+                        }
                     }
                 }
             }
@@ -544,6 +609,34 @@ impl StationController {
                     }
                 }
             }
+            PipelineEvent::FatalPipeline { pipeline_epoch, message } => {
+                let is_current_epoch = pipeline_epoch == self.output_epoch;
+                let is_pending_start = self.pending_play.is_some() || self.pending_resume.is_some();
+                if is_current_epoch && (self.state != PipelineState::Stopped || is_pending_start) {
+                    tracing::error!(
+                        station_id = %self.station_id,
+                        pipeline_epoch,
+                        %message,
+                        "fatal GStreamer pipeline failure; stopping station"
+                    );
+                    let operation = self.stop();
+                    return Some(Ok(PreparedOperation {
+                        operation,
+                        attempt_id: None,
+                        realign_id: None,
+                        play_attempt_id: None,
+                    }));
+                } else {
+                    tracing::debug!(
+                        station_id = %self.station_id,
+                        pipeline_epoch,
+                        current_epoch = self.output_epoch,
+                        state = ?self.state,
+                        %message,
+                        "stale fatal pipeline event ignored"
+                    );
+                }
+            }
             PipelineEvent::SinkDisconnected {
                 generation,
                 output_epoch,
@@ -559,6 +652,8 @@ impl StationController {
                     })
                 });
             }
+            #[cfg(test)]
+            PipelineEvent::TestBarrier(_) => return None,
         }
         None
     }
@@ -601,7 +696,17 @@ impl StationController {
         }
     }
 
+    #[cfg(test)]
+    pub(crate) fn track(song: SongInfo) -> PipelineTrack {
+        Self::track_inner(song)
+    }
+
+    #[cfg(not(test))]
     fn track(song: SongInfo) -> PipelineTrack {
+        Self::track_inner(song)
+    }
+
+    fn track_inner(song: SongInfo) -> PipelineTrack {
         PipelineTrack {
             key: TrackKey {
                 queue_item_id: song.queue_item_id,
@@ -729,6 +834,12 @@ impl StationController {
             })
         } else {
             self.idle = false;
+            if let Some(prepared) = self.retry_deferred_terminal().await? {
+                if let Some(pending) = self.pending_skip.as_mut() {
+                    pending.is_play_resume = true;
+                }
+                return Ok(prepared);
+            }
             self.state = PipelineState::Playing;
             Ok(PreparedOperation {
                 operation: PipelineOperation::SetPlaying(true),
@@ -755,6 +866,7 @@ impl StationController {
         self.pending_play_resolved_by_skip = None;
         if let Some(pending) = self.pending_skip.as_mut() {
             pending.resolving_play_attempt = None;
+            pending.is_play_resume = false;
         }
         self.invalidate_reconnect_chain();
         self.state = PipelineState::Paused;
@@ -773,18 +885,25 @@ impl StationController {
         self.pending_play_resolved_by_skip = None;
         if let Some(pending) = self.pending_skip.as_mut() {
             pending.resolving_play_attempt = None;
+            pending.is_play_resume = false;
         }
         self.invalidate_reconnect_chain();
-        // restore an output that was broken before the stop.
+        // A stop clears known_disconnected_output so later playback does not attempt to restore an output that was broken before the stop.
         self.known_disconnected_output = None;
         self.decode_exclusions = None;
+        self.deferred_terminal = None;
         self.pending_realign = None;
+        self.planned_next = None;
         self.state = PipelineState::Stopped;
         PipelineOperation::Stop
     }
-
     pub(crate) fn idle(&self) -> bool {
         self.idle
+    }
+
+    #[cfg(test)]
+    pub(crate) fn state(&self) -> PipelineState {
+        self.state
     }
 
     /// Periodic auto-resume hook for a station that stopped because its
@@ -1111,18 +1230,14 @@ impl StationController {
                 play_attempt_id: None,
             });
         };
-        let current_key = TrackKey {
-            queue_item_id: current.queue_item_id,
-            song_id: current.song_id,
-        };
-        let mut next = self.queue.successor_after(&current_key);
+        let mut next = self.effective_successor();
         if next.is_none() {
             // The in-memory queue can lag behind the database: Auto DJ refills
             // (triggered manually or by a schedule) insert rows without the
             // live streamer reloading. Retry once against the DB before
             // treating the queue as exhausted.
             self.queue.reload_from_db().await;
-            next = self.queue.successor_after(&current_key);
+            next = self.effective_successor();
         }
         if next.is_none() {
             // The queue is exhausted in the DB too. Give Auto DJ / schedule
@@ -1134,7 +1249,7 @@ impl StationController {
             loop {
                 let ran = self.queue.refill().await;
                 self.queue.reload_from_db().await;
-                next = self.queue.successor_after(&current_key);
+                next = self.effective_successor();
                 if next.is_some() || ran || attempts >= 2 {
                     break;
                 }
@@ -1178,13 +1293,18 @@ impl StationController {
         self.skip_attempt_seq = self.skip_attempt_seq.wrapping_add(1).max(1);
         let attempt_id = self.skip_attempt_seq;
         let resolving_play_attempt = self.pending_play;
+        let target_generation = self.generation + 1;
         self.pending_skip = Some(PendingSkip {
             attempt_id,
+            target_generation,
             next_song: next,
             anchor,
             staged_next: staged_song,
             response: None,
             resolving_play_attempt,
+            failed_current: None,
+            failed_staged_next: None,
+            is_play_resume: false,
         });
         // An in-flight realign roll of an earlier commit stays in place: its
         // roll was already submitted to the sequential executor, and its
@@ -1197,7 +1317,7 @@ impl StationController {
             operation: PipelineOperation::Replace(Box::new(PairPlan {
                 mode: ReplaceMode::ActiveReplace {
                     expected_generation: self.generation,
-                    expected_current: current_key,
+                    expected_current: Self::key_of(&current),
                 },
                 generation: self.generation + 1,
                 output_epoch: self.output_epoch,
@@ -1218,6 +1338,13 @@ impl StationController {
         self.pending_skip.as_ref().map(|pending| pending.attempt_id)
     }
 
+    #[cfg(test)]
+    pub(crate) fn pending_skip_failures(&self) -> Option<(Option<TrackKey>, Option<TrackKey>)> {
+        self.pending_skip
+            .as_ref()
+            .map(|p| (p.failed_current.clone(), p.failed_staged_next.clone()))
+    }
+
     /// The branch the controller currently believes the pipeline stages
     /// next. Tests assert the two-phase invariant around realign rolls.
     #[cfg(test)]
@@ -1230,6 +1357,25 @@ impl StationController {
     #[cfg(test)]
     pub(crate) fn pending_realign(&self) -> Option<u64> {
         self.pending_realign.as_ref().map(|pending| pending.id)
+    }
+    #[cfg(test)]
+    pub(crate) fn pending_skip_target(&self) -> Option<TrackKey> {
+        self.pending_skip.as_ref().map(|p| Self::key_of(&p.next_song))
+    }
+    #[cfg(test)]
+    pub(crate) fn has_deferred_terminal(&self) -> bool {
+        self.deferred_terminal.is_some()
+    }
+    #[cfg(test)]
+    pub(crate) fn deferred_terminal_info(&self) -> Option<(u64, TrackKey, u8)> {
+        self.deferred_terminal
+            .as_ref()
+            .map(|d| (d.generation, d.track.clone(), d.retries_left))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn has_decode_exclusions(&self) -> bool {
+        self.decode_exclusions.as_ref().is_some_and(|e| !e.is_empty())
     }
 
     /// Holds the manual caller's response while the prepared skip is in
@@ -1336,19 +1482,17 @@ impl StationController {
                 // song, so claiming anything else would split the controller
                 // from the physical pipeline.
                 let outcome = self.queue.commit_current(&pending.next_song, pending.anchor).await;
-                match &outcome {
-                    super::queue_manager::CommitOutcome::Applied { .. } => {}
-                    super::queue_manager::CommitOutcome::Deferred { .. } => {
-                        tracing::warn!(station_id = %self.station_id, "skip commit deferred the queue cursor persistence; it retries on the next queue reload");
-                    }
-                    super::queue_manager::CommitOutcome::Missing { .. } => {
-                        tracing::warn!(station_id = %self.station_id, queue_item_id = %pending.next_song.queue_item_id, "the skip target vanished from the queue while the replace was in flight; representing it as the logical current until a handover commits a queue member");
-                    }
-                }
-                let successor = match &outcome {
+                let outcome_successor = match &outcome {
                     super::queue_manager::CommitOutcome::Applied { successor }
                     | super::queue_manager::CommitOutcome::Deferred { successor }
-                    | super::queue_manager::CommitOutcome::Missing { successor } => successor.clone(),
+                    | super::queue_manager::CommitOutcome::Missing { successor } => {
+                        if matches!(outcome, super::queue_manager::CommitOutcome::Deferred { .. }) {
+                            tracing::warn!(station_id = %self.station_id, "skip commit deferred the queue cursor persistence; it retries on the next queue reload");
+                        } else if matches!(outcome, super::queue_manager::CommitOutcome::Missing { .. }) {
+                            tracing::warn!(station_id = %self.station_id, queue_item_id = %pending.next_song.queue_item_id, "the skip target vanished from the queue while the replace was in flight; representing it as the logical current until a handover commits a queue member");
+                        }
+                        successor.clone()
+                    }
                 };
                 // Identity-change bookkeeping formerly done by
                 // `replace_current` at command time — now only after the
@@ -1357,6 +1501,15 @@ impl StationController {
                 self.decode_exclusions = None;
                 self.pending_realign = None;
                 self.idle = false;
+                let is_stopped = self.state == PipelineState::Stopped;
+                if !is_stopped {
+                    if let Some(ref failed_next) = pending.failed_staged_next {
+                        self.record_decode_exclusion(failed_next.clone());
+                    }
+                }
+                if pending.is_play_resume && !is_stopped {
+                    self.state = PipelineState::Playing;
+                }
                 if let Some(play_id) = pending.resolving_play_attempt {
                     if self.resolved_play_success == Some(play_id) {
                         self.resolved_play_success = None;
@@ -1380,23 +1533,46 @@ impl StationController {
                 if self.known_disconnected_output != Some((self.generation, self.output_epoch)) {
                     self.known_disconnected_output = None;
                 }
-                // The pipeline adopted exactly the next branch the PairPlan
-                // staged; `planned_next` must describe that branch, never a
-                // successor the commit's refill/reload invented. When the
-                // commit really advanced the queue and the successor
-                // changed, the new successor is synchronized into the
-                // physical pipeline explicitly (the align-next roll) — and
-                // `planned_next` keeps describing the STAGED branch until
-                // that roll SUCCEEDED (`commit_realign`). Claiming the new
-                // successor at submission time would describe a pipeline
-                // that still stages the old branch: a roll failure would
-                // leave the controller and the pipeline split, and a
-                // physically valid handover of the still-staged branch
-                // would be rejected.
+
+                let desired_successor = if !is_stopped && pending.failed_staged_next.is_some() {
+                    self.effective_successor()
+                } else {
+                    outcome_successor
+                };
+
                 let anchor = self.queue.anchor_after_current();
-                let realign = if successor.as_ref().map(Self::key_of) != pending.staged_next.as_ref().map(Self::key_of) {
+
+                // The identity moved on: any deferred terminal event of the
+                // old identity is stale.
+                self.deferred_terminal = None;
+                if !is_stopped {
+                    if let Some(failed_track) = pending.failed_current {
+                        self.deferred_terminal = Some(DeferredTerminal {
+                            generation: self.generation,
+                            track: failed_track,
+                            retries_left: 1,
+                        });
+                        if self.state == PipelineState::Playing {
+                            self.publish_song_change();
+                            self.push_queue_update().await;
+                            if let Ok(prepared) = self.skip().await {
+                                return (true, SkipFollowup::Operation(prepared));
+                            }
+                        }
+                    }
+                }
+
+                // If no immediate recovery skip replaced the current track,
+                // synchronize any queue change or staged-next decode failure
+                // into the physical pipeline via a correlated realign roll,
+                // but ONLY while the pipeline is active (Playing or Paused).
+                // A stopped station must never issue new pipeline operations
+                // or create a pending_realign.
+                let realign = if matches!(self.state, PipelineState::Playing | PipelineState::Paused)
+                    && desired_successor.as_ref().map(Self::key_of) != pending.staged_next.as_ref().map(Self::key_of)
+                {
                     let current_track = Self::track(self.queue.current_song_info().expect("a committed skip has a current track"));
-                    let replacement = successor.clone().map(|song| {
+                    let replacement = desired_successor.clone().map(|song| {
                         let track = Self::track(song);
                         let transition = super::pipeline::TransitionPlanner::plan(self.playback.transition, &current_track, Some(&track));
                         PlannedNext { track, transition }
@@ -1408,43 +1584,42 @@ impl StationController {
                         },
                         None => RollingChange::Attach(replacement.expect("a realign without a staged next needs a successor")),
                     };
-                    // The commit moved to a physically newer identity: any
-                    // in-flight realign of the older identity (e.g. a
-                    // decode-failure replacement prepared before the skip)
-                    // is superseded, and the newest successor is
-                    // synchronized with a fresh correlated roll.
+                    let is_decode_failure = pending.failed_staged_next.is_some();
                     tracing::info!(station_id = %self.station_id, "realigning staged next after the skip commit's queue change");
                     self.prepare_realign(
                         current_track.key,
                         pending.staged_next.as_ref().map(Self::key_of),
-                        successor.clone(),
+                        desired_successor.clone(),
                         change,
-                        "skip-commit realign",
-                        false,
-                        0,
+                        if is_decode_failure {
+                            "decode-failure replacement"
+                        } else {
+                            "skip-commit realign"
+                        },
+                        is_decode_failure,
+                        if is_decode_failure { 1 } else { 0 },
                     )
                     .map(|prepared| (prepared.realign_id.expect("a realign always carries its id"), prepared.operation))
                 } else {
                     None
                 };
-                // With a realign in flight `planned_next` becomes the staged
-                // branch (the physical truth the pipeline just adopted) —
-                // `commit_realign` advances it to the replacement exactly
-                // once, on roll success. Without a realign, the successor
-                // the queue offers is the truth the pipeline holds.
+
                 match &realign {
                     Some(_) => {
                         self.planned_next = pending.staged_next.clone().map(|song| (song, anchor));
                     }
                     None => {
-                        self.planned_next = successor.clone().map(|song| (song, anchor));
+                        if self.state == PipelineState::Stopped {
+                            self.planned_next = None;
+                        } else {
+                            self.planned_next = desired_successor.clone().map(|song| (song, anchor));
+                        }
                     }
                 }
+
                 self.publish_song_change();
                 self.push_queue_update().await;
-                // The identity moved on: any deferred terminal event of the
-                // old identity is stale.
-                self.deferred_terminal = None;
+
                 let followup = realign
                     .map(|(id, operation)| SkipFollowup::Realign { id, operation })
                     .unwrap_or(SkipFollowup::None);
@@ -1460,43 +1635,57 @@ impl StationController {
                     self.last_failed_play = None;
                     self.resolved_play_success = None;
                 }
-                let followup = match self.retry_deferred_terminal().await {
-                    Some(prepared) => SkipFollowup::Operation(prepared),
-                    None => SkipFollowup::None,
+                let followup = if self.state == PipelineState::Playing {
+                    match self.retry_deferred_terminal().await {
+                        Ok(Some(prepared)) => SkipFollowup::Operation(prepared),
+                        _ => SkipFollowup::None,
+                    }
+                } else {
+                    SkipFollowup::None
                 };
                 (true, followup)
             }
         }
     }
-    /// After a failed event-driven skip the terminal condition still holds
-    /// (the failed replacement never advanced the identity): re-prepare the
-    /// skip, bounded to one retry per terminal event so a persistently
-    /// failing pipeline cannot hot-loop the executor. Manual skip failures
-    /// carry no deferred terminal and never retry here.
-    async fn retry_deferred_terminal(&mut self) -> Option<PreparedOperation> {
-        let deferred = self.deferred_terminal.take()?;
-        if deferred.retries_left == 0 {
-            tracing::warn!(station_id = %self.station_id, "terminal retry budget exhausted; waiting for the next event or a manual skip");
-            return None;
-        }
+    async fn retry_deferred_terminal(&mut self) -> Result<Option<PreparedOperation>, PipelineError> {
+        let Some(deferred) = self.deferred_terminal.as_ref() else {
+            return Ok(None);
+        };
         let generation = deferred.generation;
         let track = deferred.track.clone();
         let current = self.queue.current_song_info().map(|song| song.queue_item_id);
-        if generation == self.generation && current == Some(track.queue_item_id) && self.pending_skip.is_none() {
-            self.deferred_terminal = Some(DeferredTerminal {
-                generation,
-                track,
-                retries_left: deferred.retries_left - 1,
-            });
-            return match self.skip().await {
-                Ok(prepared) => Some(prepared),
-                Err(error) => {
-                    tracing::warn!(station_id = %self.station_id, %error, "terminal retry refused");
-                    None
-                }
-            };
+        if generation != self.generation || current != Some(track.queue_item_id) {
+            // Truly stale: the logical identity physically changed
+            self.deferred_terminal = None;
+            return Ok(None);
         }
-        None
+        if self.pending_skip.is_some() {
+            // Identity still matches the terminal condition, but a skip / recovery
+            // is already in flight. Do NOT clear deferred_terminal; do NOT permit
+            // resuming broken playback with SetPlaying(true).
+            return Err(PipelineError::Pipeline(
+                "play is refused while skip is in flight for terminal track; wait for skip to commit".into(),
+            ));
+        }
+        if deferred.retries_left == 0 {
+            tracing::warn!(station_id = %self.station_id, "terminal retry budget exhausted; waiting for the next event or a manual skip");
+            return Err(PipelineError::Pipeline(
+                "terminal retry budget exhausted; manual skip required".into(),
+            ));
+        }
+        let retries_left = deferred.retries_left - 1;
+        self.deferred_terminal = Some(DeferredTerminal {
+            generation,
+            track,
+            retries_left,
+        });
+        match self.skip().await {
+            Ok(prepared) => Ok(Some(prepared)),
+            Err(error) => {
+                tracing::warn!(station_id = %self.station_id, %error, "terminal retry refused");
+                Err(error)
+            }
+        }
     }
 
     /// Commits (or abandons) the outcome of a realign roll scheduled by a
@@ -1692,7 +1881,6 @@ impl StationController {
         let current = self.queue.current_song_info()?;
         let current_key = Self::key_of(&current);
         let excluded = self.decode_exclusions.as_ref().filter(|e| e.matches(self.generation, &current_key));
-
         let Some(excluded) = excluded else {
             return self.queue.peek_next_song();
         };
@@ -2114,6 +2302,306 @@ mod tests {
         // successor; a failed roll would keep the failed branch.
         assert!(controller.commit_realign(realign_id, &Ok(())).is_none());
         assert_eq!(controller.planned_next.as_ref().unwrap().0.queue_item_id, successor.queue_item_id);
+    }
+
+    #[tokio::test]
+    async fn current_media_branch_fatal_error_skips_to_next_song() {
+        let current = queued_song("current", 0);
+        let next = queued_song("next", 1);
+        let harness = Harness::playing(vec![current.clone(), next.clone()]).await;
+        let (mut controller, _) = harness.into_parts();
+        let current_key = StationController::track(current.clone()).key;
+
+        // Current media branch emits DecodeFailed / fatal error
+        let operation = controller
+            .handle_event(PipelineEvent::DecodeFailed {
+                generation: 1,
+                track: current_key.clone(),
+                message: "media read error".into(),
+            })
+            .await
+            .expect("terminal event must produce an operation")
+            .expect("skip operation should succeed");
+
+        let PipelineOperation::Replace(plan) = operation.operation else {
+            panic!("current track fatal error must issue a replace (skip) operation");
+        };
+        let attempt_id = operation.attempt_id.expect("skip operation must carry attempt id");
+        assert_eq!(plan.current.key.queue_item_id, next.queue_item_id);
+
+        // Commit the skip
+        let (applied, _) = controller.commit_skip(attempt_id, &Ok(())).await;
+        assert!(applied, "skip must be committed");
+        assert_eq!(controller.queue.current_song_info().unwrap().queue_item_id, next.queue_item_id);
+    }
+
+    #[tokio::test]
+    async fn fatal_pipeline_event_prepares_stop() {
+        let song = queued_song("current", 0);
+        let harness = Harness::playing(vec![song.clone()]).await;
+        let (mut controller, _) = harness.into_parts();
+        assert_eq!(controller.state, PipelineState::Playing);
+
+        // Backbone error arrives
+        let operation = controller
+            .handle_event(PipelineEvent::FatalPipeline {
+                pipeline_epoch: controller.output_epoch,
+                message: "encoder crashed".into(),
+            })
+            .await
+            .expect("fatal pipeline event must produce an operation")
+            .expect("stop operation should succeed");
+        assert!(matches!(operation.operation, PipelineOperation::Stop));
+        assert_eq!(controller.state, PipelineState::Stopped);
+    }
+
+    #[tokio::test]
+    async fn backbone_fatal_error_at_runtime_stops_station_and_pipeline() {
+        let song = queued_song("current", 0);
+        let pipeline = Arc::new(RecordingPipeline::new());
+        let harness = Harness::with_pipeline(pipeline.clone(), vec![song.clone()]);
+        let (runtime, events) = harness.into_runtime();
+        runtime.play().await.unwrap();
+        assert_eq!(pipeline.count(Call::Replace), 1);
+
+        events
+            .send(PipelineEvent::FatalPipeline {
+                pipeline_epoch: 1,
+                message: "encoder crashed".into(),
+            })
+            .unwrap();
+
+        testsupport::wait_for("the station to stop after fatal pipeline error", || pipeline.count(Call::Stop) > 0).await;
+
+        assert!(matches!(
+            runtime.status().await.unwrap(),
+            crate::streamer::StatusEvent::State { playing: false, .. }
+        ));
+    }
+    #[tokio::test]
+    async fn fatal_pipeline_during_pending_skip_stops_station_before_commit() {
+        let song_a = queued_song("A", 0);
+        let song_b = queued_song("B", 1);
+        let harness = Harness::playing(vec![song_a.clone(), song_b.clone()]).await;
+        let (mut controller, _) = harness.into_parts();
+        assert_eq!(controller.state, PipelineState::Playing);
+        assert_eq!(controller.generation, 1);
+        assert_eq!(controller.output_epoch, 1);
+
+        // Prepare skip to B (generation 2 in flight)
+        let _skip_op = controller.skip().await.expect("skip must prepare");
+        assert!(controller.pending_skip.is_some());
+
+        // Backbone error arrives during skip Replace BEFORE commit_skip
+        let operation = controller
+            .handle_event(PipelineEvent::FatalPipeline {
+                pipeline_epoch: 1,
+                message: "mixer crashed during skip Replace".into(),
+            })
+            .await
+            .expect("fatal pipeline event during skip must produce an operation")
+            .expect("stop operation should succeed");
+
+        assert!(matches!(operation.operation, PipelineOperation::Stop));
+        assert_eq!(controller.state, PipelineState::Stopped);
+    }
+
+    #[tokio::test]
+    async fn fatal_pipeline_during_initial_play_stops_station_before_commit() {
+        let song = queued_song("A", 0);
+        let (mut controller, _) = Harness::stopped(vec![song.clone()]).into_parts();
+        assert_eq!(controller.state, PipelineState::Stopped);
+
+        // Prepare initial play (play attempt in flight with pending_generation 1)
+        let play_op = controller.play().await.expect("play must prepare");
+        assert!(controller.pending_play.is_some());
+        assert_eq!(controller.output_epoch, 1);
+        let pending_generation = match &play_op.operation {
+            PipelineOperation::Replace(plan) => plan.generation,
+            _ => panic!("play must prepare a Replace operation"),
+        };
+        assert_eq!(pending_generation, controller.generation);
+
+        // Backbone error arrives BEFORE commit_play
+        let operation = controller
+            .handle_event(PipelineEvent::FatalPipeline {
+                pipeline_epoch: controller.output_epoch,
+                message: "encoder crashed during initial play".into(),
+            })
+            .await
+            .expect("fatal pipeline event during initial play must produce an operation")
+            .expect("stop operation should succeed");
+
+        assert!(matches!(operation.operation, PipelineOperation::Stop));
+        assert_eq!(controller.state, PipelineState::Stopped);
+        assert!(controller.pending_play.is_none());
+    }
+
+    #[tokio::test]
+    async fn stale_generation_branch_error_does_not_skip_current_track() {
+        let current = queued_song("current", 0);
+        let next = queued_song("next", 1);
+        let current_key = StationController::track(current.clone()).key;
+        let harness = Harness::playing(vec![current.clone(), next.clone()]).await;
+        let (mut controller, _) = harness.into_parts();
+        // Controller advances to generation 2 (with the same current track key)
+        controller.generation = 2;
+        assert_eq!(controller.state, PipelineState::Playing);
+
+        // A late error arrives with generation 1 for the current track key
+        let op = controller
+            .handle_event(PipelineEvent::DecodeFailed {
+                generation: 1,
+                track: current_key.clone(),
+                message: "late decode error from generation 1".into(),
+            })
+            .await;
+
+        assert!(op.is_none(), "stale generation media branch error must be ignored");
+        assert_eq!(controller.state, PipelineState::Playing);
+        assert_eq!(
+            controller.queue.current_song_info().unwrap().queue_item_id,
+            current.queue_item_id,
+            "current track must not be skipped by a stale generation error"
+        );
+    }
+
+    #[tokio::test]
+    async fn failed_next_branch_from_older_generation_does_not_affect_newer_generation_plan() {
+        let current = queued_song("current", 0);
+        let staged_g1 = queued_song("staged_g1", 1);
+        let staged_g2 = queued_song("staged_g2", 2);
+        let harness = Harness::playing(vec![current.clone(), staged_g2.clone()]).await;
+        let (mut controller, _) = harness.into_parts();
+        let g1_key = StationController::track(staged_g1).key;
+        let _g2_key = StationController::track(staged_g2.clone()).key;
+        let anchor = controller.queue.anchor_after_current();
+        controller.planned_next = Some((staged_g2.clone(), anchor));
+        let op = controller
+            .handle_event(PipelineEvent::DecodeFailed {
+                generation: 1,
+                track: g1_key,
+                message: "stale gen 1 staged error".into(),
+            })
+            .await;
+
+        assert!(op.is_none(), "stale generation next branch error must be ignored");
+        assert_eq!(
+            controller.planned_next.as_ref().unwrap().0.queue_item_id,
+            staged_g2.queue_item_id,
+            "generation 2 planned next must remain intact"
+        );
+    }
+
+    #[tokio::test]
+    async fn stale_branch_error_with_unknown_track_key_is_inert() {
+        let song = queued_song("current", 0);
+        let harness = Harness::playing(vec![song.clone()]).await;
+        let (mut controller, _) = harness.into_parts();
+        assert_eq!(controller.state, PipelineState::Playing);
+
+        // Stale branch key error
+        let op = controller
+            .handle_event(PipelineEvent::DecodeFailed {
+                generation: 1,
+                track: TrackKey {
+                    queue_item_id: uuid::Uuid::new_v4(),
+                    song_id: uuid::Uuid::new_v4(),
+                },
+                message: "unknown branch error".into(),
+            })
+            .await;
+        assert!(op.is_none(), "unknown branch error must be ignored");
+        assert_eq!(controller.state, PipelineState::Playing);
+    }
+
+    #[tokio::test]
+    async fn stale_backbone_error_from_older_pipeline_epoch_is_inert() {
+        let song = queued_song("current", 0);
+        let harness = Harness::playing(vec![song.clone()]).await;
+        let (mut controller, _) = harness.into_parts();
+        assert_eq!(controller.state, PipelineState::Playing);
+        assert_eq!(controller.output_epoch, 1);
+
+        // Stale older epoch backbone error
+        let op = controller
+            .handle_event(PipelineEvent::FatalPipeline {
+                pipeline_epoch: 0,
+                message: "old epoch error".into(),
+            })
+            .await;
+        assert!(op.is_none(), "stale epoch backbone error must be ignored");
+        assert_eq!(controller.state, PipelineState::Playing);
+    }
+
+    #[tokio::test]
+    async fn delayed_fatal_pipeline_error_across_multiple_generations_stops_station() {
+        let song_a = queued_song("A", 0);
+        let song_b = queued_song("B", 1);
+        let song_c = queued_song("C", 2);
+        let harness = Harness::playing(vec![song_a.clone(), song_b.clone(), song_c.clone()]).await;
+        let (mut controller, _) = harness.into_parts();
+        assert_eq!(controller.state, PipelineState::Playing);
+        assert_eq!(controller.generation, 1);
+        assert_eq!(controller.output_epoch, 1);
+
+        // Advance G1 -> G2
+        let skip_prep = controller.skip().await.expect("skip to B");
+        controller.commit_skip(skip_prep.attempt_id.unwrap(), &Ok(())).await;
+        assert_eq!(controller.generation, 2);
+        assert_eq!(controller.output_epoch, 1);
+
+        // Advance G2 -> G3
+        let skip_prep = controller.skip().await.expect("skip to C");
+        controller.commit_skip(skip_prep.attempt_id.unwrap(), &Ok(())).await;
+        assert_eq!(controller.generation, 3);
+        assert_eq!(controller.output_epoch, 1);
+
+        // Delayed fatal error generated during G1/G2 arrives while station is playing G3
+        let op = controller
+            .handle_event(PipelineEvent::FatalPipeline {
+                pipeline_epoch: 1,
+                message: "delayed encoder fatal error from early playback".into(),
+            })
+            .await
+            .expect("delayed fatal pipeline error must be processed")
+            .expect("stop operation must succeed");
+
+        assert!(matches!(op.operation, PipelineOperation::Stop));
+        assert_eq!(controller.state, PipelineState::Stopped);
+    }
+
+    #[tokio::test]
+    async fn stale_fatal_pipeline_error_after_controller_epoch_advance_is_ignored() {
+        let song_a = queued_song("A", 0);
+        let (mut controller, _) = Harness::stopped(vec![song_a.clone()]).into_parts();
+
+        // Lifecycle 1: Play
+        let play_prep = controller.play().await.expect("play P1");
+        controller.commit_play(play_prep.play_attempt_id.unwrap(), &Ok(()));
+        assert_eq!(controller.state, PipelineState::Playing);
+        assert_eq!(controller.output_epoch, 1);
+
+        // Full reset: Stop station
+        let _ = controller.stop();
+        assert_eq!(controller.state, PipelineState::Stopped);
+
+        // Lifecycle 2: Play again from stopped
+        let play_prep = controller.play().await.expect("play P2");
+        controller.commit_play(play_prep.play_attempt_id.unwrap(), &Ok(()));
+        assert_eq!(controller.state, PipelineState::Playing);
+        assert_eq!(controller.output_epoch, 2);
+
+        // Delayed fatal error from lifecycle P1 arrives during lifecycle P2
+        let op = controller
+            .handle_event(PipelineEvent::FatalPipeline {
+                pipeline_epoch: 1,
+                message: "fatal error from old lifecycle P1".into(),
+            })
+            .await;
+
+        assert!(op.is_none(), "fatal error from old pipeline lifecycle P1 must not stop P2");
+        assert_eq!(controller.state, PipelineState::Playing);
     }
 
     #[tokio::test]
@@ -2952,14 +3440,25 @@ mod tests {
     /// the prepared replacement operation — or None when the event was
     /// remembered by an in-flight realign (no new operation is minted).
     async fn staged_decode_failure(controller: &mut StationController, track: TrackKey, message: &str) -> Option<PreparedOperation> {
+        inject_decode_failure(controller, 1, &track, message).await
+    }
+
+    /// Injects a DecodeFailed event for a specified generation and track, returning
+    /// any minted prepared operation.
+    async fn inject_decode_failure(
+        controller: &mut StationController,
+        generation: u64,
+        track: &TrackKey,
+        message: &str,
+    ) -> Option<PreparedOperation> {
         controller
             .handle_event(PipelineEvent::DecodeFailed {
-                generation: 1,
-                track,
+                generation,
+                track: track.clone(),
                 message: message.into(),
             })
             .await
-            .map(|result| result.expect("a staged decode failure must not error"))
+            .map(|result| result.expect("a decode failure handling must not error"))
     }
 
     /// The post-handover Attach mechanics shared by the handover tests: a
@@ -3737,7 +4236,6 @@ mod tests {
             let mut status_rx = harness.controller.status_tx.subscribe();
             let (runtime, events) = harness.into_runtime();
 
-            // Current = A, generation 1; the pipeline plays A/1.
             runtime.play().await.unwrap();
             assert_eq!(pipeline.count(Call::Replace), 1);
             assert_eq!(
@@ -8249,5 +8747,1003 @@ mod tests {
             controller.queue.current_song_info().as_ref().map(StationController::key_of),
             Some(StationController::key_of(&songs[1]))
         );
+    }
+
+    #[tokio::test]
+    async fn multiple_decode_failures_before_skip_commit_are_all_preserved_and_handled() {
+        let songs = queued_songs(&["A", "B", "C", "D"]);
+        let (mut controller, _) = Harness::playing(songs.clone()).await.into_parts();
+        assert_eq!(controller.generation, 1);
+        let b_key = StationController::track(songs[1].clone()).key;
+        let c_key = StationController::track(songs[2].clone()).key;
+        let d_key = StationController::track(songs[3].clone()).key;
+
+        let prepared = controller.skip().await.expect("skip prepare");
+        let skip_id = prepared.attempt_id.expect("skip attempt id");
+
+        // Staged next C and target current B fail decoding at generation 2
+        assert!(inject_decode_failure(&mut controller, 2, &c_key, "C failed").await.is_none());
+        assert!(inject_decode_failure(&mut controller, 2, &b_key, "B failed").await.is_none());
+
+        // Both failures must be recorded on the pending skip
+        assert_eq!(
+            controller.pending_skip_failures(),
+            Some((Some(b_key.clone()), Some(c_key.clone()))),
+            "both current and staged next failures must be preserved"
+        );
+
+        // Commit skip with Ok: B is adopted at G2, C is added to decode_exclusions,
+        // and because B failed, commit_skip immediately prepares a recovery skip.
+        // The recovery skip must use effective_successor(), bypassing excluded C and skipping to D!
+        let (applied, followup) = controller.commit_skip(skip_id, &Ok(())).await;
+        assert!(applied);
+        assert_eq!(controller.generation, 2);
+
+        // The controller must have exactly one recovery follow-up, and NO
+        // orphaned pending_realign must be created.
+        assert_eq!(
+            controller.pending_realign(),
+            None,
+            "no orphan pending_realign must be created when recovery skip is launched"
+        );
+        let (recovery_attempt_id, _recovery_plan) = match followup {
+            SkipFollowup::Operation(recovery) => {
+                let attempt_id = recovery.attempt_id.expect("recovery skip must carry attempt_id");
+                assert_eq!(
+                    controller.pending_skip(),
+                    Some(attempt_id),
+                    "pending_skip must be bound to the recovery skip"
+                );
+                match recovery.operation {
+                    PipelineOperation::Replace(plan) => {
+                        assert_eq!(plan.current.key, d_key, "recovery skip must skip broken C and target D directly");
+                        assert_eq!(plan.generation, 3, "recovery skip advances to generation 3");
+                        (attempt_id, plan)
+                    }
+                    other => panic!("expected Replace operation, got {other:?}"),
+                }
+            }
+            other => panic!("expected SkipFollowup::Operation, got {other:?}"),
+        };
+
+        // Recovery skip commits successfully:
+        let (recovery_applied, recovery_followup) = controller.commit_skip(recovery_attempt_id, &Ok(())).await;
+        assert!(recovery_applied);
+        assert_eq!(controller.generation, 3);
+        assert_eq!(controller.pending_skip(), None);
+        assert_eq!(controller.pending_realign(), None);
+        assert_eq!(
+            controller.queue.current_song_info().as_ref().map(StationController::key_of),
+            Some(d_key)
+        );
+        assert!(
+            matches!(recovery_followup, SkipFollowup::None),
+            "recovery skip completion produces no further follow-up"
+        );
+    }
+
+    #[tokio::test]
+    async fn pause_during_failed_pending_skip_preserves_paused_without_autoplay() {
+        let songs = queued_songs(&["A", "B", "C"]);
+        let (mut controller, _) = Harness::playing(songs.clone()).await.into_parts();
+        assert_eq!(controller.state, PipelineState::Playing);
+        let b_key = StationController::track(songs[1].clone()).key;
+
+        let prepared = controller.skip().await.expect("skip prepare");
+        let skip_id = prepared.attempt_id.expect("skip attempt id");
+
+        // Target current B fails decoding at generation 2
+        assert!(inject_decode_failure(&mut controller, 2, &b_key, "B failed").await.is_none());
+        assert_eq!(controller.pending_skip_failures(), Some((Some(b_key.clone()), None)));
+
+        // Manual pause intervenes while skip is in flight
+        let op = controller.pause();
+        assert!(matches!(op, PipelineOperation::SetPlaying(false)));
+        assert_eq!(controller.state, PipelineState::Paused);
+
+        // Commit skip: late completion must preserve Paused, not trigger autoplay,
+        // and because staged next C is intact, produce no follow-up realign.
+        let (applied, followup) = controller.commit_skip(skip_id, &Ok(())).await;
+        assert!(applied);
+        assert_eq!(controller.state, PipelineState::Paused);
+        assert!(
+            matches!(followup, SkipFollowup::None),
+            "expected SkipFollowup::None, got {followup:?}"
+        );
+        assert_eq!(controller.pending_realign(), None);
+        assert!(
+            controller.has_deferred_terminal(),
+            "deferred terminal must be preserved for Paused state"
+        );
+    }
+
+    #[tokio::test]
+    async fn pause_during_failed_pending_skip_with_multiple_failures_preserves_paused_and_realigns_staged_next() {
+        let songs = queued_songs(&["A", "B", "C", "D"]);
+        let (mut controller, _) = Harness::playing(songs.clone()).await.into_parts();
+        assert_eq!(controller.state, PipelineState::Playing);
+        let b_key = StationController::track(songs[1].clone()).key;
+        let c_key = StationController::track(songs[2].clone()).key;
+        let d_key = StationController::track(songs[3].clone()).key;
+
+        let prepared = controller.skip().await.expect("skip prepare");
+        let skip_id = prepared.attempt_id.expect("skip attempt id");
+
+        // Both target current B and staged next C fail decoding at generation 2
+        assert!(inject_decode_failure(&mut controller, 2, &b_key, "B failed").await.is_none());
+        assert!(inject_decode_failure(&mut controller, 2, &c_key, "C failed").await.is_none());
+        assert_eq!(controller.pending_skip_failures(), Some((Some(b_key.clone()), Some(c_key.clone()))));
+
+        // Manual pause intervenes while skip is in flight
+        let op = controller.pause();
+        assert!(matches!(op, PipelineOperation::SetPlaying(false)));
+        assert_eq!(controller.state, PipelineState::Paused);
+
+        // Commit skip: late completion preserves Paused, avoids recovery skip,
+        // and because staged next C is broken, prepares a realign roll C -> D.
+        let (applied, followup) = controller.commit_skip(skip_id, &Ok(())).await;
+        assert!(applied);
+        assert_eq!(controller.state, PipelineState::Paused);
+        assert_eq!(controller.planned_next().as_ref(), Some(&c_key));
+        assert!(
+            controller.has_deferred_terminal(),
+            "deferred terminal must be preserved for Paused state"
+        );
+
+        let (realign_id, roll) = expect_realign_followup(followup);
+        assert_eq!(controller.pending_realign(), Some(realign_id));
+        match roll.change {
+            RollingChange::ReplaceNext {
+                expected_next,
+                replacement,
+            } => {
+                assert_eq!(expected_next, c_key);
+                assert_eq!(replacement.map(|r| r.track.key), Some(d_key.clone()));
+            }
+            other => panic!("expected ReplaceNext, got {other:?}"),
+        }
+
+        // Realign roll succeeds: state remains Paused, planned_next advances to D, pending_realign cleared
+        assert!(controller.commit_realign(realign_id, &Ok(())).is_none());
+        assert_eq!(controller.state, PipelineState::Paused);
+        assert_eq!(controller.planned_next().as_ref(), Some(&d_key));
+        assert_eq!(controller.pending_realign(), None);
+        assert!(
+            controller.has_deferred_terminal(),
+            "deferred terminal for B must survive staged next realign completion"
+        );
+    }
+
+    #[tokio::test]
+    async fn stop_during_failed_pending_skip_preserves_stopped_without_autoplay() {
+        let songs = queued_songs(&["A", "B", "C"]);
+        let (mut controller, _) = Harness::playing(songs.clone()).await.into_parts();
+        assert_eq!(controller.state, PipelineState::Playing);
+        let b_key = StationController::track(songs[1].clone()).key;
+
+        let prepared = controller.skip().await.expect("skip prepare");
+        let skip_id = prepared.attempt_id.expect("skip attempt id");
+
+        // Target current B fails decoding at generation 2
+        assert!(inject_decode_failure(&mut controller, 2, &b_key, "B failed").await.is_none());
+        assert_eq!(controller.pending_skip_failures(), Some((Some(b_key.clone()), None)));
+
+        // Manual stop intervenes while skip is in flight
+        let op = controller.stop();
+        assert!(matches!(op, PipelineOperation::Stop));
+        assert_eq!(controller.state, PipelineState::Stopped);
+
+        // Commit skip: late completion must preserve Stopped, produce no follow-up operation or realign
+        let (applied, followup) = controller.commit_skip(skip_id, &Ok(())).await;
+        assert!(applied);
+        assert_eq!(controller.state, PipelineState::Stopped);
+        assert!(
+            matches!(followup, SkipFollowup::None),
+            "expected SkipFollowup::None, got {followup:?}"
+        );
+        assert_eq!(controller.pending_realign(), None);
+        assert_eq!(controller.planned_next(), None);
+    }
+
+    #[tokio::test]
+    async fn stop_during_failed_pending_skip_with_multiple_failures_preserves_stopped_and_creates_no_realign() {
+        let songs = queued_songs(&["A", "B", "C", "D"]);
+        let (mut controller, _) = Harness::playing(songs.clone()).await.into_parts();
+        assert_eq!(controller.state, PipelineState::Playing);
+        let b_key = StationController::track(songs[1].clone()).key;
+        let c_key = StationController::track(songs[2].clone()).key;
+
+        let prepared = controller.skip().await.expect("skip prepare");
+        let skip_id = prepared.attempt_id.expect("skip attempt id");
+
+        // Both target current B and staged next C fail decoding at generation 2
+        assert!(inject_decode_failure(&mut controller, 2, &b_key, "B failed").await.is_none());
+        assert!(inject_decode_failure(&mut controller, 2, &c_key, "C failed").await.is_none());
+        assert_eq!(controller.pending_skip_failures(), Some((Some(b_key.clone()), Some(c_key.clone()))));
+
+        // Manual stop intervenes while skip is in flight
+        let op = controller.stop();
+        assert!(matches!(op, PipelineOperation::Stop));
+        assert_eq!(controller.state, PipelineState::Stopped);
+
+        // Commit skip: late completion must preserve Stopped, apply cursor bookkeeping,
+        // produce SkipFollowup::None, and create NO pending_realign or pipeline operation.
+        let (applied, followup) = controller.commit_skip(skip_id, &Ok(())).await;
+        assert!(applied);
+        assert_eq!(controller.state, PipelineState::Stopped);
+        assert!(
+            matches!(followup, SkipFollowup::None),
+            "expected SkipFollowup::None, got {followup:?}"
+        );
+        assert_eq!(controller.pending_realign(), None);
+        assert_eq!(controller.pending_skip_failures(), None);
+        assert_eq!(controller.planned_next(), None);
+        assert!(!controller.has_deferred_terminal(), "stop must reset deferred terminal");
+        assert!(!controller.has_decode_exclusions(), "stop must reset decode exclusions");
+        assert_eq!(
+            controller.queue.current_song_info().as_ref().map(StationController::key_of),
+            Some(b_key.clone())
+        );
+
+        // A subsequent Play starts a clean fresh lifecycle on the committed cursor (B),
+        // unaffected by previous session's failure/recovery bookkeeping:
+        let play_prepared = controller.play().await.expect("play must prepare cleanly");
+        let play_id = play_prepared.play_attempt_id.expect("play attempt id");
+        assert_eq!(controller.planned_next().as_ref(), Some(&c_key));
+        controller.commit_play(play_id, &Ok(()));
+        assert_eq!(controller.state, PipelineState::Playing);
+        assert_eq!(controller.pending_realign(), None);
+        assert_eq!(controller.planned_next().as_ref(), Some(&c_key));
+    }
+
+    #[tokio::test]
+    async fn pause_during_failed_current_skip_preserves_failure_and_resume_recovers_to_successor() {
+        let songs = queued_songs(&["A", "B", "C"]);
+        let (mut controller, _) = Harness::playing(songs.clone()).await.into_parts();
+        assert_eq!(controller.state, PipelineState::Playing);
+        assert_eq!(controller.generation, 1);
+        let b_key = StationController::track(songs[1].clone()).key;
+        let c_key = StationController::track(songs[2].clone()).key;
+
+        // Manual skip targets B as current (G2) with C as staged next
+        let prepared = controller.skip().await.expect("skip prepare");
+        let skip_id = prepared.attempt_id.expect("skip attempt id");
+
+        // Target current B fails decoding at generation 2
+        assert!(inject_decode_failure(&mut controller, 2, &b_key, "B failed").await.is_none());
+        assert_eq!(controller.pending_skip_failures(), Some((Some(b_key.clone()), None)));
+
+        // Manual pause intervenes while skip is in flight
+        let op = controller.pause();
+        assert!(matches!(op, PipelineOperation::SetPlaying(false)));
+        assert_eq!(controller.state, PipelineState::Paused);
+
+        // Commit skip while Paused:
+        // - Cursor advances to B at generation 2
+        // - State stays Paused (NO autoplay, NO immediate skip)
+        // - deferred_terminal remembers that B is terminal
+        let (applied, followup) = controller.commit_skip(skip_id, &Ok(())).await;
+        assert!(applied);
+        assert_eq!(controller.state, PipelineState::Paused);
+        assert_eq!(controller.generation, 2);
+        assert!(
+            matches!(followup, SkipFollowup::None),
+            "paused commit produces no immediate followup"
+        );
+        assert_eq!(controller.pending_realign(), None);
+        assert_eq!(controller.planned_next().as_ref(), Some(&c_key));
+        assert!(
+            controller.has_deferred_terminal(),
+            "deferred terminal for B must be preserved in Paused state"
+        );
+
+        // User resumes playback via Play:
+        // - Controller prepares recovery skip from broken B to successor C at generation 3
+        // - State stays Paused while the recovery skip is in flight (preventing false Playing)
+        let play_prepared = controller.play().await.expect("play must prepare recovery skip");
+        assert_eq!(controller.state, PipelineState::Paused);
+        let recovery_attempt_id = play_prepared
+            .attempt_id
+            .expect("recovery skip prepared on resume must carry attempt_id");
+        assert_eq!(controller.pending_skip(), Some(recovery_attempt_id));
+        match play_prepared.operation {
+            PipelineOperation::Replace(plan) => {
+                assert_eq!(plan.current.key, c_key, "recovery skip prepared on resume must target successor C");
+                assert_eq!(plan.generation, 3, "recovery skip must advance to generation 3");
+            }
+            other => panic!("expected Replace operation on resume recovery, got {other:?}"),
+        }
+
+        // Commit the recovery skip: cursor moves to C at generation 3, deferred_terminal cleared
+        let (recovery_applied, recovery_followup) = controller.commit_skip(recovery_attempt_id, &Ok(())).await;
+        assert!(recovery_applied);
+        assert_eq!(controller.generation, 3);
+        assert_eq!(controller.state, PipelineState::Playing);
+        assert_eq!(controller.pending_skip(), None);
+        assert_eq!(controller.pending_realign(), None);
+        assert!(!controller.has_deferred_terminal());
+        assert_eq!(
+            controller.queue.current_song_info().as_ref().map(StationController::key_of),
+            Some(c_key)
+        );
+        assert!(matches!(recovery_followup, SkipFollowup::None));
+    }
+
+    #[tokio::test]
+    async fn pause_during_multiple_failed_skip_preserves_failures_and_resume_recovers_to_unbroken_successor() {
+        let songs = queued_songs(&["A", "B", "C", "D"]);
+        let (mut controller, _) = Harness::playing(songs.clone()).await.into_parts();
+        assert_eq!(controller.state, PipelineState::Playing);
+        assert_eq!(controller.generation, 1);
+        let b_key = StationController::track(songs[1].clone()).key;
+        let c_key = StationController::track(songs[2].clone()).key;
+        let d_key = StationController::track(songs[3].clone()).key;
+
+        // Manual skip targets B (current, G2) and C (staged next)
+        let prepared = controller.skip().await.expect("skip prepare");
+        let skip_id = prepared.attempt_id.expect("skip attempt id");
+
+        // Both B and C fail decoding at generation 2
+        assert!(inject_decode_failure(&mut controller, 2, &b_key, "B failed").await.is_none());
+        assert!(inject_decode_failure(&mut controller, 2, &c_key, "C failed").await.is_none());
+        assert_eq!(controller.pending_skip_failures(), Some((Some(b_key.clone()), Some(c_key.clone()))));
+
+        // Manual pause intervenes while skip is in flight
+        let op = controller.pause();
+        assert!(matches!(op, PipelineOperation::SetPlaying(false)));
+        assert_eq!(controller.state, PipelineState::Paused);
+
+        // Commit skip while Paused:
+        // - Cursor advances to B at G2
+        // - C is recorded in decode_exclusions
+        // - Staged next realign C -> D is prepared
+        // - deferred_terminal for B is preserved
+        let (applied, followup) = controller.commit_skip(skip_id, &Ok(())).await;
+        assert!(applied);
+        assert_eq!(controller.state, PipelineState::Paused);
+        assert_eq!(controller.generation, 2);
+        assert!(controller.has_deferred_terminal(), "deferred terminal for B must be preserved");
+        assert!(controller.has_decode_exclusions(), "decode exclusions for C must be preserved");
+
+        let (realign_id, roll) = expect_realign_followup(followup);
+        assert_eq!(controller.pending_realign(), Some(realign_id));
+        match roll.change {
+            RollingChange::ReplaceNext {
+                expected_next,
+                replacement,
+            } => {
+                assert_eq!(expected_next, c_key);
+                assert_eq!(replacement.map(|r| r.track.key), Some(d_key.clone()));
+            }
+            other => panic!("expected ReplaceNext, got {other:?}"),
+        }
+
+        // Realign roll succeeds while still Paused: planned_next becomes D
+        assert!(controller.commit_realign(realign_id, &Ok(())).is_none());
+        assert_eq!(controller.state, PipelineState::Paused);
+        assert_eq!(controller.planned_next().as_ref(), Some(&d_key));
+        assert!(
+            controller.has_deferred_terminal(),
+            "deferred terminal for B must survive realign commit"
+        );
+
+        // User resumes playback via Play:
+        // - Controller prepares recovery skip to unbroken successor D
+        // - State stays Paused while the recovery skip is in flight
+        let play_prepared = controller
+            .play()
+            .await
+            .expect("play must prepare recovery skip to unbroken successor");
+        assert_eq!(controller.state, PipelineState::Paused);
+        let recovery_attempt_id = play_prepared.attempt_id.expect("recovery skip must carry attempt_id");
+        assert_eq!(controller.pending_skip(), Some(recovery_attempt_id));
+        match play_prepared.operation {
+            PipelineOperation::Replace(plan) => {
+                assert_eq!(plan.current.key, d_key, "recovery skip must skip broken C and target D directly");
+                assert_eq!(plan.generation, 3, "recovery skip must advance to generation 3");
+            }
+            other => panic!("expected Replace operation on resume recovery, got {other:?}"),
+        }
+
+        // Commit the recovery skip: cursor moves to D at generation 3
+        let (recovery_applied, recovery_followup) = controller.commit_skip(recovery_attempt_id, &Ok(())).await;
+        assert!(recovery_applied);
+        assert_eq!(controller.generation, 3);
+        assert_eq!(controller.state, PipelineState::Playing);
+        assert_eq!(controller.pending_skip(), None);
+        assert_eq!(controller.pending_realign(), None);
+        assert!(!controller.has_deferred_terminal());
+        assert_eq!(
+            controller.queue.current_song_info().as_ref().map(StationController::key_of),
+            Some(d_key)
+        );
+        assert!(matches!(recovery_followup, SkipFollowup::None));
+    }
+
+    struct PausedFailedSkipFixture {
+        runtime: StationRuntime,
+        /// Retained sender guard: keeping this alive prevents the runtime loop from shutting down on EOF.
+        _event_sender_guard: mpsc::UnboundedSender<PipelineEvent>,
+        pipeline: Arc<RecordingPipeline>,
+        status_rx: broadcast::Receiver<StatusEvent>,
+        station_id: Uuid,
+        songs: Vec<SongInfo>,
+    }
+    async fn setup_paused_failed_skip(
+        db: &sqlx::PgPool,
+        track_names: &[&'static str],
+        staged_also_fails: bool,
+        roll_gate: Option<Arc<testsupport::Gate>>,
+    ) -> PausedFailedSkipFixture {
+        let songs = queued_songs(track_names);
+        let pipeline = Arc::new(RecordingPipeline::with_gates());
+        if let Some(ref rg) = roll_gate {
+            pipeline.set_roll_gate(Some(rg.clone()));
+        }
+        let harness = Harness::with_db(db.clone(), pipeline.clone(), songs.clone());
+        let station_id = harness.controller.station_id;
+        seed_station(db, station_id, Some(songs[0].queue_item_id), &songs).await;
+        let status_rx = harness.controller.status_tx.subscribe();
+        let (runtime, events) = harness.into_runtime();
+        let gate = pipeline.replace_gate().expect("gated pipeline");
+        let b_key = StationController::track(songs[1].clone()).key;
+
+        play_through_gate(&runtime, &gate).await;
+
+        let skip_rx = runtime.begin_command(StationCommand::Skip).await.expect("skip command begin");
+        gate.wait_started().await;
+        assert_eq!(pipeline.count(Call::Replace), 2);
+
+        let notify = Arc::new(tokio::sync::Notify::new());
+        events
+            .send(PipelineEvent::DecodeFailed {
+                generation: 2,
+                track: b_key.clone(),
+                message: "B failed".into(),
+            })
+            .unwrap();
+        let c_key = if staged_also_fails && songs.len() > 2 {
+            let key = StationController::track(songs[2].clone()).key;
+            events
+                .send(PipelineEvent::DecodeFailed {
+                    generation: 2,
+                    track: key.clone(),
+                    message: "C failed".into(),
+                })
+                .unwrap();
+            Some(key)
+        } else {
+            None
+        };
+        events.send(PipelineEvent::TestBarrier(notify.clone())).unwrap();
+        notify.notified().await;
+
+        // Deterministically assert that the event loop processed the failures:
+        let snapshot_before_pause = runtime.test_snapshot().await.unwrap();
+        assert_eq!(snapshot_before_pause.generation, 1);
+        assert!(snapshot_before_pause.pending_skip.is_some());
+        assert_eq!(snapshot_before_pause.pending_skip_failures, Some((Some(b_key), c_key)));
+
+        // Admit and execute controller.pause() before releasing the Replace gate:
+        let pause_rx = runtime
+            .submit_and_wait_admitted(StationCommand::Pause)
+            .await
+            .expect("pause command admitted");
+
+        let snapshot_paused = runtime.test_snapshot().await.unwrap();
+        assert_eq!(snapshot_paused.state, PipelineState::Paused);
+        gate.release();
+        pause_rx.await.unwrap().unwrap();
+        skip_rx.await.unwrap().expect("the initial skip must succeed in pipeline");
+        pipeline.set_replace_gate(None);
+        wait_for_db_cursor(db, station_id, Some(songs[1].queue_item_id)).await;
+
+        PausedFailedSkipFixture {
+            runtime,
+            _event_sender_guard: events,
+            pipeline,
+            status_rx,
+            station_id,
+            songs,
+        }
+    }
+
+    /// End to end through StationRuntime: when a station is paused during a failed skip,
+    /// resuming playback via runtime.play() prepares and executes a recovery Replace from
+    /// the failed track B to successor C, returning Ok only after the recovery successfully
+    /// committed in the pipeline.
+    #[tokio::test]
+    async fn pause_during_failed_skip_resume_recovers_at_runtime() {
+        run_reconnect_test(async |db| {
+            let fixture = setup_paused_failed_skip(&db.pool, &["A", "B", "C"], false, None).await;
+
+            let initial_snapshot = fixture.runtime.test_snapshot().await.unwrap();
+            assert_eq!(initial_snapshot.state, PipelineState::Paused);
+            let mut status_rx = fixture.status_rx.resubscribe();
+
+            // Resume playback via runtime.play():
+            // Must prepare and execute recovery Replace B -> C, answering the caller only
+            // after the physical Replace and logical commit succeed.
+            fixture.runtime.play().await.unwrap();
+
+            testsupport::wait_for("recovery replace to reach pipeline", || fixture.pipeline.count(Call::Replace) == 3).await;
+            wait_for_db_cursor(&db.pool, fixture.station_id, Some(fixture.songs[2].queue_item_id)).await;
+            expect_song_change(&mut status_rx, "C").await;
+            let final_snapshot = fixture.runtime.test_snapshot().await.unwrap();
+            assert_eq!(final_snapshot.state, PipelineState::Playing);
+            assert_eq!(final_snapshot.generation, 3);
+            assert_eq!(final_snapshot.pending_skip, None);
+
+            fixture.runtime.shutdown().await.unwrap();
+        })
+        .await;
+    }
+
+    /// End to end through StationRuntime: when a station is paused during a failed skip
+    /// and the subsequent resume recovery Replace fails in the pipeline, runtime.play()
+    /// MUST return Err to the caller and the controller state MUST roll back to Paused.
+    #[tokio::test]
+    async fn pause_during_failed_skip_resume_recovery_failure_returns_err_at_runtime() {
+        run_reconnect_test(async |db| {
+            let fixture = setup_paused_failed_skip(&db.pool, &["A", "B", "C"], false, None).await;
+            let c_key = StationController::track(fixture.songs[2].clone()).key;
+
+            // Fail the recovery Replace (the 3rd Replace operation on the pipeline):
+            fixture.pipeline.fail_nth(Call::Replace, 2);
+
+            let play_res = fixture.runtime.play().await;
+            assert!(
+                play_res.is_err(),
+                "runtime.play() must return Err when recovery Replace fails, got {play_res:?}"
+            );
+            assert_eq!(fixture.pipeline.count(Call::Replace), 3);
+
+            // Verify full coherent rollback to Paused state on B:
+            let snapshot = fixture.runtime.test_snapshot().await.unwrap();
+            assert_eq!(snapshot.generation, 2, "failed recovery must not advance generation");
+            assert_eq!(snapshot.state, PipelineState::Paused, "controller state must roll back to Paused");
+            assert_eq!(snapshot.pending_skip, None, "pending skip must be cleaned up");
+            assert_eq!(
+                snapshot.planned_next.as_ref(),
+                Some(&c_key),
+                "planned_next must still describe the physical staged branch C"
+            );
+            assert_eq!(snapshot.pending_realign, None, "pending realign must not be orphaned");
+
+            assert_eq!(
+                persisted_cursor(&db.pool, fixture.station_id).await,
+                Some(fixture.songs[1].queue_item_id),
+                "cursor must remain on B after recovery failure"
+            );
+
+            // A subsequent manual skip succeeds cleanly to C:
+            fixture.runtime.skip().await.unwrap();
+            testsupport::wait_for("manual skip to reach pipeline", || fixture.pipeline.count(Call::Replace) == 4).await;
+            wait_for_db_cursor(&db.pool, fixture.station_id, Some(fixture.songs[2].queue_item_id)).await;
+            let after_skip = fixture.runtime.test_snapshot().await.unwrap();
+            assert_eq!(after_skip.generation, 3);
+            assert_eq!(after_skip.state, PipelineState::Paused);
+
+            fixture.runtime.shutdown().await.unwrap();
+        })
+        .await;
+    }
+
+    /// End to end through StationRuntime: when both current B and staged next C fail during skip,
+    /// a realign roll C -> D is scheduled while Paused. While Roll C -> D is HELD IN FLIGHT on
+    /// roll_gate, runtime.play() is invoked. The recovery Replace directly targets unbroken
+    /// successor D and is submitted behind Roll in the sequential lane. When roll_gate is
+    /// released, both operations complete in order and playback cleanly transitions to D.
+    #[tokio::test]
+    async fn pause_with_staged_failure_and_realign_play_recovers_to_valid_successor_at_runtime() {
+        run_reconnect_test(async |db| {
+            let roll_gate = testsupport::Gate::new();
+            let fixture = setup_paused_failed_skip(&db.pool, &["A", "B", "C", "D"], true, Some(roll_gate.clone())).await;
+            let c_key = StationController::track(fixture.songs[2].clone()).key;
+            // Wait for realign roll C -> D to enter and block in roll_gate:
+            roll_gate.wait_started().await;
+            assert_eq!(fixture.pipeline.count(Call::Roll), 1);
+
+            // In-flight assertion while Roll is held on the gate:
+            let in_flight = fixture.runtime.test_snapshot().await.unwrap();
+            assert_eq!(in_flight.state, PipelineState::Paused);
+            assert!(in_flight.pending_realign.is_some(), "realign roll must be pending in flight");
+            assert_eq!(
+                in_flight.planned_next.as_ref(),
+                Some(&c_key),
+                "planned_next must still describe the physical staged branch C while Roll is held"
+            );
+
+            let d_key = StationController::track(fixture.songs[3].clone()).key;
+            let mut status_rx = fixture.status_rx.resubscribe();
+
+            // Spawn Play while Roll is STILL held on the gate:
+            let play_task = tokio::spawn({
+                let runtime = fixture.runtime.clone();
+                async move { runtime.play().await }
+            });
+
+            // Prove deterministically via command barrier that the controller loop
+            // admitted and processed the Play command (preparing recovery Replace to D):
+            fixture.runtime.barrier().await.unwrap();
+
+            // In-flight assertion before Roll gate is released:
+            let mid_snapshot = fixture.runtime.test_snapshot().await.unwrap();
+            assert_eq!(mid_snapshot.state, PipelineState::Paused);
+            assert!(mid_snapshot.pending_realign.is_some(), "realign roll must still be in flight");
+            assert!(mid_snapshot.pending_skip.is_some(), "recovery skip must be pending");
+            assert_eq!(
+                mid_snapshot.pending_skip_target.as_ref(),
+                Some(&d_key),
+                "pending skip target must be unbroken successor D"
+            );
+            assert_eq!(
+                mid_snapshot.planned_next.as_ref(),
+                Some(&c_key),
+                "planned_next must still describe the physical staged branch C while Roll is held"
+            );
+
+            // Now release the Roll gate:
+            roll_gate.release();
+
+            // Play command finishes after the recovery Replace completes:
+            play_task.await.unwrap().unwrap();
+
+            testsupport::wait_for("recovery replace to reach pipeline", || fixture.pipeline.count(Call::Replace) == 3).await;
+            wait_for_db_cursor(&db.pool, fixture.station_id, Some(fixture.songs[3].queue_item_id)).await;
+            expect_song_change(&mut status_rx, "D").await;
+
+            let snapshot = fixture.runtime.test_snapshot().await.unwrap();
+            assert_eq!(snapshot.state, PipelineState::Playing);
+            assert_eq!(snapshot.generation, 3);
+            assert_eq!(snapshot.pending_skip, None);
+            assert_eq!(snapshot.pending_realign, None);
+
+            assert_eq!(fixture.pipeline.count(Call::Roll), 1, "exactly one realign roll was submitted");
+            assert_eq!(
+                fixture.pipeline.count(Call::Replace),
+                3,
+                "exactly 3 replace operations were submitted"
+            );
+
+            fixture.runtime.shutdown().await.unwrap();
+        })
+        .await;
+    }
+
+    struct GatedFailingManualSkipFixture {
+        runtime: StationRuntime,
+        pipeline: Arc<RecordingPipeline>,
+        gate: Arc<testsupport::Gate>,
+        skip_rx: oneshot::Receiver<Result<(), PipelineError>>,
+        station_id: Uuid,
+        songs: Vec<SongInfo>,
+        _event_sender_guard: mpsc::UnboundedSender<PipelineEvent>,
+    }
+
+    async fn start_gated_failing_manual_skip(db: &sqlx::PgPool, track_names: &[&'static str]) -> GatedFailingManualSkipFixture {
+        let songs = queued_songs(track_names);
+        let pipeline = Arc::new(RecordingPipeline::with_gates());
+        let harness = Harness::with_db(db.clone(), pipeline.clone(), songs.clone());
+        let station_id = harness.controller.station_id;
+        seed_station(db, station_id, Some(songs[0].queue_item_id), &songs).await;
+        let (runtime, event_sender_guard) = harness.into_runtime();
+        let gate = pipeline.replace_gate().expect("gated pipeline");
+
+        play_through_gate(&runtime, &gate).await;
+
+        // In-flight Replace B (2nd Replace operation) will fail:
+        pipeline.fail_nth(Call::Replace, 1);
+
+        // Start manual skip from Playing A to B, which blocks on replace_gate:
+        let skip_rx = runtime.begin_command(StationCommand::Skip).await.expect("skip command begin");
+        gate.wait_started().await;
+        assert_eq!(pipeline.count(Call::Replace), 2);
+
+        GatedFailingManualSkipFixture {
+            runtime,
+            pipeline,
+            gate,
+            skip_rx,
+            station_id,
+            songs,
+            _event_sender_guard: event_sender_guard,
+        }
+    }
+
+    /// End to end through StationRuntime: a late SkipResult(Err) after Pause
+    /// must keep the station in Paused and not revert it to Playing.
+    #[tokio::test]
+    async fn manual_skip_failure_after_pause_preserves_paused() {
+        run_reconnect_test(async |db| {
+            let fixture = start_gated_failing_manual_skip(&db.pool, &["A", "B", "C"]).await;
+
+            let in_flight = fixture.runtime.test_snapshot().await.unwrap();
+            assert_eq!(in_flight.state, PipelineState::Playing);
+            assert!(in_flight.pending_skip.is_some());
+
+            // Pause is admitted and logically processed by controller:
+            let pause_rx = fixture
+                .runtime
+                .submit_and_wait_admitted(StationCommand::Pause)
+                .await
+                .expect("pause command admitted");
+
+            let snapshot_paused = fixture.runtime.test_snapshot().await.unwrap();
+            assert_eq!(snapshot_paused.state, PipelineState::Paused);
+            fixture.gate.release();
+
+            // Late SkipResult(Err) is processed:
+            let skip_res = fixture.skip_rx.await.unwrap();
+            assert!(skip_res.is_err(), "manual skip must return Err");
+            pause_rx.await.unwrap().unwrap();
+
+            // Final state: remains Paused on A, generation 1, no pending skip, no autoplay
+            let final_snapshot = fixture.runtime.test_snapshot().await.unwrap();
+            assert_eq!(final_snapshot.state, PipelineState::Paused);
+            assert_eq!(final_snapshot.generation, 1);
+            assert_eq!(final_snapshot.pending_skip, None);
+            assert_eq!(
+                persisted_cursor(&db.pool, fixture.station_id).await,
+                Some(fixture.songs[0].queue_item_id),
+                "cursor must remain on A"
+            );
+            assert_eq!(fixture.pipeline.snapshot_state(), PipelineState::Paused);
+
+            fixture.runtime.shutdown().await.unwrap();
+        })
+        .await;
+    }
+
+    /// End to end through StationRuntime: a late SkipResult(Err) after Stop
+    /// must keep the station in Stopped and not revert it to Playing.
+    #[tokio::test]
+    async fn manual_skip_failure_after_stop_preserves_stopped() {
+        run_reconnect_test(async |db| {
+            let fixture = start_gated_failing_manual_skip(&db.pool, &["A", "B", "C"]).await;
+
+            // User Stop is admitted and processed by controller:
+            let stop_rx = fixture
+                .runtime
+                .submit_and_wait_admitted(StationCommand::Stop)
+                .await
+                .expect("stop command admitted");
+
+            let snapshot_stopped = fixture.runtime.test_snapshot().await.unwrap();
+            assert_eq!(snapshot_stopped.state, PipelineState::Stopped);
+            fixture.gate.release();
+
+            let skip_res = fixture.skip_rx.await.unwrap();
+            assert!(skip_res.is_err(), "manual skip must return Err");
+            stop_rx.await.unwrap().unwrap();
+
+            // Final state: remains Stopped, generation 1, cursor A, pending_skip None, planned_next None
+            let final_snapshot = fixture.runtime.test_snapshot().await.unwrap();
+            assert_eq!(final_snapshot.state, PipelineState::Stopped);
+            assert_eq!(final_snapshot.generation, 1);
+            assert_eq!(final_snapshot.pending_skip, None);
+            assert_eq!(final_snapshot.planned_next, None);
+            assert_eq!(final_snapshot.pending_realign, None);
+            assert!(final_snapshot.deferred_terminal.is_none());
+            assert_eq!(
+                persisted_cursor(&db.pool, fixture.station_id).await,
+                Some(fixture.songs[0].queue_item_id),
+                "cursor must remain on A"
+            );
+            assert!(fixture.pipeline.count(Call::Stop) > 0, "physical pipeline must be stopped");
+            assert_eq!(fixture.pipeline.snapshot_state(), PipelineState::Stopped);
+
+            fixture.runtime.shutdown().await.unwrap();
+        })
+        .await;
+    }
+
+    /// End to end through StationRuntime: a late resume recovery Replace failure after Stop
+    /// preserves Stopped and leaves no orphaned state or ghost recovery.
+    #[tokio::test]
+    async fn resume_recovery_failure_after_stop_preserves_stopped() {
+        run_reconnect_test(async |db| {
+            let fixture = setup_paused_failed_skip(&db.pool, &["A", "B", "C"], false, None).await;
+
+            // Set up a replace gate so recovery Replace to C will block:
+            let gate = testsupport::Gate::new();
+            fixture.pipeline.set_replace_gate(Some(gate.clone()));
+            // Fail the recovery Replace (3rd Replace operation):
+            fixture.pipeline.fail_nth(Call::Replace, 2);
+
+            // Start resume recovery via Play:
+            let play_rx = fixture
+                .runtime
+                .begin_command(StationCommand::Play)
+                .await
+                .expect("play command begin");
+            gate.wait_started().await;
+            assert_eq!(fixture.pipeline.count(Call::Replace), 3);
+
+            // While recovery Replace is held on gate, submit Stop:
+            let stop_rx = fixture
+                .runtime
+                .submit_and_wait_admitted(StationCommand::Stop)
+                .await
+                .expect("stop command admitted");
+
+            let snapshot_stopped = fixture.runtime.test_snapshot().await.unwrap();
+            assert_eq!(snapshot_stopped.state, PipelineState::Stopped);
+            gate.release();
+            let play_res = play_rx.await.unwrap();
+            assert!(play_res.is_err(), "play must return Err");
+            stop_rx.await.unwrap().unwrap();
+
+            // Final state: controller Stopped, physical pipeline Stopped, no orphaned state
+            let final_snapshot = fixture.runtime.test_snapshot().await.unwrap();
+            assert_eq!(final_snapshot.state, PipelineState::Stopped);
+            assert_eq!(final_snapshot.pending_skip, None);
+            assert_eq!(final_snapshot.pending_realign, None);
+            assert_eq!(final_snapshot.planned_next, None);
+            assert!(final_snapshot.deferred_terminal.is_none());
+            assert!(fixture.pipeline.count(Call::Stop) > 0);
+            assert_eq!(fixture.pipeline.snapshot_state(), PipelineState::Stopped);
+
+            fixture.runtime.shutdown().await.unwrap();
+        })
+        .await;
+    }
+
+    /// End to end through StationRuntime: when a station has a deferred terminal track B in Paused
+    /// and a manual skip B -> C is in flight on replace_gate, a concurrent/interleaved Play command
+    /// is refused with Err and does NOT wipe deferred_terminal nor issue SetPlaying(true) on broken B.
+    /// When the in-flight manual skip fails, the deferred terminal is still intact for B, and a later
+    /// successful manual skip advances to C and clears the terminal record.
+    #[tokio::test]
+    async fn play_during_pending_terminal_skip_does_not_lose_deferred_terminal_or_resume_broken_track() {
+        run_reconnect_test(async |db| {
+            let fixture = setup_paused_failed_skip(&db.pool, &["A", "B", "C"], false, None).await;
+            let b_key = StationController::track(fixture.songs[1].clone()).key;
+            let c_key = StationController::track(fixture.songs[2].clone()).key;
+
+            // Set up a replace gate on the pipeline so the manual skip will block in flight:
+            let gate = testsupport::Gate::new();
+            fixture.pipeline.set_replace_gate(Some(gate.clone()));
+            // In-flight manual Replace (3rd Replace operation on the pipeline) will fail:
+            fixture.pipeline.fail_nth(Call::Replace, 2);
+
+            // Start manual skip B -> C:
+            let skip_rx = fixture
+                .runtime
+                .begin_command(StationCommand::Skip)
+                .await
+                .expect("skip command begin");
+            gate.wait_started().await;
+            assert_eq!(fixture.pipeline.count(Call::Replace), 3);
+
+            // Snapshot while manual Replace B -> C is held on the gate:
+            let in_flight = fixture.runtime.test_snapshot().await.unwrap();
+            assert_eq!(in_flight.state, PipelineState::Paused);
+            assert!(in_flight.pending_skip.is_some());
+            assert_eq!(in_flight.pending_skip_target.as_ref(), Some(&c_key));
+            assert_eq!(
+                in_flight.deferred_terminal,
+                Some((2, b_key.clone(), 1)),
+                "deferred terminal for broken track B must be present before Play"
+            );
+
+            // While manual Replace is still held on the gate, invoke Play:
+            let play_res = fixture.runtime.play().await;
+            assert!(
+                play_res.is_err(),
+                "play must be rejected with Err while skip is in flight for terminal track, got {play_res:?}"
+            );
+
+            // Snapshot immediately after rejected Play:
+            let snapshot_after_play = fixture.runtime.test_snapshot().await.unwrap();
+            assert_eq!(snapshot_after_play.state, PipelineState::Paused);
+            assert_eq!(
+                snapshot_after_play.deferred_terminal,
+                Some((2, b_key.clone(), 1)),
+                "deferred terminal must NOT be cleared by rejected Play"
+            );
+            assert_eq!(
+                fixture.pipeline.count(Call::SetPlaying),
+                1,
+                "no SetPlaying(true) must be issued for broken track B"
+            );
+
+            // Now release the Replace gate:
+            gate.release();
+
+            // The manual skip returns Err:
+            let skip_res = skip_rx.await.unwrap();
+            assert!(skip_res.is_err(), "manual skip must return Err");
+
+            // Final state after failed skip:
+            let final_snapshot = fixture.runtime.test_snapshot().await.unwrap();
+            assert_eq!(final_snapshot.state, PipelineState::Paused);
+            assert_eq!(final_snapshot.generation, 2);
+            assert_eq!(final_snapshot.pending_skip, None);
+            assert_eq!(
+                final_snapshot.deferred_terminal,
+                Some((2, b_key, 1)),
+                "deferred terminal must remain intact after failed manual skip"
+            );
+            assert_eq!(fixture.pipeline.count(Call::SetPlaying), 1, "no ghost SetPlaying(true) was issued");
+            assert_eq!(fixture.pipeline.count(Call::Roll), 0, "no ghost Roll was issued");
+
+            // A subsequent successful manual skip cleanly advances to C:
+            fixture.pipeline.set_replace_gate(None);
+            fixture.runtime.skip().await.unwrap();
+            testsupport::wait_for("manual skip to reach pipeline", || fixture.pipeline.count(Call::Replace) == 4).await;
+            wait_for_db_cursor(&db.pool, fixture.station_id, Some(fixture.songs[2].queue_item_id)).await;
+            let after_skip = fixture.runtime.test_snapshot().await.unwrap();
+            assert_eq!(after_skip.generation, 3);
+            assert_eq!(after_skip.state, PipelineState::Paused);
+            assert!(
+                after_skip.deferred_terminal.is_none(),
+                "deferred terminal is cleared only after successful identity change"
+            );
+
+            fixture.runtime.shutdown().await.unwrap();
+        })
+        .await;
+    }
+
+    /// End to end through StationRuntime: when a resume recovery Replace fails, a second
+    /// Play attempt on the exhausted retry budget returns Err without attempting to issue
+    /// SetPlaying(true) on the broken track, and a subsequent manual skip succeeds to C.
+    #[tokio::test]
+    async fn second_play_after_failed_recovery_policy() {
+        run_reconnect_test(async |db| {
+            let fixture = setup_paused_failed_skip(&db.pool, &["A", "B", "C"], false, None).await;
+            let b_key = StationController::track(fixture.songs[1].clone()).key;
+
+            // First recovery Replace to C fails:
+            fixture.pipeline.fail_nth(Call::Replace, 2);
+
+            let first_play = fixture.runtime.play().await;
+            assert!(first_play.is_err(), "first play must return Err on failed recovery replace");
+
+            let snapshot_after_first = fixture.runtime.test_snapshot().await.unwrap();
+            assert_eq!(snapshot_after_first.state, PipelineState::Paused);
+            assert_eq!(snapshot_after_first.generation, 2);
+            assert_eq!(snapshot_after_first.pending_skip, None);
+            assert_eq!(
+                snapshot_after_first.deferred_terminal,
+                Some((2, b_key.clone(), 0)),
+                "deferred terminal must be preserved with retries_left = 0"
+            );
+
+            // Second play attempt on exhausted retry budget:
+            let second_play = fixture.runtime.play().await;
+            assert!(
+                second_play.is_err(),
+                "second play must return Err when terminal retry budget is exhausted"
+            );
+
+            let snapshot_after_second = fixture.runtime.test_snapshot().await.unwrap();
+            assert_eq!(snapshot_after_second.state, PipelineState::Paused);
+            assert_eq!(snapshot_after_second.generation, 2);
+            assert_eq!(snapshot_after_second.pending_skip, None);
+            assert_eq!(
+                snapshot_after_second.deferred_terminal,
+                Some((2, b_key, 0)),
+                "deferred terminal must still be preserved without dropping info"
+            );
+            assert_eq!(
+                fixture.pipeline.count(Call::SetPlaying),
+                1,
+                "no SetPlaying(true) must be issued for broken current track B"
+            );
+
+            // A subsequent manual skip succeeds cleanly to C:
+            fixture.runtime.skip().await.unwrap();
+            testsupport::wait_for("manual skip to reach pipeline", || fixture.pipeline.count(Call::Replace) == 4).await;
+            wait_for_db_cursor(&db.pool, fixture.station_id, Some(fixture.songs[2].queue_item_id)).await;
+            let after_skip = fixture.runtime.test_snapshot().await.unwrap();
+            assert_eq!(after_skip.generation, 3);
+            assert_eq!(after_skip.state, PipelineState::Paused);
+            assert!(after_skip.deferred_terminal.is_none());
+
+            fixture.runtime.shutdown().await.unwrap();
+        })
+        .await;
     }
 }

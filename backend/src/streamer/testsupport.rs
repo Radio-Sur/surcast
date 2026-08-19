@@ -131,6 +131,21 @@ pub(crate) async fn wait_for_timeout(timeout: Duration, what: &str, mut cond: im
 pub(crate) async fn wait_for(what: &str, cond: impl FnMut() -> bool) {
     wait_for_timeout(Duration::from_secs(2), what, cond).await
 }
+/// Polls async `cond` (with cooperative yields) until it holds, panicking after
+/// `timeout` with a descriptive message.
+pub(crate) async fn wait_for_async_timeout<F, Fut>(timeout: Duration, what: &str, mut cond: F)
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = bool>,
+{
+    tokio::time::timeout(timeout, async {
+        while !cond().await {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("timed out waiting for {what}"));
+}
 
 /// A single pipeline call, as recorded by [`RecordingPipeline`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -275,6 +290,9 @@ impl RecordingPipeline {
 
     pub(crate) fn set_replace_gate(&self, gate: Option<Arc<Gate>>) {
         *self.replace_gate.lock() = gate;
+    }
+    pub(crate) fn set_roll_gate(&self, gate: Option<Arc<Gate>>) {
+        *self.roll_gate.lock() = gate;
     }
     pub(crate) fn snapshot_state(&self) -> PipelineState {
         self.snapshot.lock().state

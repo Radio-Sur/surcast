@@ -1,4 +1,5 @@
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use gst::prelude::*;
@@ -9,34 +10,107 @@ use super::super::pipeline::{PipelineError, PipelineEvent, PipelineTrack, TrackK
 use super::graph;
 
 pub(super) struct Branch {
+    pub(super) generation: u64,
     pub(super) key: TrackKey,
     pub(super) elements: Vec<gst::Element>,
     pub(super) source: gst::Element,
     pub(super) volume: gst::Element,
     pub(super) timing_pad: gst::Pad,
-    gate: Option<gst::PadProbeId>,
+    pub(super) gate: Option<gst::PadProbeId>,
     media_start: Mutex<Duration>,
     duration: Mutex<Option<Duration>>,
     pub(super) mixer_pad: Option<gst::Pad>,
 }
 
-pub(super) fn clear(pipeline: &gst::Pipeline, mixer: &gst::Element, branches: &mut Vec<Branch>) {
-    for branch in branches.drain(..) {
-        discard(pipeline, mixer, branch);
+#[cfg(test)]
+impl Branch {
+    pub(super) fn for_test(
+        generation: u64,
+        key: TrackKey,
+        elements: Vec<gst::Element>,
+        source: gst::Element,
+        volume: gst::Element,
+        timing_pad: gst::Pad,
+    ) -> Self {
+        Self {
+            generation,
+            key,
+            elements,
+            source,
+            volume,
+            timing_pad,
+            gate: None,
+            media_start: Mutex::new(Duration::ZERO),
+            duration: Mutex::new(None),
+            mixer_pad: None,
+        }
     }
 }
-pub(super) fn truncate(pipeline: &gst::Pipeline, mixer: &gst::Element, branches: &mut Vec<Branch>, len: usize) {
-    while branches.len() > len {
-        let branch = branches.pop().expect("length checked");
-        discard(pipeline, mixer, branch);
-    }
-}
-pub(super) fn remove_at(pipeline: &gst::Pipeline, mixer: &gst::Element, branches: &mut Vec<Branch>, index: usize) {
-    if index < branches.len() {
-        discard(pipeline, mixer, branches.remove(index));
-    }
+#[derive(Clone)]
+pub(super) struct PreparingBranch {
+    pub(super) generation: u64,
+    pub(super) key: TrackKey,
+    pub(super) elements: Vec<gst::Element>,
+    pub(super) failed: Arc<AtomicBool>,
 }
 
+#[derive(Clone)]
+pub(super) struct RetiringBranch {
+    pub(super) retirement_id: u64,
+    pub(super) elements: Vec<gst::Element>,
+}
+
+pub(super) struct BranchRegistry {
+    pub(super) live: Vec<Branch>,
+    pub(super) preparing: Vec<PreparingBranch>,
+    pub(super) retiring: Vec<RetiringBranch>,
+    next_retirement_id: u64,
+}
+
+impl BranchRegistry {
+    pub(super) fn new() -> Self {
+        Self {
+            live: Vec::new(),
+            preparing: Vec::new(),
+            retiring: Vec::new(),
+            next_retirement_id: 1,
+        }
+    }
+
+    pub(super) fn register_preparing(&mut self, branch: &Branch) {
+        self.preparing.push(PreparingBranch {
+            generation: branch.generation,
+            key: branch.key.clone(),
+            elements: branch.elements.clone(),
+            failed: Arc::new(AtomicBool::new(false)),
+        });
+    }
+
+    pub(super) fn unregister_preparing(&mut self, key: &TrackKey) {
+        self.preparing.retain(|b| b.key != *key);
+    }
+
+    pub(super) fn mark_preparing_failed(&mut self, key: &TrackKey) {
+        for p in &self.preparing {
+            if p.key == *key {
+                p.failed.store(true, Ordering::Release);
+            }
+        }
+    }
+
+    pub(super) fn is_preparing_failed(&self, key: &TrackKey) -> bool {
+        self.preparing
+            .iter()
+            .find(|b| b.key == *key)
+            .is_some_and(|b| b.failed.load(Ordering::Acquire))
+    }
+
+    pub(super) fn alloc_retirement_id(&mut self) -> u64 {
+        let id = self.next_retirement_id;
+        self.next_retirement_id = self.next_retirement_id.wrapping_add(1);
+        id
+    }
+}
 pub(super) fn discard(pipeline: &gst::Pipeline, mixer: &gst::Element, mut branch: Branch) {
     if let Some(mixer_pad) = branch.mixer_pad.take() {
         let _ = branch.timing_pad.unlink(&mixer_pad);
@@ -49,42 +123,60 @@ fn remove_elements(pipeline: &gst::Pipeline, mut branch: Branch) {
     if let Some(gate) = branch.gate.take() {
         branch.timing_pad.remove_probe(gate);
     }
-    for element in branch.elements {
+    for element in branch.elements.iter().rev() {
+        element.set_locked_state(false);
         let _ = element.set_state(gst::State::Null);
-        let _ = pipeline.remove(&element);
+        let _ = pipeline.remove(element);
     }
 }
-
 pub(super) fn attach(
     pipeline: &gst::Pipeline,
     mixer: &gst::Element,
+    registry: Option<&Mutex<BranchRegistry>>,
     events: mpsc::UnboundedSender<PipelineEvent>,
     track: &PipelineTrack,
     generation: u64,
     initial_volume: f64,
 ) -> Result<Branch, PipelineError> {
     let mut branch = attach_inner(pipeline, events, track, generation, initial_volume)?;
+    if let Some(reg) = registry {
+        reg.lock().unwrap_or_else(|error| error.into_inner()).register_preparing(&branch);
+    }
     if let Err(error) = link_mixer(mixer, &mut branch) {
+        if let Some(reg) = registry {
+            reg.lock().unwrap_or_else(|e| e.into_inner()).unregister_preparing(&branch.key);
+        }
         discard(pipeline, mixer, branch);
         return Err(error);
     }
-    if let Err(error) = sync_with_parent(&branch) {
-        discard(pipeline, mixer, branch);
-        return Err(error);
+    for element in branch.elements.iter().rev() {
+        if let Err(error) = element.sync_state_with_parent() {
+            if let Some(reg) = registry {
+                reg.lock().unwrap_or_else(|e| e.into_inner()).unregister_preparing(&branch.key);
+            }
+            discard(pipeline, mixer, branch);
+            return Err(PipelineError::Pipeline(error.to_string()));
+        }
     }
     Ok(branch)
 }
-
 pub(super) fn attach_paused(
     pipeline: &gst::Pipeline,
     mixer: &gst::Element,
+    registry: Option<&Mutex<BranchRegistry>>,
     events: mpsc::UnboundedSender<PipelineEvent>,
     track: &PipelineTrack,
     generation: u64,
     initial_volume: f64,
 ) -> Result<Branch, PipelineError> {
     let mut branch = attach_inner(pipeline, events, track, generation, initial_volume)?;
+    if let Some(reg) = registry {
+        reg.lock().unwrap_or_else(|error| error.into_inner()).register_preparing(&branch);
+    }
     if let Err(error) = link_mixer(mixer, &mut branch) {
+        if let Some(reg) = registry {
+            reg.lock().unwrap_or_else(|e| e.into_inner()).unregister_preparing(&branch.key);
+        }
         discard(pipeline, mixer, branch);
         return Err(error);
     }
@@ -92,11 +184,17 @@ pub(super) fn attach_paused(
         .timing_pad
         .add_probe(gst::PadProbeType::BLOCK_DOWNSTREAM, |_, _| gst::PadProbeReturn::Ok)
     else {
+        if let Some(reg) = registry {
+            reg.lock().unwrap_or_else(|e| e.into_inner()).unregister_preparing(&branch.key);
+        }
         discard(pipeline, mixer, branch);
         return Err(PipelineError::Pipeline("failed to install branch gate".into()));
     };
     branch.gate = Some(gate);
     if let Err(error) = lock_paused(&branch) {
+        if let Some(reg) = registry {
+            reg.lock().unwrap_or_else(|e| e.into_inner()).unregister_preparing(&branch.key);
+        }
         discard(pipeline, mixer, branch);
         return Err(error);
     }
@@ -129,16 +227,20 @@ pub(super) fn prepare(branch: &mut Branch) -> Result<(), PipelineError> {
     Ok(())
 }
 
-pub(super) fn release_paused(branch: &mut Branch) {
-    if let Some(gate) = branch.gate.take() {
-        branch.timing_pad.remove_probe(gate);
-    }
+pub(super) struct ReleasePausedAction {
+    pub(super) timing_pad: gst::Pad,
+    pub(super) gate: gst::PadProbeId,
 }
 
-pub(super) fn activate_paused(branch: &mut Branch) -> Result<(), PipelineError> {
-    prepare(branch)?;
-    release_paused(branch);
-    Ok(())
+pub(super) fn take_paused_release(branch: &mut Branch) -> Option<ReleasePausedAction> {
+    branch.gate.take().map(|gate| ReleasePausedAction {
+        timing_pad: branch.timing_pad.clone(),
+        gate,
+    })
+}
+
+pub(super) fn apply_paused_release(action: ReleasePausedAction) {
+    action.timing_pad.remove_probe(action.gate);
 }
 
 fn attach_inner(
@@ -202,6 +304,7 @@ fn attach_inner(
         .ok_or_else(|| PipelineError::Pipeline("timing element has no source pad".into()))?;
     let elements = vec![source.clone(), queue, convert, resample, capsfilter, volume.clone(), timing.clone()];
     Ok(Branch {
+        generation,
         key: track.key.clone(),
         elements,
         source,
@@ -212,15 +315,6 @@ fn attach_inner(
         duration: Mutex::new(None),
         mixer_pad: None,
     })
-}
-
-fn sync_with_parent(branch: &Branch) -> Result<(), PipelineError> {
-    for element in branch.elements.iter().rev() {
-        element
-            .sync_state_with_parent()
-            .map_err(|error| PipelineError::Pipeline(error.to_string()))?;
-    }
-    Ok(())
 }
 
 fn link_mixer(mixer: &gst::Element, branch: &mut Branch) -> Result<(), PipelineError> {
@@ -235,11 +329,11 @@ fn link_mixer(mixer: &gst::Element, branch: &mut Branch) -> Result<(), PipelineE
     Ok(())
 }
 
-pub(super) async fn wait_duration(branches: &Mutex<Vec<Branch>>, index: usize) -> Option<Duration> {
+pub(super) async fn wait_duration(registry: &Mutex<BranchRegistry>, index: usize) -> Option<Duration> {
     for _ in 0..100 {
         let duration = {
-            let branches = branches.lock().unwrap_or_else(|error| error.into_inner());
-            branches.get(index).and_then(duration)
+            let reg = registry.lock().unwrap_or_else(|error| error.into_inner());
+            reg.live.get(index).and_then(duration)
         };
         if duration.is_some() {
             return duration;
@@ -249,6 +343,16 @@ pub(super) async fn wait_duration(branches: &Mutex<Vec<Branch>>, index: usize) -
     None
 }
 
+pub(super) async fn wait_branch_duration(branch: &Branch) -> Option<Duration> {
+    for _ in 0..100 {
+        let dur = duration(branch);
+        if dur.is_some() {
+            return dur;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    None
+}
 pub(super) fn duration(branch: &Branch) -> Option<Duration> {
     let mut cached = branch.duration.lock().unwrap_or_else(|error| error.into_inner());
     if cached.is_none() {

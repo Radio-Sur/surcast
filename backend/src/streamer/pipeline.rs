@@ -259,11 +259,17 @@ pub(crate) enum PipelineEvent {
         track: TrackKey,
         message: String,
     },
+    FatalPipeline {
+        pipeline_epoch: u64,
+        message: String,
+    },
     SinkDisconnected {
         generation: u64,
         output_epoch: u64,
         message: String,
     },
+    #[cfg(test)]
+    TestBarrier(std::sync::Arc<tokio::sync::Notify>),
 }
 
 #[derive(Clone, Debug)]
