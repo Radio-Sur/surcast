@@ -14,7 +14,6 @@
 //! scenario-specific state (queue corruption, cursor manipulation, WebSocket
 //! sessions, intentional Icecast restarts, direct database mutation) stays
 //! visible in the tests.
-
 use axum_test::TestServer;
 use serde_json::{json, Value};
 use sqlx::PgPool;
@@ -968,6 +967,75 @@ impl StreamerTestApp {
         }
         Ok(total)
     }
+
+    // ---- lifecycle & session helpers ------------------------------------
+
+    /// Creates a station with auto-fill disabled and one sine-tone WAV queued,
+    /// ready to broadcast (used across lifecycle and streamer tests).
+    #[allow(dead_code)]
+    pub async fn station_with_tone(&self, name: &str, mount: &str) -> Result<TestStation, Box<dyn std::error::Error>> {
+        let station = self.create_station(name, mount).await?;
+        self.disable_auto_fill(&station).await?;
+        let song = self.insert_tone("tone A", &format!("{mount}.wav"), 330.0, 10).await?;
+        self.assign(&song, &station).await?;
+        self.enqueue(&station, &[song.id]).await?;
+        Ok(station)
+    }
+    /// Destroys the current backend session and boots a fresh one, modeling
+    /// a backend process restart with startup restore.
+    #[allow(dead_code)]
+    pub async fn restart_backend(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        self.destroy_session().await?;
+        self.spawn_session(false, false).await
+    }
+
+    /// Reads the persisted desired state of a station directly from the database.
+    #[allow(dead_code)]
+    pub async fn is_started(&self, station: &TestStation) -> Result<bool, Box<dyn std::error::Error>> {
+        sqlx::query_scalar("SELECT is_started FROM stations WHERE id = $1")
+            .bind(station.id)
+            .fetch_one(&self.db)
+            .await
+            .map_err(|error| failure(format!("is_started read failed: {error}")))
+    }
+
+    /// Writes the persisted desired state directly (test setup; not a real
+    /// transition, so no runtime is created or stopped).
+    #[allow(dead_code)]
+    pub async fn set_desired_started(&self, station: &TestStation, started: bool) -> Result<(), Box<dyn std::error::Error>> {
+        sqlx::query("UPDATE stations SET is_started = $1 WHERE id = $2")
+            .bind(started)
+            .bind(station.id)
+            .execute(&self.db)
+            .await
+            .map_err(|error| failure(format!("is_started update failed: {error}")))?;
+        Ok(())
+    }
+
+    /// The number of live runtimes in the session's streamers map.
+    #[allow(dead_code)]
+    pub fn live_runtimes(&self) -> usize {
+        self.session().streamers.lock().unwrap().len()
+    }
+
+    /// Asserts the persisted desired state AND the live runtime count together.
+    #[allow(dead_code)]
+    pub async fn assert_lifecycle_state(
+        &self,
+        station: &TestStation,
+        started: bool,
+        runtime_count: usize,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let actual = self.is_started(station).await?;
+        if actual != started {
+            return Err(failure(format!("desired state is {actual}, expected {started}")));
+        }
+        let runtimes = self.live_runtimes();
+        if runtimes != runtime_count {
+            return Err(failure(format!("live runtimes: {runtimes}, expected {runtime_count}")));
+        }
+        Ok(())
+    }
 }
 
 /// Strict queue-row parsing: the body must deserialize directly into
@@ -1002,6 +1070,196 @@ pub fn visible_upcoming(status: &StatusView, queue: &[QueueItem]) -> i64 {
         (status.song_index as usize) % queue.len()
     };
     (queue.len().saturating_sub(pos + 1)) as i64
+}
+
+// ---- WebSocket helpers ---------------------------------------------------
+
+#[allow(dead_code)]
+pub type TestWs = tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
+
+#[allow(dead_code)]
+pub async fn ws_recv_text(socket: &mut TestWs, timeout: Duration) -> Result<String, Box<dyn std::error::Error>> {
+    use futures::StreamExt;
+    loop {
+        match tokio::time::timeout(timeout, socket.next()).await {
+            Ok(Some(Ok(tokio_tungstenite::tungstenite::Message::Text(text)))) => return Ok(text.to_string()),
+            Ok(Some(Ok(_))) => continue,
+            Ok(Some(Err(error))) => return Err(failure(format!("ws error: {error}"))),
+            Ok(None) => return Err(failure("ws closed")),
+            Err(_) => return Err(failure("ws receive timeout")),
+        }
+    }
+}
+
+/// Opens an authenticated WebSocket and subscribes to the station.
+#[allow(dead_code)]
+pub async fn ws_subscribe(app: &StreamerTestApp, station: &TestStation) -> Result<TestWs, Box<dyn std::error::Error>> {
+    use futures::SinkExt;
+    use tokio_tungstenite::tungstenite::Message as WsMessage;
+    let token = app.session().auth.trim_start_matches("Bearer ").to_owned();
+    let mut address = app.session().server.server_address().ok_or_else(|| failure("no server address"))?;
+    address.set_scheme("ws").map_err(|_| failure("bad address"))?;
+    let ws_url = address.join("/api/ws").map_err(|_| failure("bad ws url"))?;
+    let (mut socket, _) = tokio_tungstenite::connect_async(ws_url.to_string()).await?;
+    socket
+        .send(WsMessage::Text(serde_json::json!({"type": "auth", "token": token}).to_string()))
+        .await?;
+    let _auth_ok = ws_recv_text(&mut socket, Duration::from_secs(10)).await?;
+    socket
+        .send(WsMessage::Text(
+            serde_json::json!({"type": "subscribe", "station_id": station.id}).to_string(),
+        ))
+        .await?;
+    Ok(socket)
+}
+/// Buffered reader for one WebSocket connection. `recv_until` never drops
+/// unmatched messages — they are queued and re-examined by later calls, so
+/// the order in which events arrive cannot lose an event (e.g. a
+/// QueueUpdate arriving before a Status). Every `recv_until` call shares ONE
+/// overall deadline instead of restarting the full timeout per message.
+#[allow(dead_code)]
+pub struct WsInbox {
+    pub socket: TestWs,
+    pub pending: std::collections::VecDeque<serde_json::Value>,
+}
+
+#[allow(dead_code)]
+impl WsInbox {
+    pub fn new(socket: TestWs) -> Self {
+        Self {
+            socket,
+            pending: std::collections::VecDeque::new(),
+        }
+    }
+    /// Connects, authenticates, subscribes to `station` and wraps the socket in a `WsInbox`.
+    pub async fn subscribe(app: &StreamerTestApp, station: &TestStation) -> Result<Self, Box<dyn std::error::Error>> {
+        let socket = ws_subscribe(app, station).await?;
+        Ok(Self::new(socket))
+    }
+
+    /// Reads until `matcher` matches (buffered messages first, then fresh
+    /// ones); unmatched messages stay buffered. Bounded by one deadline.
+    pub async fn recv_until<M>(&mut self, what: &str, matcher: M) -> Result<serde_json::Value, Box<dyn std::error::Error>>
+    where
+        M: Fn(&serde_json::Value) -> bool,
+    {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            if let Some(index) = self.pending.iter().position(&matcher) {
+                return Ok(self.pending.remove(index).expect("index from position"));
+            }
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            if remaining.is_zero() {
+                return Err(failure(format!("did not receive {what} within the deadline")));
+            }
+            let msg: serde_json::Value = serde_json::from_str(&ws_recv_text(&mut self.socket, remaining).await?)?;
+            if matcher(&msg) {
+                return Ok(msg);
+            }
+            self.pending.push_back(msg);
+        }
+    }
+
+    pub async fn wait_for_status<F>(&mut self, what: &str, predicate: F) -> Result<serde_json::Value, Box<dyn std::error::Error>>
+    where
+        F: Fn(&serde_json::Value) -> bool,
+    {
+        self.recv_until(what, |msg| msg["type"] == "status" && predicate(&msg["data"]["data"]))
+            .await
+    }
+
+    pub async fn wait_for_queue_update<F>(&mut self, what: &str, predicate: F) -> Result<serde_json::Value, Box<dyn std::error::Error>>
+    where
+        F: Fn(&serde_json::Value) -> bool,
+    {
+        self.recv_until(what, |msg| msg["type"] == "queue_update" && predicate(&msg["data"]))
+            .await
+    }
+
+    /// Waits for a queue snapshot whose rows are exactly `expected` titles,
+    /// in order (the common one-song scenario).
+    pub async fn wait_for_queue_titles(&mut self, what: &str, expected: &[&str]) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
+        self.wait_for_queue_update(what, |data| {
+            data.as_array().is_some_and(|items| {
+                items.len() == expected.len() && items.iter().zip(expected).all(|(item, title)| item["title"] == *title)
+            })
+        })
+        .await
+    }
+
+    pub async fn wait_for_error(
+        &mut self,
+        what: &str,
+        station_id: Option<uuid::Uuid>,
+    ) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
+        self.recv_until(what, |msg| {
+            msg["type"] == "error"
+                && match station_id {
+                    Some(id) => msg["station_id"].as_str() == Some(id.to_string().as_str()),
+                    None => true,
+                }
+        })
+        .await
+    }
+
+    /// Shared negative assertion: proves that no message matching `is_bad`
+    /// arrives within `window`. Buffered messages are checked first (a
+    /// buffered bad message is already the side effect); legal non-bad
+    /// messages read during the window are preserved in `pending` for later
+    /// waits.
+    pub async fn assert_no_event<F>(&mut self, window: Duration, what: &str, is_bad: F) -> Result<(), Box<dyn std::error::Error>>
+    where
+        F: Fn(&serde_json::Value) -> bool,
+    {
+        use futures::StreamExt;
+        if self.pending.iter().any(&is_bad) {
+            return Err(failure(format!("{what}: unexpected buffered message")));
+        }
+        let deadline = tokio::time::Instant::now() + window;
+        loop {
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            match tokio::time::timeout(remaining, self.socket.next()).await {
+                // Nothing arrived within the window: the side effect is absent.
+                Err(_) => return Ok(()),
+                Ok(Some(Ok(tokio_tungstenite::tungstenite::Message::Text(text)))) => {
+                    let msg: serde_json::Value = serde_json::from_str(&text)?;
+                    if is_bad(&msg) {
+                        return Err(failure(format!("{what}: unexpected message: {msg}")));
+                    }
+                    // Legal pipeline noise: preserve it for later waits.
+                    self.pending.push_back(msg);
+                }
+                Ok(Some(Ok(_))) => continue,
+                Ok(Some(Err(error))) => return Err(failure(format!("ws error: {error}"))),
+                Ok(None) => return Err(failure("ws closed")),
+            }
+        }
+    }
+
+    /// Proves that no `queue_update` arrives within `window`. Used to assert
+    /// that a new subscriber does not cause a QueueUpdate for existing ones.
+    pub async fn assert_no_queue_update(&mut self, window: Duration, what: &str) -> Result<(), Box<dyn std::error::Error>> {
+        self.assert_no_event(window, what, |msg| msg["type"] == "queue_update").await
+    }
+
+    /// Proves that no `error` arrives within `window` (optionally for one
+    /// station). Used to assert that a successful transition never emits a
+    /// transient no-runtime error.
+    pub async fn assert_no_error(
+        &mut self,
+        window: Duration,
+        what: &str,
+        station_id: Option<uuid::Uuid>,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        self.assert_no_event(window, what, |msg| {
+            msg["type"] == "error"
+                && match station_id {
+                    Some(id) => msg["station_id"].as_str() == Some(id.to_string().as_str()),
+                    None => true,
+                }
+        })
+        .await
+    }
 }
 
 /// The `run_streamer_test` runner: builds the app, runs the scenario and

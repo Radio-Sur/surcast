@@ -26,268 +26,6 @@ use streamer_common::*;
 use surcast_backend::stations::handlers::stream::LifecycleTestHooks;
 use surcast_backend::streamer::StationStreamer;
 
-type TestWs = tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
-
-// ---- WebSocket receive helpers ------------------------------------------
-
-async fn ws_recv_text(socket: &mut TestWs, timeout: Duration) -> Result<String, Box<dyn std::error::Error>> {
-    use futures::StreamExt;
-    loop {
-        match tokio::time::timeout(timeout, socket.next()).await {
-            Ok(Some(Ok(tokio_tungstenite::tungstenite::Message::Text(text)))) => return Ok(text.to_string()),
-            Ok(Some(Ok(_))) => continue,
-            Ok(Some(Err(error))) => return Err(failure(format!("ws error: {error}"))),
-            Ok(None) => return Err(failure("ws closed")),
-            Err(_) => return Err(failure("ws receive timeout")),
-        }
-    }
-}
-
-/// Buffered reader for one WebSocket connection. `recv_until` never drops
-/// unmatched messages — they are queued and re-examined by later calls, so
-/// the order in which events arrive cannot lose an event (e.g. a
-/// QueueUpdate arriving before a Status). Every `recv_until` call shares ONE
-/// overall deadline instead of restarting the full timeout per message.
-struct WsInbox {
-    socket: TestWs,
-    pending: std::collections::VecDeque<serde_json::Value>,
-}
-
-impl WsInbox {
-    fn new(socket: TestWs) -> Self {
-        Self {
-            socket,
-            pending: std::collections::VecDeque::new(),
-        }
-    }
-
-    /// Reads until `matcher` matches (buffered messages first, then fresh
-    /// ones); unmatched messages stay buffered. Bounded by one deadline.
-    async fn recv_until<M>(&mut self, what: &str, matcher: M) -> Result<serde_json::Value, Box<dyn std::error::Error>>
-    where
-        M: Fn(&serde_json::Value) -> bool,
-    {
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-        loop {
-            if let Some(index) = self.pending.iter().position(&matcher) {
-                return Ok(self.pending.remove(index).expect("index from position"));
-            }
-            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
-            if remaining.is_zero() {
-                return Err(failure(format!("did not receive {what} within the deadline")));
-            }
-            let msg: serde_json::Value = serde_json::from_str(&ws_recv_text(&mut self.socket, remaining).await?)?;
-            if matcher(&msg) {
-                return Ok(msg);
-            }
-            self.pending.push_back(msg);
-        }
-    }
-
-    async fn wait_for_status<F>(&mut self, what: &str, predicate: F) -> Result<serde_json::Value, Box<dyn std::error::Error>>
-    where
-        F: Fn(&serde_json::Value) -> bool,
-    {
-        self.recv_until(what, |msg| msg["type"] == "status" && predicate(&msg["data"]["data"]))
-            .await
-    }
-
-    async fn wait_for_queue_update<F>(&mut self, what: &str, predicate: F) -> Result<serde_json::Value, Box<dyn std::error::Error>>
-    where
-        F: Fn(&serde_json::Value) -> bool,
-    {
-        self.recv_until(what, |msg| msg["type"] == "queue_update" && predicate(&msg["data"]))
-            .await
-    }
-
-    /// Waits for a queue snapshot whose rows are exactly `expected` titles,
-    /// in order (the common one-song scenario).
-    async fn wait_for_queue_titles(&mut self, what: &str, expected: &[&str]) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
-        self.wait_for_queue_update(what, |data| {
-            data.as_array().is_some_and(|items| {
-                items.len() == expected.len() && items.iter().zip(expected).all(|(item, title)| item["title"] == *title)
-            })
-        })
-        .await
-    }
-
-    async fn wait_for_error(
-        &mut self,
-        what: &str,
-        station_id: Option<uuid::Uuid>,
-    ) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
-        self.recv_until(what, |msg| {
-            msg["type"] == "error"
-                && match station_id {
-                    Some(id) => msg["station_id"].as_str() == Some(id.to_string().as_str()),
-                    None => true,
-                }
-        })
-        .await
-    }
-
-    /// Shared negative assertion: proves that no message matching `is_bad`
-    /// arrives within `window`. Buffered messages are checked first (a
-    /// buffered bad message is already the side effect); legal non-bad
-    /// messages read during the window are preserved in `pending` for later
-    /// waits.
-    async fn assert_no_event<F>(&mut self, window: Duration, what: &str, is_bad: F) -> Result<(), Box<dyn std::error::Error>>
-    where
-        F: Fn(&serde_json::Value) -> bool,
-    {
-        use futures::StreamExt;
-        if self.pending.iter().any(&is_bad) {
-            return Err(failure(format!("{what}: unexpected buffered message")));
-        }
-        let deadline = tokio::time::Instant::now() + window;
-        loop {
-            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
-            match tokio::time::timeout(remaining, self.socket.next()).await {
-                // Nothing arrived within the window: the side effect is absent.
-                Err(_) => return Ok(()),
-                Ok(Some(Ok(tokio_tungstenite::tungstenite::Message::Text(text)))) => {
-                    let msg: serde_json::Value = serde_json::from_str(&text)?;
-                    if is_bad(&msg) {
-                        return Err(failure(format!("{what}: unexpected message: {msg}")));
-                    }
-                    // Legal pipeline noise: preserve it for later waits.
-                    self.pending.push_back(msg);
-                }
-                Ok(Some(Ok(_))) => continue,
-                Ok(Some(Err(error))) => return Err(failure(format!("ws error: {error}"))),
-                Ok(None) => return Err(failure("ws closed")),
-            }
-        }
-    }
-
-    /// Proves that no `queue_update` arrives within `window`. Used to assert
-    /// that a new subscriber does not cause a QueueUpdate for existing ones.
-    async fn assert_no_queue_update(&mut self, window: Duration, what: &str) -> Result<(), Box<dyn std::error::Error>> {
-        self.assert_no_event(window, what, |msg| msg["type"] == "queue_update").await
-    }
-
-    /// Proves that no `error` arrives within `window` (optionally for one
-    /// station). Used to assert that a successful transition never emits a
-    /// transient no-runtime error.
-    async fn assert_no_error(
-        &mut self,
-        window: Duration,
-        what: &str,
-        station_id: Option<uuid::Uuid>,
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        self.assert_no_event(window, what, |msg| {
-            msg["type"] == "error"
-                && match station_id {
-                    Some(id) => msg["station_id"].as_str() == Some(id.to_string().as_str()),
-                    None => true,
-                }
-        })
-        .await
-    }
-}
-
-/// Opens an authenticated WebSocket and subscribes to the station.
-async fn ws_subscribe(app: &StreamerTestApp, station: &TestStation) -> Result<TestWs, Box<dyn std::error::Error>> {
-    use futures::SinkExt;
-    use tokio_tungstenite::tungstenite::Message as WsMessage;
-    let token = app.session().auth.trim_start_matches("Bearer ").to_owned();
-    let mut address = app.session().server.server_address().ok_or_else(|| failure("no server address"))?;
-    address.set_scheme("ws").map_err(|_| failure("bad address"))?;
-    let ws_url = address.join("/api/ws").map_err(|_| failure("bad ws url"))?;
-    let (mut socket, _) = tokio_tungstenite::connect_async(ws_url.to_string()).await?;
-    socket
-        .send(WsMessage::Text(serde_json::json!({"type": "auth", "token": token}).to_string()))
-        .await?;
-    let _auth_ok = ws_recv_text(&mut socket, Duration::from_secs(10)).await?;
-    socket
-        .send(WsMessage::Text(
-            serde_json::json!({"type": "subscribe", "station_id": station.id}).to_string(),
-        ))
-        .await?;
-    Ok(socket)
-}
-
-/// Sends one WebSocket command and returns the socket.
-async fn ws_send(socket: &mut TestWs, command: serde_json::Value) -> Result<(), Box<dyn std::error::Error>> {
-    use futures::SinkExt;
-    use tokio_tungstenite::tungstenite::Message as WsMessage;
-    socket
-        .send(WsMessage::Text(command.to_string()))
-        .await
-        .map_err(|error| failure(format!("ws send failed: {error}")))
-}
-
-// ---- desired state / runtime helpers -------------------------------------
-
-/// Reads the persisted desired state of a station.
-async fn is_started(db: &sqlx::PgPool, station: &TestStation) -> Result<bool, Box<dyn std::error::Error>> {
-    sqlx::query_scalar("SELECT is_started FROM stations WHERE id = $1")
-        .bind(station.id)
-        .fetch_one(db)
-        .await
-        .map_err(|error| failure(format!("is_started read failed: {error}")))
-}
-
-/// Writes the persisted desired state directly (test setup; not a real
-/// transition, so no runtime is created or stopped).
-async fn set_desired_started(app: &StreamerTestApp, station: &TestStation, started: bool) -> Result<(), Box<dyn std::error::Error>> {
-    sqlx::query("UPDATE stations SET is_started = $1 WHERE id = $2")
-        .bind(started)
-        .bind(station.id)
-        .execute(&app.db)
-        .await
-        .map_err(|error| failure(format!("is_started update failed: {error}")))?;
-    Ok(())
-}
-
-/// The number of live runtimes in the session's streamers map.
-fn live_runtimes(app: &StreamerTestApp) -> usize {
-    app.session().streamers.lock().unwrap().len()
-}
-
-/// Asserts the persisted desired state AND the live runtime count together.
-async fn assert_lifecycle_state(
-    app: &StreamerTestApp,
-    station: &TestStation,
-    started: bool,
-    runtime_count: usize,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let actual = is_started(&app.db, station).await?;
-    if actual != started {
-        return Err(failure(format!("desired state is {actual}, expected {started}")));
-    }
-    let runtimes = live_runtimes(app);
-    if runtimes != runtime_count {
-        return Err(failure(format!("live runtimes: {runtimes}, expected {runtime_count}")));
-    }
-    Ok(())
-}
-
-/// A station with one queued WAV tone, ready to broadcast.
-async fn station_with_tone(app: &StreamerTestApp, name: &str, mount: &str) -> Result<TestStation, Box<dyn std::error::Error>> {
-    let station = app.create_station(name, mount).await?;
-    app.disable_auto_fill(&station).await?;
-    let song = app.insert_tone("tone A", &format!("{mount}.wav"), 330.0, 10).await?;
-    app.assign(&song, &station).await?;
-    app.enqueue(&station, &[song.id]).await?;
-    Ok(station)
-}
-
-/// Adds one more tone to a station's queue through the real API path
-/// (insert → assign → enqueue).
-async fn add_tone_to_station(
-    app: &StreamerTestApp,
-    station: &TestStation,
-    title: &str,
-    file_name: &str,
-    freq: f32,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let song = app.insert_tone(title, file_name, freq, 10).await?;
-    app.assign(&song, station).await?;
-    app.enqueue(station, &[song.id]).await?;
-    Ok(())
-}
-
 // ---- raw HTTP command helpers --------------------------------------------
 
 /// Like [`streamer_common::failure`], but the error is `Send + Sync` so it
@@ -405,10 +143,9 @@ async fn observation_never_starts_a_station() {
     // must NOT create a runtime, start the pipeline or persist started.
     run_http_streamer_test(async |app| {
         let station = app.create_station("Observe only", "observe-only").await?;
-
-        let mut inbox = WsInbox::new(ws_subscribe(app, &station).await?);
+        let mut inbox = WsInbox::subscribe(app, &station).await?;
         inbox.wait_for_status("stopped snapshot", |data| data["playing"] == false).await?;
-        assert_lifecycle_state(app, &station, false, 0).await?;
+        app.assert_lifecycle_state(&station, false, 0).await?;
         Ok(())
     })
     .await
@@ -420,25 +157,31 @@ async fn ws_play_starts_without_prior_runtime() {
     // WebSocket Play must work even when a previous Subscribe deliberately
     // created no runtime (the old lazy-start coupling is gone).
     run_http_streamer_test(async |app| {
-        let station = station_with_tone(app, "WS play", "ws-play").await?;
-        if is_started(&app.db, &station).await? {
+        let station = app.station_with_tone("WS play", "ws-play").await?;
+        if app.is_started(&station).await? {
             return Err(failure("test setup must leave the station stopped"));
         }
 
         let mut socket = ws_subscribe(app, &station).await?;
-        if live_runtimes(app) != 0 {
+        if app.live_runtimes() != 0 {
             return Err(failure("subscribe must not create a runtime"));
         }
-        ws_send(&mut socket, serde_json::json!({"type": "play", "station_id": station.id})).await?;
+        use futures::SinkExt;
+        socket
+            .send(tokio_tungstenite::tungstenite::Message::Text(
+                serde_json::json!({"type": "play", "station_id": station.id}).to_string(),
+            ))
+            .await
+            .map_err(|e| failure(format!("ws play send failed: {e}")))?;
 
         app.wait_until(
             Duration::from_secs(10),
             Duration::from_millis(25),
             "runtime after ws play",
-            async |app| (live_runtimes(app) == 1).then_some(()),
+            async |app| (app.live_runtimes() == 1).then_some(()),
         )
         .await?;
-        assert_lifecycle_state(app, &station, true, 1).await?;
+        app.assert_lifecycle_state(&station, true, 1).await?;
         app.wait_title_playing(&station, "tone A").await?;
         Ok(())
     })
@@ -449,9 +192,9 @@ async fn ws_play_starts_without_prior_runtime() {
 #[serial]
 async fn rest_play_persists_started_and_broadcasts() {
     run_streamer_test(async |app| {
-        let station = station_with_tone(app, "REST play", "rest-play").await?;
+        let station = app.station_with_tone("REST play", "rest-play").await?;
         app.play(&station).await?;
-        assert_lifecycle_state(app, &station, true, 1).await?;
+        app.assert_lifecycle_state(&station, true, 1).await?;
         app.wait_title_playing(&station, "tone A").await?;
         Ok(())
     })
@@ -462,17 +205,15 @@ async fn rest_play_persists_started_and_broadcasts() {
 #[serial]
 async fn stop_removes_runtime_and_persists() {
     run_streamer_test(async |app| {
-        let station = station_with_tone(app, "Stop test", "stop-test").await?;
+        let station = app.station_with_tone("Stop test", "stop-test").await?;
         app.play(&station).await?;
         app.wait_playing(&station).await?;
-
         app.stop(&station).await?;
-        assert_lifecycle_state(app, &station, false, 0).await?;
-
+        app.assert_lifecycle_state(&station, false, 0).await?;
         // Idempotent: stopping again (no runtime) still answers success and
         // keeps the persisted state stopped.
         app.stop(&station).await?;
-        assert_lifecycle_state(app, &station, false, 0).await?;
+        app.assert_lifecycle_state(&station, false, 0).await?;
         Ok(())
     })
     .await
@@ -481,14 +222,14 @@ async fn stop_removes_runtime_and_persists() {
 #[tokio::test]
 #[serial]
 async fn restart_starts_and_keeps_desired_started() {
+    // Restart of a stopped station: restart implies the user wants it
+    // running, so it starts explicitly (no hidden get/create play).
     run_streamer_test(async |app| {
-        let station = station_with_tone(app, "Restart test", "restart-test").await?;
-        // Restart of a stopped station: restart implies the user wants it
-        // running, so it starts explicitly (no hidden get/create play).
+        let station = app.station_with_tone("Restart test", "restart-test").await?;
         app.restart(&station).await?;
-        assert_lifecycle_state(app, &station, true, 1).await?;
+        app.assert_lifecycle_state(&station, true, 1).await?;
         app.restart(&station).await?;
-        assert_lifecycle_state(app, &station, true, 1).await?;
+        app.assert_lifecycle_state(&station, true, 1).await?;
         app.wait_title_playing(&station, "tone A").await?;
         Ok(())
     })
@@ -499,18 +240,17 @@ async fn restart_starts_and_keeps_desired_started() {
 #[serial]
 async fn pause_keeps_desired_started() {
     run_streamer_test(async |app| {
-        let station = station_with_tone(app, "Pause test", "pause-test").await?;
+        let station = app.station_with_tone("Pause test", "pause-test").await?;
         app.play(&station).await?;
         app.wait_title_playing(&station, "tone A").await?;
         app.pause(&station).await?;
-        if !is_started(&app.db, &station).await? {
+        if !app.is_started(&station).await? {
             return Err(failure("pause must not persist stopped; desired state stays started"));
         }
         Ok(())
     })
     .await
 }
-
 #[tokio::test]
 #[serial]
 async fn idle_keeps_desired_started() {
@@ -521,7 +261,7 @@ async fn idle_keeps_desired_started() {
         app.disable_auto_fill(&station).await?;
         app.play(&station).await?;
         app.wait_stopped(&station).await?;
-        assert_lifecycle_state(app, &station, true, 1).await?;
+        app.assert_lifecycle_state(&station, true, 1).await?;
         Ok(())
     })
     .await
@@ -533,11 +273,11 @@ async fn server_shutdown_keeps_desired_started() {
     // Graceful shutdown of the runtimes is a technical stop, not a user
     // decision: it must not persist is_started=false.
     run_streamer_test(async |app| {
-        let station = station_with_tone(app, "Shutdown test", "shutdown-test").await?;
+        let station = app.station_with_tone("Shutdown test", "shutdown-test").await?;
         app.play(&station).await?;
         app.wait_playing(&station).await?;
         app.destroy_session().await?;
-        if !is_started(&app.db, &station).await? {
+        if !app.is_started(&station).await? {
             return Err(failure("server shutdown must not persist is_started=false"));
         }
         Ok(())
@@ -549,27 +289,26 @@ async fn server_shutdown_keeps_desired_started() {
 #[serial]
 async fn startup_restore_starts_only_started_stations() {
     run_streamer_test(async |app| {
-        let started_station = station_with_tone(app, "Restore on", "restore-on").await?;
+        let started_station = app.station_with_tone("Restore on", "restore-on").await?;
         let stopped_station = app.create_station("Restore off", "restore-off").await?;
         app.play(&started_station).await?;
         app.wait_playing(&started_station).await?;
-        if is_started(&app.db, &stopped_station).await? {
+        if app.is_started(&stopped_station).await? {
             return Err(failure("test setup must leave the second station stopped"));
         }
 
         // Backend restart: the fresh session restores started stations only.
-        app.destroy_session().await?;
-        app.spawn_session(false, false).await?;
-        if live_runtimes(app) != 1 {
+        app.restart_backend().await?;
+        if app.live_runtimes() != 1 {
             return Err(failure(format!(
                 "startup restore started {} stations, expected exactly 1",
-                live_runtimes(app)
+                app.live_runtimes()
             )));
         }
-        if !is_started(&app.db, &started_station).await? {
+        if !app.is_started(&started_station).await? {
             return Err(failure("restore lost the started station's desired state"));
         }
-        if is_started(&app.db, &stopped_station).await? {
+        if app.is_started(&stopped_station).await? {
             return Err(failure("restore flipped a stopped station to started"));
         }
         app.wait_title_playing(&started_station, "tone A").await?;
@@ -591,10 +330,9 @@ async fn startup_restore_continues_after_a_failing_station() {
             .bind(broken.id)
             .execute(&app.db)
             .await?;
-        set_desired_started(app, &healthy, true).await?;
+        app.set_desired_started(&healthy, true).await?;
 
-        app.destroy_session().await?;
-        app.spawn_session(false, false).await?;
+        app.restart_backend().await?;
         let runtimes: Vec<Arc<StationStreamer>> = app.session().streamers.lock().unwrap().values().cloned().collect();
         if runtimes.len() != 1 {
             return Err(failure(format!(
@@ -624,12 +362,12 @@ async fn startup_restore_rechecks_desired_state_under_the_lock() {
     // re-check B under B's lock and skip it — `is_started=false` must never
     // end up with a live runtime.
     run_http_streamer_test(async |app| {
-        let a = station_with_tone(app, "Recheck aaa", "recheck-a").await?;
-        let b = station_with_tone(app, "Recheck bbb", "recheck-b").await?;
-        set_desired_started(app, &a, true).await?;
-        set_desired_started(app, &b, true).await?;
+        let a = app.station_with_tone("Recheck aaa", "recheck-a").await?;
+        let b = app.station_with_tone("Recheck bbb", "recheck-b").await?;
+        app.set_desired_started(&a, true).await?;
+        app.set_desired_started(&b, true).await?;
 
-        let lifecycle = Arc::clone(&app.session().lifecycle);
+        let lifecycle = session_hooks(app);
         let hooks = lifecycle.test_hooks();
         let _guard = LifecycleHookGuard { hooks };
         hooks.before_runtime_create.arm();
@@ -649,7 +387,7 @@ async fn startup_restore_rechecks_desired_state_under_the_lock() {
 
         // Concurrent Stop for B wins the race: B's desired state flips to
         // stopped while the restore still holds A's lock.
-        set_desired_started(app, &b, false).await?;
+        app.set_desired_started(&b, false).await?;
 
         hooks.before_runtime_create.release();
         restore_task
@@ -658,8 +396,8 @@ async fn startup_restore_rechecks_desired_state_under_the_lock() {
 
         // Station A was restored and is playing; station B was stopped while
         // the restore was waiting on A's lock and must NOT have a runtime.
-        assert_lifecycle_state(app, &a, true, 1).await?;
-        if is_started(&app.db, &b).await? {
+        app.assert_lifecycle_state(&a, true, 1).await?;
+        if app.is_started(&b).await? {
             return Err(failure("the concurrent stop of station B did not persist"));
         }
         if app.session().streamers.lock().unwrap().contains_key(&b.id) {
@@ -679,15 +417,15 @@ async fn delete_active_station_removes_runtime_and_record() {
     // the station row — no orphan runtime may keep broadcasting after the
     // station is gone, and a backend restart must not resurrect it.
     run_streamer_test(async |app| {
-        let station = station_with_tone(app, "Delete test", "delete-test").await?;
+        let station = app.station_with_tone("Delete test", "delete-test").await?;
         app.play(&station).await?;
         app.wait_title_playing(&station, "tone A").await?;
-        assert_lifecycle_state(app, &station, true, 1).await?;
+        app.assert_lifecycle_state(&station, true, 1).await?;
 
         let response = app.session().delete(&format!("/api/stations/{}", station.id)).await;
         app.session().expect("station delete", response, 204)?;
 
-        if live_runtimes(app) != 0 {
+        if app.live_runtimes() != 0 {
             return Err(failure("delete left a live runtime behind"));
         }
         let row: Option<bool> = sqlx::query_scalar("SELECT is_started FROM stations WHERE id = $1")
@@ -699,9 +437,8 @@ async fn delete_active_station_removes_runtime_and_record() {
         }
 
         // A backend restart must not restore a deleted station.
-        app.destroy_session().await?;
-        app.spawn_session(false, false).await?;
-        if live_runtimes(app) != 0 {
+        app.restart_backend().await?;
+        if app.live_runtimes() != 0 {
             return Err(failure("backend restart resurrected a deleted station's runtime"));
         }
         Ok(())
@@ -716,15 +453,15 @@ async fn subscribe_stopped_station_with_queue_receives_snapshot() {
     // stopped status AND the current queue (read-only, straight from the
     // database) without creating a runtime or changing the desired state.
     run_http_streamer_test(async |app| {
-        let station = station_with_tone(app, "Stopped with queue", "stopped-queue").await?;
-        if live_runtimes(app) != 0 {
+        let station = app.station_with_tone("Stopped with queue", "stopped-queue").await?;
+        if app.live_runtimes() != 0 {
             return Err(failure("test setup must leave the station without a runtime"));
         }
 
-        let mut inbox = WsInbox::new(ws_subscribe(app, &station).await?);
+        let mut inbox = WsInbox::subscribe(app, &station).await?;
         inbox.wait_for_status("stopped status", |data| data["playing"] == false).await?;
         inbox.wait_for_queue_titles("queue snapshot", &["tone A"]).await?;
-        assert_lifecycle_state(app, &station, false, 0).await?;
+        app.assert_lifecycle_state(&station, false, 0).await?;
         Ok(())
     })
     .await
@@ -738,17 +475,17 @@ async fn subscribe_started_station_without_runtime_receives_error_and_queue() {
     // explicit error (not a legal stopped state) AND the current queue
     // (read-only DB snapshot) within a bounded time.
     run_http_streamer_test(async |app| {
-        let station = station_with_tone(app, "Started no runtime", "started-no-runtime").await?;
-        set_desired_started(app, &station, true).await?;
+        let station = app.station_with_tone("Started no runtime", "started-no-runtime").await?;
+        app.set_desired_started(&station, true).await?;
 
-        let mut inbox = WsInbox::new(ws_subscribe(app, &station).await?);
+        let mut inbox = WsInbox::subscribe(app, &station).await?;
         inbox
             .wait_for_error("explicit error for a started station without runtime", Some(station.id))
             .await?;
         inbox
             .wait_for_queue_titles("queue snapshot for a started station without runtime", &["tone A"])
             .await?;
-        assert_lifecycle_state(app, &station, true, 0).await?;
+        app.assert_lifecycle_state(&station, true, 0).await?;
         Ok(())
     })
     .await
@@ -763,17 +500,17 @@ async fn subscribe_stopped_then_play_resyncs_runtime_status() {
     // The initial snapshot was sent without a runtime, so the first runtime
     // attach is a full resync, never a skip.
     run_http_streamer_test(async |app| {
-        let station = station_with_tone(app, "Subscribe then play", "subscribe-play").await?;
-        if live_runtimes(app) != 0 {
+        let station = app.station_with_tone("Subscribe then play", "subscribe-play").await?;
+        if app.live_runtimes() != 0 {
             return Err(failure("test setup must leave the station without a runtime"));
         }
 
-        let mut inbox = WsInbox::new(ws_subscribe(app, &station).await?);
+        let mut inbox = WsInbox::subscribe(app, &station).await?;
         inbox
             .wait_for_status("initial stopped status", |data| data["playing"] == false)
             .await?;
         inbox.wait_for_queue_titles("initial queue snapshot", &["tone A"]).await?;
-        assert_lifecycle_state(app, &station, false, 0).await?;
+        app.assert_lifecycle_state(&station, false, 0).await?;
 
         // Play starts the runtime; the SAME connection must receive the new
         // runtime's status + queue without re-subscribing. The runtime
@@ -785,7 +522,7 @@ async fn subscribe_stopped_then_play_resyncs_runtime_status() {
             .wait_for_status("runtime status after play", |data| data["playing"] == true)
             .await?;
         inbox.wait_for_queue_titles("queue after play", &["tone A"]).await?;
-        assert_lifecycle_state(app, &station, true, 1).await?;
+        app.assert_lifecycle_state(&station, true, 1).await?;
         app.wait_title_playing(&station, "tone A").await?;
         Ok(())
     })
@@ -803,11 +540,11 @@ async fn restart_resyncs_status_and_queue_for_subscriber() {
     // `playing == true` State after the restart can only come from the
     // attach snapshot — a queue-only re-attach fails this deterministically.
     run_http_streamer_test(async |app| {
-        let station = station_with_tone(app, "Restart resync", "restart-resync").await?;
+        let station = app.station_with_tone("Restart resync", "restart-resync").await?;
         app.play(&station).await?;
         app.wait_title_playing(&station, "tone A").await?;
 
-        let mut inbox = WsInbox::new(ws_subscribe(app, &station).await?);
+        let mut inbox = WsInbox::subscribe(app, &station).await?;
         inbox.wait_for_status("initial status", |data| data["playing"] == true).await?;
         inbox.wait_for_queue_titles("initial queue", &["tone A"]).await?;
 
@@ -818,7 +555,7 @@ async fn restart_resyncs_status_and_queue_for_subscriber() {
             .wait_for_status("fresh status after restart", |data| data["playing"] == true)
             .await?;
         inbox.wait_for_queue_titles("fresh queue after restart", &["tone A"]).await?;
-        assert_lifecycle_state(app, &station, true, 1).await?;
+        app.assert_lifecycle_state(&station, true, 1).await?;
         app.wait_title_playing(&station, "tone A").await?;
         Ok(())
     })
@@ -834,20 +571,20 @@ async fn subscribe_started_without_runtime_then_stop_sends_stopped_status() {
     // replaced by a legal stopped status + queue — the no-runtime watcher
     // reacts to `is_started` changes, not only to runtimes appearing.
     run_http_streamer_test(async |app| {
-        let station = station_with_tone(app, "No-runtime stop", "no-runtime-stop").await?;
-        set_desired_started(app, &station, true).await?;
+        let station = app.station_with_tone("No-runtime stop", "no-runtime-stop").await?;
+        app.set_desired_started(&station, true).await?;
 
-        let mut inbox = WsInbox::new(ws_subscribe(app, &station).await?);
+        let mut inbox = WsInbox::subscribe(app, &station).await?;
         inbox.wait_for_error("explicit no-runtime error", Some(station.id)).await?;
         inbox.wait_for_queue_titles("no-runtime queue snapshot", &["tone A"]).await?;
-        assert_lifecycle_state(app, &station, true, 0).await?;
+        app.assert_lifecycle_state(&station, true, 0).await?;
 
         app.stop(&station).await?;
         inbox
             .wait_for_status("stopped status after stop", |data| data["playing"] == false)
             .await?;
         inbox.wait_for_queue_titles("queue after stop", &["tone A"]).await?;
-        assert_lifecycle_state(app, &station, false, 0).await?;
+        app.assert_lifecycle_state(&station, false, 0).await?;
         Ok(())
     })
     .await
@@ -861,9 +598,9 @@ async fn delete_while_subscribed_without_runtime_ends_forwarding() {
     // the same explicit "unknown station" error as a Subscribe to an
     // unknown station.
     run_http_streamer_test(async |app| {
-        let station = station_with_tone(app, "No-runtime delete", "no-runtime-delete").await?;
+        let station = app.station_with_tone("No-runtime delete", "no-runtime-delete").await?;
 
-        let mut inbox = WsInbox::new(ws_subscribe(app, &station).await?);
+        let mut inbox = WsInbox::subscribe(app, &station).await?;
         inbox
             .wait_for_status("initial stopped status", |data| data["playing"] == false)
             .await?;
@@ -890,12 +627,12 @@ async fn play_never_emits_transient_no_runtime_error() {
     // window deterministically — an observer that read raw state would
     // emit the error here.
     run_http_streamer_test(async |app| {
-        let station = station_with_tone(app, "Play no transient", "play-no-transient").await?;
+        let station = app.station_with_tone("Play no transient", "play-no-transient").await?;
         let lifecycle = session_hooks(app);
         let hooks = lifecycle.test_hooks();
         let _guard = LifecycleHookGuard { hooks };
 
-        let mut inbox = WsInbox::new(ws_subscribe(app, &station).await?);
+        let mut inbox = WsInbox::subscribe(app, &station).await?;
         inbox.wait_for_status("stopped status", |data| data["playing"] == false).await?;
         inbox.wait_for_queue_titles("initial queue", &["tone A"]).await?;
 
@@ -923,7 +660,7 @@ async fn play_never_emits_transient_no_runtime_error() {
         inbox
             .assert_no_error(Duration::from_secs(1), "no no-runtime error during play", Some(station.id))
             .await?;
-        assert_lifecycle_state(app, &station, true, 1).await?;
+        app.assert_lifecycle_state(&station, true, 1).await?;
         Ok(())
     })
     .await
@@ -939,7 +676,7 @@ async fn restart_never_emits_transient_no_runtime_error() {
     // finished. Parking the restart between persistence/notification and
     // runtime creation widens the gap deterministically.
     run_http_streamer_test(async |app| {
-        let station = station_with_tone(app, "Restart no transient", "restart-no-transient").await?;
+        let station = app.station_with_tone("Restart no transient", "restart-no-transient").await?;
         app.play(&station).await?;
         app.wait_title_playing(&station, "tone A").await?;
 
@@ -947,7 +684,7 @@ async fn restart_never_emits_transient_no_runtime_error() {
         let hooks = lifecycle.test_hooks();
         let _guard = LifecycleHookGuard { hooks };
 
-        let mut inbox = WsInbox::new(ws_subscribe(app, &station).await?);
+        let mut inbox = WsInbox::subscribe(app, &station).await?;
         inbox.wait_for_status("initial status", |data| data["playing"] == true).await?;
         inbox.wait_for_queue_titles("initial queue", &["tone A"]).await?;
 
@@ -975,7 +712,7 @@ async fn restart_never_emits_transient_no_runtime_error() {
         inbox
             .assert_no_error(Duration::from_secs(1), "no no-runtime error during restart", Some(station.id))
             .await?;
-        assert_lifecycle_state(app, &station, true, 1).await?;
+        app.assert_lifecycle_state(&station, true, 1).await?;
         Ok(())
     })
     .await
@@ -989,20 +726,22 @@ async fn stopped_subscriber_receives_live_queue_update() {
     // fetch a fresh read-only DB snapshot. The enqueue goes through the
     // real API handler and must not create a runtime.
     run_http_streamer_test(async |app| {
-        let station = station_with_tone(app, "Stopped queue live", "stopped-queue-live").await?;
-        if live_runtimes(app) != 0 {
+        let station = app.station_with_tone("Stopped queue live", "stopped-queue-live").await?;
+        if app.live_runtimes() != 0 {
             return Err(failure("test setup must leave the station without a runtime"));
         }
 
-        let mut inbox = WsInbox::new(ws_subscribe(app, &station).await?);
+        let mut inbox = WsInbox::subscribe(app, &station).await?;
         inbox.wait_for_status("stopped status", |data| data["playing"] == false).await?;
         inbox.wait_for_queue_titles("initial queue", &["tone A"]).await?;
-        assert_lifecycle_state(app, &station, false, 0).await?;
+        app.assert_lifecycle_state(&station, false, 0).await?;
 
-        add_tone_to_station(app, &station, "tone B", "stopped-queue-live-b", 440.0).await?;
+        let song_b = app.insert_tone("tone B", "stopped-queue-live-b", 440.0, 10).await?;
+        app.assign(&song_b, &station).await?;
+        app.enqueue(&station, &[song_b.id]).await?;
 
         inbox.wait_for_queue_titles("queue after enqueue", &["tone A", "tone B"]).await?;
-        assert_lifecycle_state(app, &station, false, 0).await?;
+        app.assert_lifecycle_state(&station, false, 0).await?;
         Ok(())
     })
     .await
@@ -1018,7 +757,7 @@ async fn queue_mutation_serializes_with_inflight_play() {
     // insert a stale-queue runtime) nor finish before Play does. Old code
     // saw "no runtime" immediately and never contended on the lock.
     run_http_streamer_test(async |app| {
-        let station = station_with_tone(app, "Queue vs Play", "queue-vs-play").await?;
+        let station = app.station_with_tone("Queue vs Play", "queue-vs-play").await?;
         let song_b = app.insert_tone("tone B", "queue-vs-play-b.wav", 440.0, 10).await?;
         app.assign(&song_b, &station).await?;
 
@@ -1026,7 +765,7 @@ async fn queue_mutation_serializes_with_inflight_play() {
         let hooks = lifecycle.test_hooks();
         let _guard = LifecycleHookGuard { hooks };
 
-        let mut inbox = WsInbox::new(ws_subscribe(app, &station).await?);
+        let mut inbox = WsInbox::subscribe(app, &station).await?;
         inbox.wait_for_status("stopped status", |data| data["playing"] == false).await?;
         inbox.wait_for_queue_titles("initial queue", &["tone A"]).await?;
 
@@ -1080,12 +819,11 @@ async fn queue_mutation_serializes_with_inflight_play() {
         inbox
             .wait_for_queue_titles("queue after play and enqueue", &["tone A", "tone B"])
             .await?;
-        assert_lifecycle_state(app, &station, true, 1).await?;
+        app.assert_lifecycle_state(&station, true, 1).await?;
         Ok(())
     })
     .await
 }
-
 #[tokio::test]
 #[serial]
 async fn subscribing_second_client_does_not_broadcast_queue_update() {
@@ -1095,11 +833,11 @@ async fn subscribing_second_client_does_not_broadcast_queue_update() {
     // after B confirmed its own snapshot proves the absence of the side
     // effect.
     run_http_streamer_test(async |app| {
-        let station = station_with_tone(app, "Two subscribers", "two-subscribers").await?;
+        let station = app.station_with_tone("Two subscribers", "two-subscribers").await?;
         app.play(&station).await?;
         app.wait_title_playing(&station, "tone A").await?;
 
-        let mut a = WsInbox::new(ws_subscribe(app, &station).await?);
+        let mut a = WsInbox::subscribe(app, &station).await?;
         a.wait_for_status("A initial status", |data| data["playing"] == true).await?;
         a.wait_for_queue_titles("A initial queue", &["tone A"]).await?;
         // A's inbox is clean by itself (both initial messages consumed);
@@ -1108,7 +846,7 @@ async fn subscribing_second_client_does_not_broadcast_queue_update() {
         a.assert_no_queue_update(Duration::from_millis(700), "A to stay silent before B joins")
             .await?;
 
-        let mut b = WsInbox::new(ws_subscribe(app, &station).await?);
+        let mut b = WsInbox::subscribe(app, &station).await?;
         b.wait_for_status("B initial status", |data| data["playing"] == true).await?;
         b.wait_for_queue_titles("B initial queue", &["tone A"]).await?;
 
@@ -1133,7 +871,7 @@ async fn concurrent_play_then_stop_serializes_to_stopped() {
         let lifecycle = session_hooks(app);
         let hooks = lifecycle.test_hooks();
         let _guard = LifecycleHookGuard { hooks };
-        let station = station_with_tone(app, "Race play-stop", "race-play-stop").await?;
+        let station = app.station_with_tone("Race play-stop", "race-play-stop").await?;
 
         // Play parks after persisting `started`, while holding the lock.
         hooks.before_runtime_create.arm();
@@ -1163,7 +901,7 @@ async fn concurrent_play_then_stop_serializes_to_stopped() {
         hooks.before_stop.release();
         expect_command_status(stop_task, "stop", 200).await?;
 
-        assert_lifecycle_state(app, &station, false, 0).await?;
+        app.assert_lifecycle_state(&station, false, 0).await?;
         Ok(())
     })
     .await
@@ -1177,7 +915,7 @@ async fn concurrent_stop_then_play_serializes_to_started() {
     // serialized transition: desired state `started` and exactly one live
     // runtime.
     run_http_streamer_test(async |app| {
-        let station = station_with_tone(app, "Race stop-play", "race-stop-play").await?;
+        let station = app.station_with_tone("Race stop-play", "race-stop-play").await?;
         app.play(&station).await?;
         app.wait_title_playing(&station, "tone A").await?;
 
@@ -1213,7 +951,7 @@ async fn concurrent_stop_then_play_serializes_to_started() {
         hooks.before_runtime_create.release();
         expect_command_status(play_task, "play", 200).await?;
 
-        assert_lifecycle_state(app, &station, true, 1).await?;
+        app.assert_lifecycle_state(&station, true, 1).await?;
         app.wait_title_playing(&station, "tone A").await?;
         Ok(())
     })
@@ -1229,7 +967,7 @@ async fn committed_play_survives_caller_cancellation_after_persistence() {
     // must not stop the transition: the operation keeps the lifecycle
     // lock, creates the runtime and only then releases the station.
     run_http_streamer_test(async |app| {
-        let station = station_with_tone(app, "Committed play", "committed-play").await?;
+        let station = app.station_with_tone("Committed play", "committed-play").await?;
         let lifecycle = session_hooks(app);
         let hooks = lifecycle.test_hooks();
         let _guard = LifecycleHookGuard { hooks };
@@ -1239,7 +977,7 @@ async fn committed_play_survives_caller_cancellation_after_persistence() {
         hooks.before_runtime_create.arm();
         let play_task = spawn_stream_command(app, station.id, "play");
         wait_notified(hooks.before_runtime_create.entered(), "play to reach the runtime-create hook").await?;
-        assert_lifecycle_state(app, &station, true, 0).await?;
+        app.assert_lifecycle_state(&station, true, 0).await?;
 
         // The request caller dies mid-operation: the committed play must
         // keep the guard and still bring up the runtime.
@@ -1261,7 +999,7 @@ async fn committed_play_survives_caller_cancellation_after_persistence() {
         next_transition
             .await
             .expect("the next transition must proceed once the committed play finished");
-        assert_lifecycle_state(app, &station, true, 1).await?;
+        app.assert_lifecycle_state(&station, true, 1).await?;
         app.wait_title_playing(&station, "tone A").await?;
         Ok(())
     })
@@ -1277,7 +1015,7 @@ async fn committed_restart_survives_caller_cancellation_after_old_runtime_shutdo
     // kills the caller: the tail must keep the lock, start the fresh
     // runtime and only then release the station.
     run_http_streamer_test(async |app| {
-        let station = station_with_tone(app, "Committed restart", "committed-restart").await?;
+        let station = app.station_with_tone("Committed restart", "committed-restart").await?;
         app.play(&station).await?;
         app.wait_title_playing(&station, "tone A").await?;
 
@@ -1291,7 +1029,7 @@ async fn committed_restart_survives_caller_cancellation_after_old_runtime_shutdo
         hooks.before_runtime_create.arm();
         let restart_task = spawn_stream_command(app, station.id, "restart");
         wait_notified(hooks.before_runtime_create.entered(), "restart to reach the runtime-create hook").await?;
-        assert_lifecycle_state(app, &station, true, 0).await?;
+        app.assert_lifecycle_state(&station, true, 0).await?;
 
         // The request caller dies mid-tail: the committed restart must
         // keep the guard and still start the fresh runtime.
@@ -1315,7 +1053,7 @@ async fn committed_restart_survives_caller_cancellation_after_old_runtime_shutdo
         next_transition
             .await
             .expect("the next transition must proceed once the committed restart finished");
-        assert_lifecycle_state(app, &station, true, 1).await?;
+        app.assert_lifecycle_state(&station, true, 1).await?;
         app.wait_title_playing(&station, "tone A").await?;
         Ok(())
     })
@@ -1329,7 +1067,7 @@ async fn restore_does_not_modify_updated_at() {
     // startup restore re-creates the persisted intent, it does not persist
     // it again (no UPDATE, no `updated_at` bump).
     run_streamer_test(async |app| {
-        let station = station_with_tone(app, "Restore updated_at", "restore-updated-at").await?;
+        let station = app.station_with_tone("Restore updated_at", "restore-updated-at").await?;
         app.play(&station).await?;
         app.wait_playing(&station).await?;
         let before: chrono::DateTime<chrono::Utc> = sqlx::query_scalar("SELECT updated_at FROM stations WHERE id = $1")
@@ -1338,8 +1076,7 @@ async fn restore_does_not_modify_updated_at() {
             .await?;
 
         // Backend restart: the fresh session restores started stations.
-        app.destroy_session().await?;
-        app.spawn_session(false, false).await?;
+        app.restart_backend().await?;
         app.wait_title_playing(&station, "tone A").await?;
 
         let after: chrono::DateTime<chrono::Utc> = sqlx::query_scalar("SELECT updated_at FROM stations WHERE id = $1")
@@ -1349,7 +1086,7 @@ async fn restore_does_not_modify_updated_at() {
         if before != after {
             return Err(failure(format!("restore modified updated_at: before {before}, after {after}")));
         }
-        if !is_started(&app.db, &station).await? {
+        if !app.is_started(&station).await? {
             return Err(failure("restore lost the desired started state"));
         }
         Ok(())
@@ -1371,7 +1108,7 @@ async fn stopped_subscriber_receives_queue_update_after_song_unassign() {
         app.assign(&song, &station).await?;
         app.enqueue(&station, &[song.id]).await?;
 
-        let mut inbox = WsInbox::new(ws_subscribe(app, &station).await?);
+        let mut inbox = WsInbox::subscribe(app, &station).await?;
         inbox.wait_for_status("stopped status", |data| data["playing"] == false).await?;
         inbox.wait_for_queue_titles("queue with the assigned song", &["tone A"]).await?;
 
@@ -1382,7 +1119,7 @@ async fn stopped_subscriber_receives_queue_update_after_song_unassign() {
         app.session().expect("song unassign", response, 204)?;
 
         inbox.wait_for_queue_titles("queue after unassign", &[]).await?;
-        assert_lifecycle_state(app, &station, false, 0).await?;
+        app.assert_lifecycle_state(&station, false, 0).await?;
         Ok(())
     })
     .await
@@ -1409,8 +1146,8 @@ async fn global_song_delete_fans_out_to_affected_stopped_subscribers() {
         app.enqueue(&station_a, &[song.id]).await?;
         app.enqueue(&station_b, &[song.id]).await?;
 
-        let mut inbox_a = WsInbox::new(ws_subscribe(app, &station_a).await?);
-        let mut inbox_b = WsInbox::new(ws_subscribe(app, &station_b).await?);
+        let mut inbox_a = WsInbox::subscribe(app, &station_a).await?;
+        let mut inbox_b = WsInbox::subscribe(app, &station_b).await?;
         inbox_a.wait_for_status("stopped status A", |data| data["playing"] == false).await?;
         inbox_a.wait_for_queue_titles("initial queue A", &["shared tone"]).await?;
         inbox_b.wait_for_status("stopped status B", |data| data["playing"] == false).await?;
@@ -1421,8 +1158,8 @@ async fn global_song_delete_fans_out_to_affected_stopped_subscribers() {
 
         inbox_a.wait_for_queue_titles("queue A after global delete", &[]).await?;
         inbox_b.wait_for_queue_titles("queue B after global delete", &[]).await?;
-        assert_lifecycle_state(app, &station_a, false, 0).await?;
-        assert_lifecycle_state(app, &station_b, false, 0).await?;
+        app.assert_lifecycle_state(&station_a, false, 0).await?;
+        app.assert_lifecycle_state(&station_b, false, 0).await?;
         Ok(())
     })
     .await
