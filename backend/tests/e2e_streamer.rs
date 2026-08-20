@@ -33,6 +33,129 @@ async fn visible_upcoming(app: &StreamerTestApp, station: &TestStation) -> Resul
     Ok(streamer_common::visible_upcoming(&status, &queue))
 }
 
+/// Database query for the number of upcoming queue rows past the current song index.
+async fn upcoming_rows(db: &sqlx::PgPool, station: &TestStation) -> i64 {
+    sqlx::query_scalar(
+        "SELECT COUNT(*) FROM station_queue WHERE station_id = $1 AND position > \
+         (SELECT COALESCE(current_song_index, 0) FROM stations WHERE id = $1)",
+    )
+    .bind(station.id)
+    .fetch_one(db)
+    .await
+    .unwrap_or(0)
+}
+
+/// Standard 3-tone library used by Auto-DJ test scenarios.
+const STANDARD_TONES: [(f32, &str); 3] = [(330.0, "tone A"), (440.0, "tone B"), (550.0, "tone C")];
+
+/// Creates an Auto-DJ station with transition_mode="off", uploads tones, and optionally enqueues the first N tracks.
+async fn setup_auto_dj_station(
+    app: &StreamerTestApp,
+    name: &str,
+    slug: &str,
+    prefix: &str,
+    tones: &[(f32, &str)],
+    tone_seconds: u32,
+    initial_queue_count: usize,
+) -> Result<TestStation, Box<dyn std::error::Error>> {
+    let station = app
+        .create_station_with(name, slug, serde_json::json!({"transition_mode": "off"}))
+        .await?;
+    let songs = app.add_tones_to_library(&station, prefix, tones, tone_seconds).await?;
+    if initial_queue_count > 0 {
+        let to_queue: Vec<_> = songs.iter().take(initial_queue_count).map(|s| s.id).collect();
+        app.enqueue(&station, &to_queue).await?;
+    }
+    Ok(station)
+}
+
+/// Action executed during a queue mutation scenario.
+enum QueueMutationAction {
+    ReorderOnly,
+    ReorderThenRemoveStaged,
+}
+
+/// Reusable scenario runner for queue reorder / removal integration tests.
+struct QueueMutationScenario {
+    name: &'static str,
+    slug: &'static str,
+    action: QueueMutationAction,
+}
+
+impl QueueMutationScenario {
+    async fn run(self, app: &StreamerTestApp) -> Result<(), Box<dyn std::error::Error>> {
+        let name = self.name;
+        let station = app
+            .create_station_with(self.name, self.slug, serde_json::json!({"transition_mode": "off"}))
+            .await?;
+        app.disable_auto_fill(&station).await?;
+        let tones = [(330.0, "tone A"), (440.0, "tone B"), (550.0, "tone C"), (880.0, "tone X")];
+        let songs = app.add_tones_to_library(&station, self.slug, &tones, 10).await?;
+
+        let initial = app.enqueue(&station, &[songs[0].id, songs[1].id, songs[2].id]).await?;
+        let a_id = initial[0].id.clone();
+        let b_id = initial[1].id.clone();
+        let c_id = initial[2].id.clone();
+        app.restart(&station).await?;
+        let url = format!("http://127.0.0.1:{}/{}.mp3", app.port, self.slug);
+        app.assert_mount_serves_audio(&url).await?;
+
+        let playing = app.wait_title_playing(&station, "tone A").await?;
+        if playing.song_index != 0 {
+            return Err(failure(format!("{name}: unexpected start index: {playing:?}")));
+        }
+
+        let added = app.enqueue(&station, &[songs[3].id]).await?;
+        let x_id = added[0].id.clone();
+        app.reorder(&station, &[&a_id, &x_id, &b_id, &c_id]).await?;
+
+        match self.action {
+            QueueMutationAction::ReorderOnly => {
+                let next = app
+                    .wait_status(&station, &format!("{name}: moved track next"), |status| {
+                        status.playing && status.title != "tone A"
+                    })
+                    .await?;
+                if next.title != "tone X" {
+                    return Err(failure(format!("{name}: moved track did not play next: {next:?}")));
+                }
+                if next.song_index != 1 {
+                    return Err(failure(format!("{name}: moved track played at wrong index: {next:?}")));
+                }
+                let then_b = app.wait_title_playing(&station, "tone B").await?;
+                if then_b.song_index != 2 {
+                    return Err(failure(format!("{name}: queue order broken after moved track: {then_b:?}")));
+                }
+                let then_c = app.wait_title_playing(&station, "tone C").await?;
+                if then_c.song_index != 3 {
+                    return Err(failure(format!("{name}: queue order broken at tail: {then_c:?}")));
+                }
+                app.wait_stopped(&station).await?;
+            }
+            QueueMutationAction::ReorderThenRemoveStaged => {
+                app.remove_queue_item(&station, &x_id).await?;
+                let next = app
+                    .wait_status(&station, &format!("{name}: tone B after removal"), |status| {
+                        status.playing && status.title != "tone A"
+                    })
+                    .await?;
+                if next.title != "tone B" {
+                    return Err(failure(format!("{name}: removed track played next instead of tone B: {next:?}")));
+                }
+                if next.song_index != 1 {
+                    return Err(failure(format!("{name}: removed track played at wrong index: {next:?}")));
+                }
+                let then_c = app.wait_title_playing(&station, "tone C").await?;
+                if then_c.song_index != 2 {
+                    return Err(failure(format!("{name}: queue order broken at tail: {then_c:?}")));
+                }
+                app.wait_stopped(&station).await?;
+            }
+        }
+        Ok(())
+    }
+}
+
 #[tokio::test]
 #[serial]
 async fn managed_icecast_serves_gstreamer_encoded_mp3() {
@@ -255,44 +378,27 @@ async fn crossfade_naturally_promotes_each_queued_track_once() {
 #[serial]
 async fn manual_auto_dj_trigger_keeps_an_exhausted_memory_queue_playing() {
     run_streamer_test(async |app| {
-        let station = app
-            .create_station_with("Auto DJ trigger", "auto-dj-trigger", serde_json::json!({"transition_mode": "off"}))
-            .await?;
-        // AutoDJ is enabled by default for new stations and would refill the
-        // queue as soon as playback starts, before the manual trigger below.
-        // Disable it so the trigger is the only fill path under test.
+        let station = setup_auto_dj_station(app, "Auto DJ trigger", "auto-dj-trigger", "dj", &STANDARD_TONES, 10, 1).await?;
         app.disable_auto_fill(&station).await?;
-        let tones = [(330.0, "tone A"), (440.0, "tone B"), (550.0, "tone C")];
-        let songs = app.add_tones_to_library(&station, "dj", &tones, 10).await?;
-
-        // Queue only the first track; the other two stay in the station library
-        // as Auto DJ picks.
-        app.enqueue(&station, &[songs[0].id]).await?;
         app.restart(&station).await?;
         app.assert_station_serves_audio(&station).await?;
-
         app.wait_title_playing(&station, "tone A").await?;
 
-        // Enable Auto DJ and fill the queue manually. The trigger must refresh
-        // the live streamer's in-memory queue, not just the DB.
         app.enable_auto_fill(&station, 2, false).await?;
         app.trigger_auto_fill(&station).await?;
 
-        // The streamer must now see 3 tracks (1 queued + 2 Auto DJ picks).
         let synced = app.wait_status(&station, "queue sync", |status| status.total == 3).await?;
         if synced.song_index != 0 {
-            return Err(failure(format!("auto-fill sync moved the cursor: {synced:?}")));
+            return Err(failure(format!("auto-fill sync moved cursor: {synced:?}")));
         }
 
-        // The queued track ends: the controller must reload the queue from the
-        // DB and keep playing an Auto DJ pick instead of stopping the radio.
         let advanced = app
             .wait_status(&station, "Auto DJ pick after exhaustion", |status| {
                 status.playing && status.title != "tone A"
             })
             .await?;
         if advanced.song_index != 1 {
-            return Err(failure(format!("auto-fill pick played at the wrong index: {advanced:?}")));
+            return Err(failure(format!("auto-fill pick played at wrong index: {advanced:?}")));
         }
         Ok(())
     })
@@ -307,30 +413,16 @@ async fn play_with_empty_queue_fills_from_auto_dj_and_starts() {
     // of songs. play() must give Auto DJ one chance to fill the queue, reload
     // it, and start broadcasting.
     run_streamer_test(async |app| {
-        let station = app
-            .create_station_with(
-                "Empty play Auto DJ",
-                "empty-play-autodj",
-                serde_json::json!({"transition_mode": "off"}),
-            )
-            .await?;
-        // Songs live only in the station library; the queue itself stays empty.
-        let tones = [(330.0, "tone A"), (440.0, "tone B"), (550.0, "tone C")];
-        app.add_tones_to_library(&station, "empty-dj", &tones, 4).await?;
-
-        // Enable Auto DJ before starting; play must trigger the fill itself.
+        let station = setup_auto_dj_station(app, "Empty play Auto DJ", "empty-play-autodj", "empty-dj", &STANDARD_TONES, 4, 0).await?;
         app.enable_auto_fill(&station, 2, false).await?;
         app.play(&station).await?;
 
-        // The queue must be populated by Auto DJ and playback must start
-        // instead of staying Stopped. songs_ahead=2 means the upcoming window
-        // holds two picks: three rows total with the current track.
         let playing = app
-            .wait_status(&station, "play on an empty queue", |status| status.playing && status.total == 3)
+            .wait_status(&station, "play on empty queue", |status| status.playing && status.total == 3)
             .await
-            .map_err(|error| failure(format!("streamer stayed stopped after play on an empty queue: {error}")))?;
+            .map_err(|e| failure(format!("streamer stayed stopped after play on empty queue: {e}")))?;
         if !["tone A", "tone B", "tone C"].contains(&playing.title.as_str()) {
-            return Err(failure(format!("Auto DJ pick has an unexpected title: {playing:?}")));
+            return Err(failure(format!("Auto DJ pick has unexpected title: {playing:?}")));
         }
         app.assert_station_serves_audio(&station).await?;
         Ok(())
@@ -345,40 +437,32 @@ async fn natural_queue_exhaustion_refills_from_auto_dj() {
     // behind it, the controller must give Auto DJ a chance to fill the queue
     // instead of stopping the radio for good.
     run_streamer_test(async |app| {
-        let station = app
-            .create_station_with(
-                "Natural exhaustion Auto DJ",
-                "natural-exhaustion-autodj",
-                serde_json::json!({"transition_mode": "off"}),
-            )
-            .await?;
-        let tones = [(330.0, "tone A"), (440.0, "tone B"), (550.0, "tone C")];
-        let songs = app.add_tones_to_library(&station, "exhaust-dj", &tones, 4).await?;
-
-        // Queue only the first track; the others stay in the station library
-        // as Auto DJ picks once the queue runs dry.
-        app.enqueue(&station, &[songs[0].id]).await?;
+        let station = setup_auto_dj_station(
+            app,
+            "Natural exhaustion Auto DJ",
+            "natural-exhaustion-autodj",
+            "exhaust-dj",
+            &STANDARD_TONES,
+            4,
+            1,
+        )
+        .await?;
         app.enable_auto_fill(&station, 2, false).await?;
         app.restart(&station).await?;
         app.assert_station_serves_audio(&station).await?;
-
         app.wait_title_playing(&station, "tone A").await?;
 
-        // tone A ends with nothing queued behind it: the controller must
-        // refill from Auto DJ and continue instead of stopping.
         let advanced = app
             .wait_status(&station, "refill after queue exhaustion", |status| {
                 status.playing && status.title != "tone A"
             })
             .await
-            .map_err(|error| failure(format!("playback stopped after queue exhaustion: {error}")))?;
-        // The queue must now hold the played track plus at least the two
-        // songs_ahead picks; the exact count can grow as later refills top up.
+            .map_err(|e| failure(format!("playback stopped after queue exhaustion: {e}")))?;
         if advanced.total < 3 {
-            return Err(failure(format!("Auto DJ refill did not populate the queue: {advanced:?}")));
+            return Err(failure(format!("Auto DJ refill did not populate queue: {advanced:?}")));
         }
         if advanced.song_index != 1 {
-            return Err(failure(format!("Auto DJ pick played at the wrong index: {advanced:?}")));
+            return Err(failure(format!("Auto DJ pick played at wrong index: {advanced:?}")));
         }
         Ok(())
     })
@@ -572,13 +656,6 @@ async fn mixed_queue_drain_keeps_playing_with_auto_dj_picks() {
     // though Auto DJ was enabled. Playback must roll from the manual tail
     // into Auto DJ picks and keep refilling across handovers.
     run_streamer_test(async |app| {
-        let station = app
-            .create_station_with(
-                "Mixed drain Auto DJ",
-                "mixed-drain-autodj",
-                serde_json::json!({"transition_mode": "off"}),
-            )
-            .await?;
         let tones = [
             (330.0, "tone A"),
             (440.0, "tone B"),
@@ -586,38 +663,28 @@ async fn mixed_queue_drain_keeps_playing_with_auto_dj_picks() {
             (660.0, "tone D"),
             (770.0, "tone E"),
         ];
-        let songs = app.add_tones_to_library(&station, "mixed-dj", &tones, 4).await?;
-
-        // Queue three manual songs; the last two stay in the library as
-        // Auto DJ picks.
-        app.enqueue(&station, &[songs[0].id, songs[1].id, songs[2].id]).await?;
+        let station = setup_auto_dj_station(app, "Mixed drain Auto DJ", "mixed-drain-autodj", "mixed-dj", &tones, 4, 3).await?;
         app.enable_auto_fill(&station, 2, false).await?;
         app.restart(&station).await?;
         app.assert_station_serves_audio(&station).await?;
 
-        // The manual songs play through one by one...
         app.wait_title_playing(&station, "tone A").await?;
         app.wait_title_playing(&station, "tone B").await?;
         app.wait_title_playing(&station, "tone C").await?;
 
-        // ...and when the manual tail ends the radio must roll into Auto DJ
-        // picks instead of stopping.
         let pick = app
             .wait_status(&station, "Auto DJ pick after manual drain", |status| {
                 status.playing && matches!(status.title.as_str(), "tone D" | "tone E")
             })
             .await
-            .map_err(|error| failure(format!("radio stopped after the manual queue drained: {error}")))?;
+            .map_err(|e| failure(format!("radio stopped after manual queue drained: {e}")))?;
         if pick.total < 4 {
-            return Err(failure(format!("Auto DJ did not refill past the manual tail: {pick:?}")));
+            return Err(failure(format!("Auto DJ did not refill past manual tail: {pick:?}")));
         }
-        let first_pick = pick.title.clone();
-        let second = if first_pick == "tone D" { "tone E" } else { "tone D" };
-        // The next handover must keep playing another Auto DJ pick, proving
-        // the refill keeps the queue alive across transitions.
+        let second = if pick.title == "tone D" { "tone E" } else { "tone D" };
         app.wait_title_playing(&station, second)
             .await
-            .map_err(|error| failure(format!("playback stopped between Auto DJ picks: {error}")))?;
+            .map_err(|e| failure(format!("playback stopped between Auto DJ picks: {e}")))?;
         Ok(())
     })
     .await
@@ -644,19 +711,6 @@ async fn auto_dj_keeps_songs_ahead_with_crossfade_handovers() {
         app.enable_auto_fill(&station, 4, true).await?;
         app.restart(&station).await?;
 
-        async fn upcoming_rows(db: &sqlx::PgPool, station: &TestStation) -> i64 {
-            sqlx::query_scalar(
-                "SELECT COUNT(*) FROM station_queue WHERE station_id = $1 AND position > \
-                 (SELECT COALESCE(current_song_index, 0) FROM stations WHERE id = $1)",
-            )
-            .bind(station.id)
-            .fetch_one(db)
-            .await
-            .unwrap_or(0)
-        }
-
-        // The queue starts empty: AutoDJ must seed it so the upcoming window
-        // holds songs_ahead picks (plus the row that becomes the current one).
         let first = app.wait_playing(&station).await?;
         let seeded = upcoming_rows(&app.db, &station).await;
         if seeded < 4 {
@@ -665,15 +719,12 @@ async fn auto_dj_keeps_songs_ahead_with_crossfade_handovers() {
             )));
         }
 
-        // After every handover the DB queue must be topped back up to the
-        // songs_ahead minimum — the player may consume one track per song but
-        // the upcoming window must never shrink below the configured floor.
         let mut last_index = 0u64;
         for _ in 0..10 {
             let status = app
                 .wait_advance(&station, last_index)
                 .await
-                .map_err(|error| failure(format!("playback stalled between handovers: {error}")))?;
+                .map_err(|e| failure(format!("playback stalled between handovers: {e}")))?;
             last_index = status.song_index;
             let upcoming = upcoming_rows(&app.db, &station).await;
             if upcoming < 4 {
@@ -682,9 +733,6 @@ async fn auto_dj_keeps_songs_ahead_with_crossfade_handovers() {
                     status.title, upcoming
                 )));
             }
-            // The panel queue view must show the same floor: the frontend
-            // splits the queue API rows at song_index % len (played / now /
-            // upcoming) — verify the upcoming slice it derives stays >= 4.
             let queue = app.fetch_queue(&station).await?;
             let visible = streamer_common::visible_upcoming(&status, &queue);
             if visible < 4 {
@@ -697,9 +745,6 @@ async fn auto_dj_keeps_songs_ahead_with_crossfade_handovers() {
             }
         }
 
-        // Songs removed while the station is stopped must be topped back up
-        // to the minimum on the next start (play() refills below-target
-        // queues, not just empty ones).
         app.stop(&station).await?;
         sqlx::query(
             "DELETE FROM station_queue WHERE station_id = $1 AND position > \
@@ -711,11 +756,11 @@ async fn auto_dj_keeps_songs_ahead_with_crossfade_handovers() {
         app.play(&station).await?;
         app.wait_advance(&station, last_index)
             .await
-            .map_err(|error| failure(format!("playback did not resume after the queue was trimmed: {error}")))?;
+            .map_err(|e| failure(format!("playback did not resume after queue trimmed: {e}")))?;
         let refilled = upcoming_rows(&app.db, &station).await;
         if refilled < 2 {
             return Err(failure(format!(
-                "start did not top the trimmed queue back up to songs_ahead=2: {refilled} rows"
+                "start did not top trimmed queue back up to songs_ahead=2: {refilled} rows"
             )));
         }
         Ok(())
@@ -744,44 +789,36 @@ async fn autodj_never_overfills_the_upcoming_window() {
         app.enable_auto_fill(&station, 4, false).await?;
         app.restart(&station).await?;
 
-        // Seed from an empty queue: exactly four visible upcoming.
         app.wait_playing(&station).await?;
         let seeded = visible_upcoming(app, &station).await?;
         if seeded != 4 {
             return Err(failure(format!("seed produced {seeded} upcoming, expected exactly 4")));
         }
 
-        // Three handovers: the window must stay exactly 4, never grow.
         let mut last_index = 0u64;
         for _ in 0..3 {
             last_index = app.wait_advance(&station, last_index).await?.song_index;
             let upcoming = visible_upcoming(app, &station).await?;
             if upcoming != 4 {
-                return Err(failure(format!("after a handover the window holds {upcoming}, expected exactly 4")));
+                return Err(failure(format!("after handover window holds {upcoming}, expected exactly 4")));
             }
         }
 
-        // The manual trigger must be a no-op at a full window.
         app.trigger_auto_fill(&station).await?;
         let after_trigger = visible_upcoming(app, &station).await?;
         if after_trigger != 4 {
-            return Err(failure(format!("manual trigger overfilled the window: {after_trigger} upcoming")));
+            return Err(failure(format!("manual trigger overfilled window: {after_trigger} upcoming")));
         }
 
-        // The user removes every queued track while the station plays: the
-        // reseed must again produce exactly four upcoming, not a batch.
         let queue = app.fetch_queue(&station).await?;
         if queue.is_empty() {
-            return Err(failure("expected a non-empty queue before the clear"));
+            return Err(failure("expected non-empty queue before clear"));
         }
         for item in &queue {
             app.remove_queue_item(&station, &item.id).await?;
         }
         app.wait_advance(&station, last_index).await?;
-        // The window is read through two separate HTTP calls (queue, then
-        // status), so a commit+refill can land between them and the count
-        // briefly reads one short. Wait for the refill to settle — the
-        // overfill assertion below still rejects anything above four.
+
         let mut reseeded = 0i64;
         for _ in 0..40 {
             reseeded = visible_upcoming(app, &station).await?;
@@ -802,7 +839,7 @@ async fn autodj_never_overfills_the_upcoming_window() {
             .await
             .unwrap_or_default();
             return Err(failure(format!(
-                "after clearing the queue the reseed holds {reseeded} upcoming, expected exactly 4 \
+                "after clearing queue reseed holds {reseeded} upcoming, expected exactly 4 \
                  (status {status:?}, queue {} rows, db {:?})",
                 queue.len(),
                 db_state
@@ -849,8 +886,6 @@ async fn schedule_playlist_fill_tops_up_instead_of_dumping() {
                 .await?;
         }
 
-        // The user's AutoDJ minimum, plus a permanently active schedule whose
-        // source is the 8-song playlist without an auto_dj_mode.
         app.enable_auto_fill(&station, 4, false).await?;
         let today = chrono::Local::now();
         let dow = today.weekday().num_days_from_monday() as i16;
@@ -873,16 +908,13 @@ async fn schedule_playlist_fill_tops_up_instead_of_dumping() {
         app.restart(&station).await?;
         app.wait_playing(&station).await?;
 
-        // The upcoming window must hold songs_ahead rows, not the whole
-        // playlist. (The play() refill runs the schedule fill with the DB
-        // count, so the current row is not yet known — five rows total.)
         let rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM station_queue WHERE station_id = $1")
             .bind(station.id)
             .fetch_one(&app.db)
             .await?;
         if rows > 5 {
             return Err(failure(format!(
-                "schedule playlist fill dumped {rows} rows into the queue, expected at most 5"
+                "schedule playlist fill dumped {rows} rows into queue, expected at most 5"
             )));
         }
         Ok(())
@@ -915,24 +947,18 @@ async fn stale_cursor_heals_and_queue_keeps_refilling() {
         app.enable_auto_fill(&station, 4, false).await?;
         app.restart(&station).await?;
 
-        // Seed: five rows (one current + songs_ahead upcoming).
         app.wait_playing(&station).await?;
         if visible_upcoming(app, &station).await? < 4 {
-            return Err(failure("AutoDJ did not seed the upcoming window"));
+            return Err(failure("AutoDJ did not seed upcoming window"));
         }
 
         let mut last_index = 0u64;
-        // Two clean handovers first.
         last_index = app.wait_advance(&station, last_index).await?.song_index;
         last_index = app.wait_advance(&station, last_index).await?.song_index;
         if visible_upcoming(app, &station).await? < 4 {
             return Err(failure("queue fell below songs_ahead during clean playback"));
         }
 
-        // The cursor now references a row that no longer exists — the exact
-        // state left behind when the queue is cleared or a song is deleted
-        // while the station is stopped. Every later commit must heal it and
-        // keep refilling; the queue must not drain.
         sqlx::query(
             "UPDATE stations SET current_queue_item_id = $1, current_song_index = 0, \
              current_queue_cursor_format = 1 WHERE id = $2",
@@ -947,7 +973,7 @@ async fn stale_cursor_heals_and_queue_keeps_refilling() {
             let upcoming = visible_upcoming(app, &station).await?;
             if upcoming < 4 {
                 return Err(failure(format!(
-                    "queue drained below songs_ahead=4 after the stale cursor: {upcoming} rows"
+                    "queue drained below songs_ahead=4 after stale cursor: {upcoming} rows"
                 )));
             }
         }
@@ -961,13 +987,9 @@ async fn stale_cursor_heals_and_queue_keeps_refilling() {
             .fetch_optional(&app.db)
             .await?;
         if healed_row.is_none() {
-            return Err(failure("cursor id was not healed to a live queue row"));
+            return Err(failure("cursor id was not healed to live queue row"));
         }
 
-        // Exhausted reseed: every row consumed (they still sit in the table —
-        // trimming only starts after played_limit plays) and no current row.
-        // The seed must add songs_ahead + 1 so the upcoming window is full,
-        // not one short as when the queue was seen as "empty by position".
         app.stop(&station).await?;
         let all_ids: Vec<uuid::Uuid> = sqlx::query_scalar("SELECT id FROM station_queue WHERE station_id = $1 ORDER BY position")
             .bind(station.id)
@@ -987,7 +1009,7 @@ async fn stale_cursor_heals_and_queue_keeps_refilling() {
         app.wait_playing(&station).await?;
         let reseeded = visible_upcoming(app, &station).await?;
         if reseeded < 4 {
-            return Err(failure(format!("exhausted reseed left the upcoming window short: {reseeded} rows")));
+            return Err(failure(format!("exhausted reseed left upcoming window short: {reseeded} rows")));
         }
         Ok(())
     })
@@ -998,54 +1020,13 @@ async fn stale_cursor_heals_and_queue_keeps_refilling() {
 #[serial]
 async fn reorder_during_playback_plays_the_moved_track_next() {
     run_streamer_test(async |app| {
-        let station = app
-            .create_station_with("Reorder head", "reorder-head", serde_json::json!({"transition_mode": "off"}))
-            .await?;
-        // AutoDJ is enabled by default for new stations; the reorder
-        // assertions need the exact queued sequence, so disable it.
-        app.disable_auto_fill(&station).await?;
-        let tones = [(330.0, "tone A"), (440.0, "tone B"), (550.0, "tone C"), (880.0, "tone X")];
-        let songs = app.add_tones_to_library(&station, "reorder", &tones, 10).await?;
-
-        let initial = app.enqueue(&station, &[songs[0].id, songs[1].id, songs[2].id]).await?;
-        let a_id = initial[0].id.clone();
-        let b_id = initial[1].id.clone();
-        let c_id = initial[2].id.clone();
-        app.restart(&station).await?;
-        app.assert_station_serves_audio(&station).await?;
-
-        let playing = app.wait_title_playing(&station, "tone A").await?;
-        if playing.song_index != 0 {
-            return Err(failure(format!("unexpected start index: {playing:?}")));
+        QueueMutationScenario {
+            name: "Reorder head",
+            slug: "reorder-head",
+            action: QueueMutationAction::ReorderOnly,
         }
-
-        // Add a fourth track and move it to the head of the queue while tone A
-        // is still playing. The staged next (tone B) must be replaced so the
-        // moved track plays right after the current one.
-        let added = app.enqueue(&station, &[songs[3].id]).await?;
-        let x_id = added[0].id.clone();
-        app.reorder(&station, &[&a_id, &x_id, &b_id, &c_id]).await?;
-
-        // The moved track must play NEXT — not the previously staged tone B.
-        let next = app
-            .wait_status(&station, "moved track next", |status| status.playing && status.title != "tone A")
-            .await?;
-        if next.title != "tone X" {
-            return Err(failure(format!("moved track did not play next: {next:?}")));
-        }
-        if next.song_index != 1 {
-            return Err(failure(format!("moved track played at the wrong index: {next:?}")));
-        }
-        let then_b = app.wait_title_playing(&station, "tone B").await?;
-        if then_b.song_index != 2 {
-            return Err(failure(format!("queue order broken after the moved track: {then_b:?}")));
-        }
-        let then_c = app.wait_title_playing(&station, "tone C").await?;
-        if then_c.song_index != 3 {
-            return Err(failure(format!("queue order broken at the tail: {then_c:?}")));
-        }
-        app.wait_stopped(&station).await?;
-        Ok(())
+        .run(app)
+        .await
     })
     .await
 }
@@ -1054,55 +1035,13 @@ async fn reorder_during_playback_plays_the_moved_track_next() {
 #[serial]
 async fn removed_staged_track_is_not_played_next() {
     run_streamer_test(async |app| {
-        let station = app
-            .create_station_with("Remove staged", "remove-staged", serde_json::json!({"transition_mode": "off"}))
-            .await?;
-        // AutoDJ is enabled by default for new stations; the staged-removal
-        // assertions need the exact queued sequence, so disable it.
-        app.disable_auto_fill(&station).await?;
-        let tones = [(330.0, "tone A"), (440.0, "tone B"), (550.0, "tone C"), (880.0, "tone X")];
-        let songs = app.add_tones_to_library(&station, "remove-staged", &tones, 10).await?;
-
-        let initial = app.enqueue(&station, &[songs[0].id, songs[1].id, songs[2].id]).await?;
-        let a_id = initial[0].id.clone();
-        let b_id = initial[1].id.clone();
-        let c_id = initial[2].id.clone();
-        app.restart(&station).await?;
-        let url = format!("http://127.0.0.1:{}/remove-staged.mp3", app.port);
-        app.assert_mount_serves_audio(&url).await?;
-
-        let playing = app.wait_title_playing(&station, "tone A").await?;
-        if playing.song_index != 0 {
-            return Err(failure(format!("unexpected start index: {playing:?}")));
+        QueueMutationScenario {
+            name: "Remove staged",
+            slug: "remove-staged",
+            action: QueueMutationAction::ReorderThenRemoveStaged,
         }
-
-        // Stage tone X as the next track by moving it to the head, then remove
-        // it while tone A still plays. The staged branch must be realigned in
-        // the pipeline, not played at the handover.
-        let added = app.enqueue(&station, &[songs[3].id]).await?;
-        let x_id = added[0].id.clone();
-        app.reorder(&station, &[&a_id, &x_id, &b_id, &c_id]).await?;
-        app.remove_queue_item(&station, &x_id).await?;
-
-        // The track staged before the removal must NOT play; the original
-        // head (tone B) plays next instead.
-        let next = app
-            .wait_status(&station, "tone B after removal", |status| {
-                status.playing && status.title != "tone A"
-            })
-            .await?;
-        if next.title != "tone B" {
-            return Err(failure(format!("removed track played next instead of tone B: {next:?}")));
-        }
-        if next.song_index != 1 {
-            return Err(failure(format!("removed track played at the wrong index: {next:?}")));
-        }
-        let then_c = app.wait_title_playing(&station, "tone C").await?;
-        if then_c.song_index != 2 {
-            return Err(failure(format!("queue order broken at the tail: {then_c:?}")));
-        }
-        app.wait_stopped(&station).await?;
-        Ok(())
+        .run(app)
+        .await
     })
     .await
 }
