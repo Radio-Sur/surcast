@@ -2761,6 +2761,43 @@ mod tests {
             }
             realign_id
         }
+        async fn prepare_skip_attempt(&mut self) -> u64 {
+            let prepared = self.skip().await.expect("a skip with a successor must prepare a replacement");
+            assert!(
+                matches!(prepared.operation, PipelineOperation::Replace(_)),
+                "a skip with a successor must issue a replace"
+            );
+            prepared.attempt_id.expect("a skip operation must carry an attempt id")
+        }
+
+        fn snapshot(&self) -> ControllerSnapshot {
+            ControllerSnapshot {
+                state: self.controller.state,
+                generation: self.controller.generation,
+                output_epoch: self.controller.output_epoch,
+                current_key: self.controller.queue.current_song_info().as_ref().map(StationController::key_of),
+                current_title: self.controller.queue.current_song_info().map(|s| s.title),
+                staged_title: self.controller.planned_next.as_ref().map(|(s, _)| s.title.clone()),
+                planned_next_key: self.controller.planned_next(),
+                pending_play: self.controller.pending_play(),
+                pending_skip: self.controller.pending_skip(),
+                pending_realign: self.controller.pending_realign(),
+                is_output_known_disconnected: self.controller.is_output_known_disconnected(),
+                idle: self.controller.idle,
+            }
+        }
+
+        fn assert_snapshot_unchanged(&self, before: &ControllerSnapshot, context: &str) {
+            let after = self.snapshot();
+            assert_eq!(after, *before, "{context}: controller state must be unchanged by stale input");
+        }
+
+        async fn assert_stale_event_is_inert(&mut self, event: PipelineEvent, context: &'static str) {
+            let before = self.snapshot();
+            let op = self.handle_event(event).await;
+            assert!(op.is_none(), "{context}: stale event must be ignored");
+            self.assert_snapshot_unchanged(&before, context);
+        }
         fn assert_matches(&self, expected: &ExpectedState<'_>) {
             if let Some(state) = expected.state {
                 self.assert_state(state);
@@ -2793,6 +2830,21 @@ mod tests {
                 self.assert_pending_realign(pending_realign);
             }
         }
+    }
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    struct ControllerSnapshot {
+        state: PipelineState,
+        generation: u64,
+        output_epoch: u64,
+        current_key: Option<TrackKey>,
+        current_title: Option<String>,
+        staged_title: Option<String>,
+        planned_next_key: Option<TrackKey>,
+        pending_play: Option<u64>,
+        pending_skip: Option<u64>,
+        pending_realign: Option<u64>,
+        is_output_known_disconnected: bool,
+        idle: bool,
     }
 
     /// Declarative expectations for [`StationController`] state.
@@ -3422,19 +3474,27 @@ mod tests {
 
     #[tokio::test]
     async fn stale_events_do_not_replace_or_reconnect() {
-        let song = queued_song("current", 0);
         let pipeline = Arc::new(RecordingPipeline::new());
-        let mut harness = Harness::with_pipeline(pipeline.clone(), vec![song.clone()]);
-        harness.controller.generation = 1;
-        let _ = harness
-            .controller
-            .handle_event(PipelineEvent::DecodeFailed {
-                generation: 0,
-                track: StationController::track(song).key,
-                message: "stale".into(),
-            })
+        let mut harness = ControllerScenario::stopped()
+            .with_pipeline(pipeline.clone())
+            .with_queue(&["current"])
+            .with_generation(1)
+            .build()
+            .await;
+        let current_key = harness.track_key(0);
+
+        harness
+            .assert_stale_event_is_inert(
+                PipelineEvent::DecodeFailed {
+                    generation: 0,
+                    track: current_key,
+                    message: "stale".into(),
+                },
+                "stale generation decode failure",
+            )
             .await;
         assert_eq!(pipeline.count(Call::Replace), 0);
+
         harness.controller.state = PipelineState::Playing;
         harness.controller.output_epoch = 3;
         assert!(harness.controller.output_is_current(1, 3));
@@ -3630,31 +3690,23 @@ mod tests {
 
     #[tokio::test]
     async fn stale_generation_branch_error_does_not_skip_current_track() {
-        let current = queued_song("current", 0);
-        let next = queued_song("next", 1);
-        let current_key = StationController::track(current.clone()).key;
-        let harness = Harness::playing(vec![current.clone(), next.clone()]).await;
-        let (mut controller, _) = harness.into_parts();
+        let mut harness = ControllerHarness::playing_queue(&["current", "next"]).await;
+        let current_key = harness.track_key(0);
         // Controller advances to generation 2 (with the same current track key)
-        controller.generation = 2;
-        assert_eq!(controller.state, PipelineState::Playing);
+        harness.controller.generation = 2;
+        harness.assert_state(PipelineState::Playing);
 
         // A late error arrives with generation 1 for the current track key
-        let op = controller
-            .handle_event(PipelineEvent::DecodeFailed {
-                generation: 1,
-                track: current_key.clone(),
-                message: "late decode error from generation 1".into(),
-            })
+        harness
+            .assert_stale_event_is_inert(
+                PipelineEvent::DecodeFailed {
+                    generation: 1,
+                    track: current_key,
+                    message: "late decode error from generation 1".into(),
+                },
+                "stale generation media branch error",
+            )
             .await;
-
-        assert!(op.is_none(), "stale generation media branch error must be ignored");
-        assert_eq!(controller.state, PipelineState::Playing);
-        assert_eq!(
-            controller.queue.current_song_info().unwrap().queue_item_id,
-            current.queue_item_id,
-            "current track must not be skipped by a stale generation error"
-        );
     }
 
     #[tokio::test]
@@ -3662,94 +3714,95 @@ mod tests {
         let current = queued_song("current", 0);
         let staged_g1 = queued_song("staged_g1", 1);
         let staged_g2 = queued_song("staged_g2", 2);
-        let harness = Harness::playing(vec![current.clone(), staged_g2.clone()]).await;
-        let (mut controller, _) = harness.into_parts();
-        let g1_key = StationController::track(staged_g1).key;
-        let _g2_key = StationController::track(staged_g2.clone()).key;
-        let anchor = controller.queue.anchor_after_current();
-        controller.planned_next = Some((staged_g2.clone(), anchor));
-        let op = controller
-            .handle_event(PipelineEvent::DecodeFailed {
-                generation: 1,
-                track: g1_key,
-                message: "stale gen 1 staged error".into(),
-            })
+
+        let mut harness = ControllerScenario::playing()
+            .with_songs(vec![current, staged_g2.clone()])
+            .build()
             .await;
 
-        assert!(op.is_none(), "stale generation next branch error must be ignored");
-        assert_eq!(
-            controller.planned_next.as_ref().unwrap().0.queue_item_id,
-            staged_g2.queue_item_id,
-            "generation 2 planned next must remain intact"
-        );
+        let g1_key = StationController::track(staged_g1).key;
+        let g2_key = StationController::track(staged_g2).key;
+
+        assert_ne!(g1_key, g2_key, "staged_g1 and staged_g2 must have distinct track keys");
+        harness.assert_state(PipelineState::Playing);
+        harness.assert_generation(1);
+        harness.assert_planned_next_key(Some(&g2_key));
+
+        // A late error arrives for an older staged branch within the same generation
+        harness
+            .assert_stale_event_is_inert(
+                PipelineEvent::DecodeFailed {
+                    generation: 1,
+                    track: g1_key,
+                    message: "stale gen 1 staged error".into(),
+                },
+                "stale generation next branch error",
+            )
+            .await;
+
+        harness.assert_planned_next_key(Some(&g2_key));
     }
 
     #[tokio::test]
     async fn stale_branch_error_with_unknown_track_key_is_inert() {
-        let song = queued_song("current", 0);
-        let harness = Harness::playing(vec![song.clone()]).await;
-        let (mut controller, _) = harness.into_parts();
-        assert_eq!(controller.state, PipelineState::Playing);
+        let mut harness = ControllerHarness::playing_queue(&["current"]).await;
+        harness.assert_state(PipelineState::Playing);
 
         // Stale branch key error
-        let op = controller
-            .handle_event(PipelineEvent::DecodeFailed {
-                generation: 1,
-                track: TrackKey {
-                    queue_item_id: uuid::Uuid::new_v4(),
-                    song_id: uuid::Uuid::new_v4(),
+        harness
+            .assert_stale_event_is_inert(
+                PipelineEvent::DecodeFailed {
+                    generation: 1,
+                    track: TrackKey {
+                        queue_item_id: uuid::Uuid::new_v4(),
+                        song_id: uuid::Uuid::new_v4(),
+                    },
+                    message: "unknown branch error".into(),
                 },
-                message: "unknown branch error".into(),
-            })
+                "unknown branch error",
+            )
             .await;
-        assert!(op.is_none(), "unknown branch error must be ignored");
-        assert_eq!(controller.state, PipelineState::Playing);
     }
 
     #[tokio::test]
     async fn stale_backbone_error_from_older_pipeline_epoch_is_inert() {
-        let song = queued_song("current", 0);
-        let harness = Harness::playing(vec![song.clone()]).await;
-        let (mut controller, _) = harness.into_parts();
-        assert_eq!(controller.state, PipelineState::Playing);
-        assert_eq!(controller.output_epoch, 1);
+        let mut harness = ControllerHarness::playing_queue(&["current"]).await;
+        harness.assert_state(PipelineState::Playing);
+        harness.assert_output_epoch(1);
 
         // Stale older epoch backbone error
-        let op = controller
-            .handle_event(PipelineEvent::FatalPipeline {
-                pipeline_epoch: 0,
-                message: "old epoch error".into(),
-            })
+        harness
+            .assert_stale_event_is_inert(
+                PipelineEvent::FatalPipeline {
+                    pipeline_epoch: 0,
+                    message: "old epoch error".into(),
+                },
+                "stale epoch backbone error",
+            )
             .await;
-        assert!(op.is_none(), "stale epoch backbone error must be ignored");
-        assert_eq!(controller.state, PipelineState::Playing);
     }
 
     #[tokio::test]
     async fn delayed_fatal_pipeline_error_across_multiple_generations_stops_station() {
-        let song_a = queued_song("A", 0);
-        let song_b = queued_song("B", 1);
-        let song_c = queued_song("C", 2);
-        let harness = Harness::playing(vec![song_a.clone(), song_b.clone(), song_c.clone()]).await;
-        let (mut controller, _) = harness.into_parts();
-        assert_eq!(controller.state, PipelineState::Playing);
-        assert_eq!(controller.generation, 1);
-        assert_eq!(controller.output_epoch, 1);
+        let mut harness = ControllerHarness::playing_queue(&["A", "B", "C"]).await;
+        harness.assert_state(PipelineState::Playing);
+        harness.assert_generation(1);
+        harness.assert_output_epoch(1);
 
         // Advance G1 -> G2
-        let skip_prep = controller.skip().await.expect("skip to B");
-        controller.commit_skip(skip_prep.attempt_id.unwrap(), &Ok(())).await;
-        assert_eq!(controller.generation, 2);
-        assert_eq!(controller.output_epoch, 1);
+        let skip_prep = harness.skip().await.expect("skip to B");
+        harness.commit_skip(skip_prep.attempt_id.unwrap(), &Ok(())).await;
+        harness.assert_generation(2);
+        harness.assert_output_epoch(1);
 
         // Advance G2 -> G3
-        let skip_prep = controller.skip().await.expect("skip to C");
-        controller.commit_skip(skip_prep.attempt_id.unwrap(), &Ok(())).await;
-        assert_eq!(controller.generation, 3);
-        assert_eq!(controller.output_epoch, 1);
+        let skip_prep = harness.skip().await.expect("skip to C");
+        harness.commit_skip(skip_prep.attempt_id.unwrap(), &Ok(())).await;
+        harness.assert_generation(3);
+        harness.assert_output_epoch(1);
 
         // Delayed fatal error generated during G1/G2 arrives while station is playing G3
-        let op = controller
+        let op = harness
             .handle_event(PipelineEvent::FatalPipeline {
                 pipeline_epoch: 1,
                 message: "delayed encoder fatal error from early playback".into(),
@@ -3759,40 +3812,39 @@ mod tests {
             .expect("stop operation must succeed");
 
         assert!(matches!(op.operation, PipelineOperation::Stop));
-        assert_eq!(controller.state, PipelineState::Stopped);
+        harness.assert_state(PipelineState::Stopped);
     }
 
     #[tokio::test]
     async fn stale_fatal_pipeline_error_after_controller_epoch_advance_is_ignored() {
-        let song_a = queued_song("A", 0);
-        let (mut controller, _) = Harness::stopped(vec![song_a.clone()]).into_parts();
+        let mut harness = ControllerScenario::stopped().with_queue(&["A"]).build().await;
 
         // Lifecycle 1: Play
-        let play_prep = controller.play().await.expect("play P1");
-        controller.commit_play(play_prep.play_attempt_id.unwrap(), &Ok(()));
-        assert_eq!(controller.state, PipelineState::Playing);
-        assert_eq!(controller.output_epoch, 1);
+        let play_prep = harness.play().await.expect("play P1");
+        assert!(harness.commit_play(play_prep.play_attempt_id.unwrap(), &Ok(())));
+        harness.assert_state(PipelineState::Playing);
+        harness.assert_output_epoch(1);
 
         // Full reset: Stop station
-        let _ = controller.stop();
-        assert_eq!(controller.state, PipelineState::Stopped);
+        let _ = harness.stop();
+        harness.assert_state(PipelineState::Stopped);
 
         // Lifecycle 2: Play again from stopped
-        let play_prep = controller.play().await.expect("play P2");
-        controller.commit_play(play_prep.play_attempt_id.unwrap(), &Ok(()));
-        assert_eq!(controller.state, PipelineState::Playing);
-        assert_eq!(controller.output_epoch, 2);
+        let play_prep = harness.play().await.expect("play P2");
+        assert!(harness.commit_play(play_prep.play_attempt_id.unwrap(), &Ok(())));
+        harness.assert_state(PipelineState::Playing);
+        harness.assert_output_epoch(2);
 
         // Delayed fatal error from lifecycle P1 arrives during lifecycle P2
-        let op = controller
-            .handle_event(PipelineEvent::FatalPipeline {
-                pipeline_epoch: 1,
-                message: "fatal error from old lifecycle P1".into(),
-            })
+        harness
+            .assert_stale_event_is_inert(
+                PipelineEvent::FatalPipeline {
+                    pipeline_epoch: 1,
+                    message: "fatal error from old lifecycle P1".into(),
+                },
+                "fatal error from old pipeline lifecycle P1",
+            )
             .await;
-
-        assert!(op.is_none(), "fatal error from old pipeline lifecycle P1 must not stop P2");
-        assert_eq!(controller.state, PipelineState::Playing);
     }
 
     #[tokio::test]
@@ -3994,13 +4046,15 @@ mod tests {
         harness.assert_planned_next_key(Some(&x_key));
         // The pipeline handed over to the OLD staged next (B) right after the swap:
         // the queue must not consume B because it will never play.
-        let operation = harness
-            .handle_event(PipelineEvent::Handover {
-                generation: 1,
-                current: b_key,
-            })
+        harness
+            .assert_stale_event_is_inert(
+                PipelineEvent::Handover {
+                    generation: 1,
+                    current: b_key,
+                },
+                "stale handover after realignment",
+            )
             .await;
-        assert!(operation.is_none(), "stale handover must be ignored");
         harness.assert_current_song("A");
         harness.assert_staged_next("X");
     }
@@ -4117,57 +4171,60 @@ mod tests {
 
     #[tokio::test]
     async fn stale_failed_resume_does_not_override_a_manual_play() {
-        let song = queued_song("A", 0);
+        let mut harness = ControllerHarness::playing_queue(&["A"]).await;
         let fresh = queued_song("B", 1);
-        let (mut controller, _) = Harness::playing(vec![song.clone()]).await.into_parts();
 
-        let operation = controller.skip().await.unwrap();
+        let operation = harness.controller.skip().await.unwrap();
         assert!(matches!(operation.operation, PipelineOperation::Stop));
-        assert!(controller.idle());
+        harness.assert_idle(true);
 
-        controller.queue.reload_songs(vec![fresh], false);
-        let (_operation, attempt_id) = controller
+        harness.controller.queue.reload_songs(vec![fresh], false);
+        let (_operation, attempt_id) = harness
+            .controller
             .resume_from_idle()
             .await
             .expect("an idle station must resume once the queue fills");
-        assert!(controller.idle());
+        harness.assert_idle(true);
 
-        let prepared = controller.play().await.expect("play prepare");
+        let prepared = harness.play().await.expect("play prepare");
         assert!(matches!(prepared.operation, PipelineOperation::Replace(_)));
         let play_id = prepared.play_attempt_id.expect("initial play attempt");
-        assert_eq!(controller.state, PipelineState::Stopped);
-        assert!(!controller.idle());
-        controller.commit_play(play_id, &Ok(()));
-        assert_eq!(controller.state, PipelineState::Playing);
-        assert!(!controller.idle());
+        harness.assert_state(PipelineState::Stopped);
+        harness.assert_idle(false);
+        assert!(harness.commit_play(play_id, &Ok(())));
+        harness.assert_state(PipelineState::Playing);
+        harness.assert_idle(false);
 
-        controller.on_resume_result(attempt_id, Err(PipelineError::Pipeline("boom: stale resume failed".into())));
-        assert_eq!(controller.state, PipelineState::Playing);
-        assert!(!controller.idle());
+        let before = harness.snapshot();
+        harness
+            .controller
+            .on_resume_result(attempt_id, Err(PipelineError::Pipeline("boom: stale resume failed".into())));
+        harness.assert_snapshot_unchanged(&before, "stale failed resume");
     }
 
     #[tokio::test]
     async fn stale_successful_resume_does_not_override_a_manual_pause() {
-        let song = queued_song("A", 0);
+        let mut harness = ControllerHarness::playing_queue(&["A"]).await;
         let fresh = queued_song("B", 1);
-        let (mut controller, _) = Harness::playing(vec![song.clone()]).await.into_parts();
 
-        let operation = controller.skip().await.unwrap();
+        let operation = harness.controller.skip().await.unwrap();
         assert!(matches!(operation.operation, PipelineOperation::Stop));
-        assert!(controller.idle());
+        harness.assert_idle(true);
 
-        controller.queue.reload_songs(vec![fresh], false);
-        let (_operation, attempt_id) = controller
+        harness.controller.queue.reload_songs(vec![fresh], false);
+        let (_operation, attempt_id) = harness
+            .controller
             .resume_from_idle()
             .await
             .expect("an idle station must resume once the queue fills");
 
-        let operation = controller.pause();
+        let operation = harness.pause();
         assert!(matches!(operation, PipelineOperation::SetPlaying(false)));
-        assert_eq!(controller.state, PipelineState::Paused);
+        harness.assert_state(PipelineState::Paused);
 
-        controller.on_resume_result(attempt_id, Ok(()));
-        assert_eq!(controller.state, PipelineState::Paused);
+        let before = harness.snapshot();
+        harness.controller.on_resume_result(attempt_id, Ok(()));
+        harness.assert_snapshot_unchanged(&before, "stale successful resume");
     }
 
     #[tokio::test]
@@ -4401,9 +4458,10 @@ mod tests {
         harness.assert_output_known_disconnected(true);
 
         // Stale success of old output X arrives: must not invalidate chain Y or clear marker of gen 2.
+        let before = harness.snapshot();
         harness.on_reconnect_succeeded(token_x);
+        harness.assert_snapshot_unchanged(&before, "stale reconnect success for old output");
         harness.assert_retry_is_current(token_y);
-        harness.assert_output_known_disconnected(true);
     }
     /// Runs a reconnect-runtime scenario against an isolated, migrated test
     /// database with the deterministic managed-mode settings pinned (the
@@ -4907,7 +4965,9 @@ mod tests {
             assert_ne!(token_y, token_x, "disconnect #2 must start a fresh chain");
 
             // Stale success X arrives: must keep chain Y and the marker intact.
+            let before = harness.snapshot();
             harness.on_reconnect_succeeded(token_x);
+            harness.assert_snapshot_unchanged(&before, "stale success before pause");
             assert!(
                 harness.reconnect_retry_is_current(token_y),
                 "stale success must not end the newer chain"
@@ -5202,38 +5262,32 @@ mod tests {
     /// destroy) a superseded attempt.
     #[tokio::test]
     async fn stale_skip_completion_leaves_the_newer_pending_attempt_intact() {
-        let (mut controller, _) = Harness::playing(queued_songs(&["A", "B", "C"])).await.into_parts();
-        assert_eq!(controller.generation(), 1);
+        let mut harness = ControllerHarness::playing_queue(&["A", "B", "C"]).await;
+        harness.assert_generation(1);
 
-        let operation = controller.skip().await.expect("a skip with a successor must prepare a replacement");
+        let operation = harness.skip().await.expect("a skip with a successor must prepare a replacement");
         assert!(matches!(operation.operation, PipelineOperation::Replace(_)));
-        let attempt = controller.pending_skip().expect("the prepared skip must be pending");
+        let attempt = harness.controller.pending_skip().expect("the prepared skip must be pending");
 
-        // A foreign completion (attempt 0 never existed) must not consume
-        // the pending state, must not commit, and must not touch the
-        // generation.
-        let (applied, followup) = controller.commit_skip(attempt.wrapping_sub(1), &Ok(())).await;
+        // A foreign completion (attempt - 1) must not consume the pending state, commit, or touch generation.
+        let before = harness.snapshot();
+        let (applied, followup) = harness.commit_skip(attempt.wrapping_sub(1), &Ok(())).await;
         assert!(!applied, "a stale completion must not apply");
         assert!(
             matches!(followup, SkipFollowup::None),
             "a stale completion must not produce follow-up work"
         );
-        assert_eq!(
-            controller.pending_skip(),
-            Some(attempt),
-            "the pending attempt must survive a stale completion"
-        );
-        assert_eq!(controller.generation(), 1, "a stale completion must not commit");
+        harness.assert_snapshot_unchanged(&before, "stale skip completion");
 
         // The real completion still commits exactly once.
-        let (applied, followup) = controller.commit_skip(attempt, &Ok(())).await;
+        let (applied, followup) = harness.commit_skip(attempt, &Ok(())).await;
         assert!(applied, "the current completion must apply");
         assert!(
             matches!(followup, SkipFollowup::None),
             "the queue successor still matches the staged next"
         );
-        assert_eq!(controller.generation(), 2);
-        assert_eq!(controller.pending_skip(), None, "the commit must consume the pending attempt");
+        harness.assert_generation(2);
+        harness.assert_pending_skip_id(None);
     }
 
     /// The runtime loop must stay responsive while a skip replacement is in
@@ -5639,19 +5693,18 @@ mod tests {
     /// the event arm exactly while a skip may be in flight.
     #[tokio::test]
     async fn unrelated_event_operation_is_not_bound_to_the_pending_skip() {
-        let songs = queued_songs(&["A", "B", "X"]);
-        let (mut controller, _) = Harness::playing(songs.clone()).await.into_parts();
-        let b_key = StationController::track(songs[1].clone()).key;
+        let mut harness = ControllerHarness::playing_queue(&["A", "B", "X"]).await;
+        let b_key = harness.track_key(1);
 
-        let attempt = prepare_skip_attempt(&mut controller).await;
-        assert_eq!(controller.generation(), 1);
+        let attempt = harness.prepare_skip_attempt().await;
+        harness.assert_generation(1);
 
         // A DecodeFailed of the staged branch produces a correlated roll —
         // explicitly bound to its own realign record, NOT to the pending skip attempt.
-        let prepared = controller
+        let prepared = harness
             .handle_event(PipelineEvent::DecodeFailed {
                 generation: 1,
-                track: b_key.clone(),
+                track: b_key,
                 message: "decoder exposed no usable branch".into(),
             })
             .await
@@ -5666,19 +5719,18 @@ mod tests {
             prepared.realign_id.is_some(),
             "the decode-failure roll must be bound to its own realign record"
         );
-        // The unrelated operation changed nothing about the skip.
-        assert_eq!(controller.pending_skip(), Some(attempt), "the pending skip must survive");
-        assert_eq!(controller.generation(), 1, "the unrelated operation must not commit anything");
+        harness.assert_pending_skip_id(Some(attempt));
+        harness.assert_generation(1);
 
         // The skip's own completion still commits exactly once.
-        let (applied, followup) = controller.commit_skip(attempt, &Ok(())).await;
+        let (applied, followup) = harness.commit_skip(attempt, &Ok(())).await;
         assert!(applied);
         assert!(
             matches!(followup, SkipFollowup::None),
             "the queue successor still matches the staged next"
         );
-        assert_eq!(controller.generation(), 2);
-        assert_eq!(controller.pending_skip(), None);
+        harness.assert_generation(2);
+        harness.assert_pending_skip_id(None);
     }
     /// End to end: an unrelated roll that FAILS while a skip is in flight
     /// must not fail the skip. The skip's replacement was submitted with a
@@ -7455,28 +7507,26 @@ mod tests {
         let r1 = harness.assert_rolling_replace_next(&prepared, &b_key, Some(&c_key));
 
         // Unrelated track Z:
-        assert!(
-            harness
-                .handle_event(PipelineEvent::Handover {
+        harness
+            .assert_stale_event_is_inert(
+                PipelineEvent::Handover {
                     generation: 1,
-                    current: z_key.clone(),
-                })
-                .await
-                .is_none(),
-            "unrelated handover must be rejected"
-        );
+                    current: z_key,
+                },
+                "unrelated handover",
+            )
+            .await;
 
         // Stale generation:
-        assert!(
-            harness
-                .handle_event(PipelineEvent::Handover {
+        harness
+            .assert_stale_event_is_inert(
+                PipelineEvent::Handover {
                     generation: 99,
                     current: b_key.clone(),
-                })
-                .await
-                .is_none(),
-            "stale generation handover must be rejected"
-        );
+                },
+                "stale generation handover",
+            )
+            .await;
 
         harness.assert_current_song_key(&a_key);
         harness.assert_planned_next_key(Some(&b_key));
@@ -8098,22 +8148,24 @@ mod tests {
         // Prepare play:
         let prepared = harness.play().await.expect("play prepare");
         let attempt = prepared.play_attempt_id.expect("attempt id");
-        assert_eq!(harness.controller.pending_play(), Some(attempt));
+        harness.assert_pending_play_id(Some(attempt));
 
         // User pauses before replace finishes:
         harness.pause();
         harness.assert_state(PipelineState::Paused);
-        assert_eq!(harness.controller.pending_play(), None);
+        harness.assert_pending_play_id(None);
 
         // Delayed success of initial play arrives:
+        let before_paused = harness.snapshot();
         assert!(!harness.commit_play(attempt, &Ok(())));
-        harness.assert_state(PipelineState::Paused);
+        harness.assert_snapshot_unchanged(&before_paused, "delayed initial play completion after pause");
 
         // User stops:
         harness.stop();
         harness.assert_state(PipelineState::Stopped);
+        let before_stopped = harness.snapshot();
         assert!(!harness.commit_play(attempt, &Ok(())));
-        assert_eq!(harness.controller.state, PipelineState::Stopped);
+        harness.assert_snapshot_unchanged(&before_stopped, "delayed initial play completion after stop");
     }
 
     struct BlockedSkipFromStopped {
