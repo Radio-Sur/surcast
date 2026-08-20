@@ -1,16 +1,17 @@
-mod common;
-
-use chrono::{NaiveDate, NaiveTime};
+use chrono::{Datelike, NaiveDate, NaiveTime};
+use sqlx::PgPool;
+use std::time::Duration;
 use surcast_backend::auth::models::Role;
 use surcast_backend::auth::repository as auth_repo;
 use surcast_backend::playlists::repository as playlists_repo;
 use surcast_backend::scheduling::models::{AutoDjMode, RecurrenceType, SourceType};
 use surcast_backend::scheduling::repository;
+use surcast_backend::scheduling::service;
 use surcast_backend::stations::repository as stations_repo;
 use surcast_backend::stations::repository::CreateStationParams;
 use uuid::Uuid;
 
-async fn make_user(db: &sqlx::PgPool) -> Uuid {
+async fn make_user(db: &PgPool) -> Uuid {
     let id = Uuid::new_v4();
     auth_repo::insert_user(db, id, &format!("user_{id}"), "hash", "Sched Tester", &Role::Admin)
         .await
@@ -18,7 +19,7 @@ async fn make_user(db: &sqlx::PgPool) -> Uuid {
     id
 }
 
-async fn make_station(db: &sqlx::PgPool, user_id: Uuid) -> Uuid {
+async fn make_station(db: &PgPool, user_id: Uuid) -> Uuid {
     let id = Uuid::new_v4();
     stations_repo::insert_station(
         db,
@@ -40,10 +41,54 @@ async fn make_station(db: &sqlx::PgPool, user_id: Uuid) -> Uuid {
     .unwrap();
     id
 }
+async fn make_auto_dj_schedule(db: &PgPool, station_id: Uuid) {
+    repository::insert_schedule(
+        db,
+        station_id,
+        chrono::Local::now().weekday().num_days_from_monday() as i16,
+        NaiveTime::MIN,
+        NaiveTime::from_hms_opt(23, 59, 59).unwrap(),
+        &SourceType::StationLibrary,
+        None,
+        Some(AutoDjMode::Sequential),
+        Some(false),
+        Some(0),
+        Some(2),
+    )
+    .await
+    .unwrap();
+}
 
-#[tokio::test]
-async fn test_schedule_crud() {
-    let db = common::setup_db().await;
+#[sqlx::test(migrations = "./migrations")]
+async fn test_queue_cursor_expand_columns_persist_identity_and_format_marker(db: PgPool) {
+    let user_id = make_user(&db).await;
+    let station_id = make_station(&db, user_id).await;
+    let current = Uuid::new_v4();
+    let consumed = vec![Uuid::new_v4(), Uuid::new_v4()];
+
+    sqlx::query(
+        "UPDATE stations SET current_queue_item_id = $1, consumed_queue_item_ids = $2, current_queue_cursor_format = 1 WHERE id = $3",
+    )
+    .bind(current)
+    .bind(&consumed)
+    .bind(station_id)
+    .execute(&db)
+    .await
+    .unwrap();
+
+    let row: (Option<Uuid>, Vec<Uuid>, i16) =
+        sqlx::query_as("SELECT current_queue_item_id, consumed_queue_item_ids, current_queue_cursor_format FROM stations WHERE id = $1")
+            .bind(station_id)
+            .fetch_one(&db)
+            .await
+            .unwrap();
+    assert_eq!(row.0, Some(current));
+    assert_eq!(row.1, consumed);
+    assert_eq!(row.2, 1);
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn test_schedule_crud(db: PgPool) {
     let user_id = make_user(&db).await;
     let station_id = make_station(&db, user_id).await;
 
@@ -100,9 +145,8 @@ async fn test_schedule_crud() {
     assert!(not_found.is_none());
 }
 
-#[tokio::test]
-async fn test_event_crud_with_recurrence() {
-    let db = common::setup_db().await;
+#[sqlx::test(migrations = "./migrations")]
+async fn test_event_crud_with_recurrence(db: PgPool) {
     let user_id = make_user(&db).await;
     let station_id = make_station(&db, user_id).await;
 
@@ -172,16 +216,22 @@ async fn test_event_crud_with_recurrence() {
     assert!(not_found.is_none());
 }
 
-#[tokio::test]
-async fn test_auto_fill_config_upsert_and_find() {
-    let db = common::setup_db().await;
+#[sqlx::test(migrations = "./migrations")]
+async fn test_auto_fill_config_upsert_and_find(db: PgPool) {
     let user_id = make_user(&db).await;
     let station_id = make_station(&db, user_id).await;
 
     let config = repository::find_auto_fill_config(&db, station_id)
         .await
-        .expect("find config failed");
-    assert!(config.is_none());
+        .expect("find config failed")
+        .expect("new station must have default AutoDJ configuration");
+    assert!(config.enabled);
+    assert_eq!(config.mode, AutoDjMode::Random);
+    assert_eq!(config.source_type, SourceType::StationLibrary);
+    assert!(config.source_playlist_id.is_none());
+    assert!(config.avoid_artist_repeat);
+    assert_eq!(config.min_song_gap, 3);
+    assert_eq!(config.songs_ahead, 4);
 
     repository::upsert_auto_fill_config(
         &db,
@@ -226,9 +276,8 @@ async fn test_auto_fill_config_upsert_and_find() {
     assert_eq!(config.mode, AutoDjMode::Sequential);
 }
 
-#[tokio::test]
-async fn test_auto_fill_playlists_add_update_delete() {
-    let db = common::setup_db().await;
+#[sqlx::test(migrations = "./migrations")]
+async fn test_auto_fill_playlists_add_update_delete(db: PgPool) {
     let user_id = make_user(&db).await;
     let station_id = make_station(&db, user_id).await;
     let playlist_id = Uuid::new_v4();
@@ -259,4 +308,187 @@ async fn test_auto_fill_playlists_add_update_delete() {
         .await
         .expect("find auto-fill playlists failed");
     assert!(playlists.is_empty());
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn test_new_station_default_auto_dj_fills_queue_without_schedule(db: PgPool) {
+    let user_id = make_user(&db).await;
+    let station_id = make_station(&db, user_id).await;
+    let song_id = Uuid::new_v4();
+
+    sqlx::query(
+        "INSERT INTO songs (id, title, file_path, uploaded_by)
+         VALUES ($1, 'Default AutoDJ Song', '/tmp/default-autodj-song.mp3', $2)",
+    )
+    .bind(song_id)
+    .bind(user_id)
+    .execute(&db)
+    .await
+    .unwrap();
+    sqlx::query("INSERT INTO station_songs (station_id, song_id, position) VALUES ($1, $2, 0)")
+        .bind(station_id)
+        .bind(song_id)
+        .execute(&db)
+        .await
+        .unwrap();
+
+    service::fill_queue_from_schedule(&db, station_id, "/tmp").await.unwrap();
+
+    let queued: Vec<(Uuid, bool)> = sqlx::query_as("SELECT song_id, is_auto_dj FROM station_queue WHERE station_id = $1")
+        .bind(station_id)
+        .fetch_all(&db)
+        .await
+        .unwrap();
+    assert!(queued
+        .iter()
+        .any(|(queued_song_id, is_auto_dj)| *queued_song_id == song_id && *is_auto_dj));
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn test_auto_fill_excludes_durable_current_and_upcoming_songs(db: PgPool) {
+    let user_id = make_user(&db).await;
+    let station_id = make_station(&db, user_id).await;
+    let songs = [Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4()];
+    for (position, song_id) in songs.into_iter().enumerate() {
+        sqlx::query(
+            "INSERT INTO songs (id, title, file_path, uploaded_by)
+             VALUES ($1, $2, $3, $4)",
+        )
+        .bind(song_id)
+        .bind(format!("song-{position}"))
+        .bind(format!("/tmp/song-{position}.mp3"))
+        .bind(user_id)
+        .execute(&db)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO station_songs (station_id, song_id, position) VALUES ($1, $2, $3)")
+            .bind(station_id)
+            .bind(song_id)
+            .bind(position as i32)
+            .execute(&db)
+            .await
+            .unwrap();
+    }
+
+    let current_queue_item_id = Uuid::new_v4();
+    sqlx::query("INSERT INTO station_queue (id, station_id, song_id, position) VALUES ($1, $2, $3, 0), ($4, $2, $5, 1)")
+        .bind(current_queue_item_id)
+        .bind(station_id)
+        .bind(songs[0])
+        .bind(Uuid::new_v4())
+        .bind(songs[1])
+        .execute(&db)
+        .await
+        .unwrap();
+    sqlx::query(
+        "UPDATE stations
+         SET current_queue_item_id = $1, consumed_queue_item_ids = ARRAY[]::uuid[], current_queue_cursor_format = 1
+         WHERE id = $2",
+    )
+    .bind(current_queue_item_id)
+    .bind(station_id)
+    .execute(&db)
+    .await
+    .unwrap();
+
+    make_auto_dj_schedule(&db, station_id).await;
+
+    service::fill_queue_from_schedule(&db, station_id, "/tmp").await.unwrap();
+
+    let queued_song_ids: Vec<Uuid> = sqlx::query_scalar("SELECT song_id FROM station_queue WHERE station_id = $1 ORDER BY position")
+        .bind(station_id)
+        .fetch_all(&db)
+        .await
+        .unwrap();
+    assert_eq!(queued_song_ids, vec![songs[0], songs[1], songs[2]]);
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn concurrent_auto_dj_refills_do_not_overfill_queue(db: PgPool) {
+    let user_id = make_user(&db).await;
+    let station_id = make_station(&db, user_id).await;
+    for position in 0..8 {
+        let song_id = Uuid::new_v4();
+        sqlx::query(
+            "INSERT INTO songs (id, title, artist, file_path, uploaded_by)
+             VALUES ($1, $2, 'test', $3, $4)",
+        )
+        .bind(song_id)
+        .bind(format!("song-{position}"))
+        .bind(format!("/tmp/song-{position}.mp3"))
+        .bind(user_id)
+        .execute(&db)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO station_songs (station_id, song_id, position) VALUES ($1, $2, $3)")
+            .bind(station_id)
+            .bind(song_id)
+            .bind(position)
+            .execute(&db)
+            .await
+            .unwrap();
+    }
+
+    make_auto_dj_schedule(&db, station_id).await;
+
+    let (first, second) = tokio::join!(
+        service::fill_queue_from_schedule(&db, station_id, "/tmp"),
+        service::fill_queue_from_schedule(&db, station_id, "/tmp"),
+    );
+    first.unwrap();
+    second.unwrap();
+
+    let rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM station_queue WHERE station_id = $1")
+        .bind(station_id)
+        .fetch_one(&db)
+        .await
+        .unwrap();
+    assert_eq!(rows, 3, "one current row plus songs_ahead=2");
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn cancelled_auto_dj_refill_releases_the_station_lock(db: PgPool) {
+    let user_id = make_user(&db).await;
+    let station_id = make_station(&db, user_id).await;
+    make_auto_dj_schedule(&db, station_id).await;
+
+    let mut table_lock = db.begin().await.unwrap();
+    sqlx::query("LOCK TABLE station_queue IN ACCESS EXCLUSIVE MODE")
+        .execute(&mut *table_lock)
+        .await
+        .unwrap();
+
+    let fill_db = db.clone();
+    let fill = tokio::spawn(async move { service::fill_queue_from_schedule(&fill_db, station_id, "/tmp").await });
+
+    let mut probe = db.acquire().await.unwrap();
+    let mut held = false;
+    for _ in 0..100 {
+        let acquired: bool = sqlx::query_scalar("SELECT pg_try_advisory_lock(hashtextextended($1, 0))")
+            .bind(station_id.to_string())
+            .fetch_one(&mut *probe)
+            .await
+            .unwrap();
+        if acquired {
+            sqlx::query("SELECT pg_advisory_unlock(hashtextextended($1, 0))")
+                .bind(station_id.to_string())
+                .execute(&mut *probe)
+                .await
+                .unwrap();
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        } else {
+            held = true;
+            break;
+        }
+    }
+    assert!(held, "the refill never acquired the station lock");
+
+    fill.abort();
+    let _ = fill.await;
+    table_lock.rollback().await.unwrap();
+
+    tokio::time::timeout(Duration::from_secs(2), service::fill_queue_from_schedule(&db, station_id, "/tmp"))
+        .await
+        .expect("cancelled refill left the station lock held")
+        .unwrap();
 }

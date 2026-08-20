@@ -11,66 +11,6 @@ use crate::errors::AppError;
 use crate::scheduling::models::*;
 use crate::scheduling::repository;
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use chrono::NaiveTime;
-
-    #[test]
-    fn test_to_sec_midnight() {
-        let t = NaiveTime::from_hms_opt(0, 0, 0).unwrap();
-        assert_eq!(to_sec(t), 0);
-    }
-
-    #[test]
-    fn test_to_sec_one_thirty() {
-        let t = NaiveTime::from_hms_opt(1, 30, 0).unwrap();
-        assert_eq!(to_sec(t), 5400);
-    }
-
-    #[test]
-    fn test_to_sec_almost_midnight() {
-        let t = NaiveTime::from_hms_opt(23, 59, 0).unwrap();
-        assert_eq!(to_sec(t), 86340);
-    }
-
-    #[test]
-    fn test_ranges_overlap_full() {
-        assert!(ranges_overlap(100, 200, 120, 180));
-    }
-
-    #[test]
-    fn test_ranges_overlap_partial() {
-        assert!(ranges_overlap(100, 200, 150, 250));
-    }
-
-    #[test]
-    fn test_ranges_overlap_non_overlapping() {
-        assert!(!ranges_overlap(100, 200, 200, 300));
-        assert!(!ranges_overlap(100, 200, 300, 400));
-    }
-
-    #[test]
-    fn test_ranges_overlap_adjacent() {
-        assert!(!ranges_overlap(100, 200, 200, 300));
-    }
-
-    #[test]
-    fn test_ranges_overlap_overnight_a() {
-        assert!(ranges_overlap(36000, 7200, 0, 3600));
-    }
-
-    #[test]
-    fn test_ranges_overlap_overnight_b() {
-        assert!(ranges_overlap(0, 3600, 36000, 7200));
-    }
-
-    #[test]
-    fn test_ranges_overlap_both_overnight() {
-        assert!(ranges_overlap(36000, 7200, 40000, 6000));
-    }
-}
-
 fn to_sec(t: NaiveTime) -> i32 {
     t.hour() as i32 * 3600 + t.minute() as i32 * 60 + t.second() as i32
 }
@@ -299,4 +239,63 @@ pub async fn delete_schedule(
     }
 
     Ok(StatusCode::NO_CONTENT)
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::NaiveTime;
+
+    #[test]
+    fn test_to_sec_midnight() {
+        let t = NaiveTime::from_hms_opt(0, 0, 0).unwrap();
+        assert_eq!(to_sec(t), 0);
+    }
+
+    #[test]
+    fn test_to_sec_one_thirty() {
+        let t = NaiveTime::from_hms_opt(1, 30, 0).unwrap();
+        assert_eq!(to_sec(t), 5400);
+    }
+
+    #[test]
+    fn test_to_sec_almost_midnight() {
+        let t = NaiveTime::from_hms_opt(23, 59, 0).unwrap();
+        assert_eq!(to_sec(t), 86340);
+    }
+
+    #[test]
+    fn test_ranges_overlap_full() {
+        assert!(ranges_overlap(100, 200, 120, 180));
+    }
+
+    #[test]
+    fn test_ranges_overlap_partial() {
+        assert!(ranges_overlap(100, 200, 150, 250));
+    }
+
+    #[test]
+    fn test_ranges_overlap_non_overlapping() {
+        assert!(!ranges_overlap(100, 200, 200, 300));
+        assert!(!ranges_overlap(100, 200, 300, 400));
+    }
+
+    #[test]
+    fn test_ranges_overlap_adjacent() {
+        assert!(!ranges_overlap(100, 200, 200, 300));
+    }
+
+    #[test]
+    fn test_ranges_overlap_overnight_a() {
+        assert!(ranges_overlap(36000, 7200, 0, 3600));
+    }
+
+    #[test]
+    fn test_ranges_overlap_overnight_b() {
+        assert!(ranges_overlap(0, 3600, 36000, 7200));
+    }
+
+    #[test]
+    fn test_ranges_overlap_both_overnight() {
+        assert!(ranges_overlap(36000, 7200, 40000, 6000));
+    }
 }

@@ -1,6 +1,8 @@
+use std::collections::HashSet;
+
 use rand::prelude::IndexedRandom;
 use rand::RngExt;
-use sqlx::PgPool;
+use sqlx::PgConnection;
 use uuid::Uuid;
 
 use crate::errors::{AppError, DbResult};
@@ -15,13 +17,84 @@ pub struct AutoFillConfig {
     pub songs_ahead: i32,
 }
 
-pub(crate) async fn fill_from_playlist(db: &PgPool, station_id: Uuid, playlist_id: Uuid, upload_dir: &str) -> Result<(), AppError> {
-    let song_ids: Vec<Uuid> = sqlx::query_scalar(
-        "SELECT ps.song_id FROM playlist_songs ps WHERE ps.playlist_id = $1 AND ps.song_id NOT IN (SELECT song_id FROM station_queue WHERE station_id = $2) ORDER BY ps.position",
+pub(crate) async fn lock_station_queue(connection: &mut PgConnection, station_id: Uuid) -> Result<(), AppError> {
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+        .bind(station_id.to_string())
+        .execute(connection)
+        .await
+        .db_error("failed to lock AutoDJ queue")?;
+    Ok(())
+}
+
+async fn count_upcoming(connection: &mut PgConnection, station_id: Uuid) -> Result<i64, AppError> {
+    sqlx::query_scalar(
+        "SELECT COUNT(*)
+         FROM station_queue sq
+         JOIN stations st ON st.id = sq.station_id
+         WHERE sq.station_id = $1
+           AND sq.id <> ALL(st.consumed_queue_item_ids)
+           AND (
+               (st.current_queue_item_id IS NULL AND sq.position > st.current_song_index)
+               OR (st.current_queue_item_id IS NOT NULL AND sq.id IS DISTINCT FROM st.current_queue_item_id)
+           )",
     )
-    .bind(playlist_id)
     .bind(station_id)
-    .fetch_all(db)
+    .fetch_one(connection)
+    .await
+    .db_error("failed to count upcoming songs")
+}
+async fn fill_demand(connection: &mut PgConnection, station_id: Uuid, target: i64) -> Result<i64, AppError> {
+    let upcoming = count_upcoming(&mut *connection, station_id).await?;
+    if upcoming >= target {
+        return Ok(0);
+    }
+
+    // Without an unconsumed current row, the first inserted song becomes
+    // current and does not count toward the requested upcoming window.
+    let queue_empty: bool = sqlx::query_scalar(
+        "SELECT NOT EXISTS (
+             SELECT 1 FROM station_queue sq
+             JOIN stations st ON st.id = sq.station_id
+             WHERE sq.station_id = $1
+               AND sq.id <> ALL(st.consumed_queue_item_ids)
+         )",
+    )
+    .bind(station_id)
+    .fetch_one(&mut *connection)
+    .await
+    .db_error("failed to check whether the queue is empty")?;
+
+    let needed = target - upcoming + i64::from(queue_empty);
+    tracing::debug!(station_id = %station_id, target, upcoming, queue_empty, needed, "AutoDJ fill demand");
+    Ok(needed)
+}
+
+async fn active_song_ids(connection: &mut PgConnection, station_id: Uuid) -> Result<HashSet<Uuid>, AppError> {
+    sqlx::query_scalar(
+        "SELECT sq.song_id
+         FROM station_queue sq
+         JOIN stations st ON st.id = sq.station_id
+         WHERE sq.station_id = $1
+           AND (sq.id IS NOT DISTINCT FROM st.current_queue_item_id
+                OR sq.id <> ALL(st.consumed_queue_item_ids))",
+    )
+    .bind(station_id)
+    .fetch_all(connection)
+    .await
+    .db_error("failed to load active queue songs")
+    .map(|song_ids: Vec<Uuid>| song_ids.into_iter().collect())
+}
+
+pub(crate) async fn fill_from_playlist_locked(
+    connection: &mut PgConnection,
+    station_id: Uuid,
+    playlist_id: Uuid,
+    songs_ahead: Option<i32>,
+    analyze: &mut Vec<Uuid>,
+) -> Result<(), AppError> {
+    let song_ids: Vec<Uuid> = sqlx::query_scalar("SELECT ps.song_id FROM playlist_songs ps WHERE ps.playlist_id = $1 ORDER BY ps.position")
+        .bind(playlist_id)
+        .fetch_all(&mut *connection)
         .await
         .db_error("failed to fetch playlist songs")?;
 
@@ -29,99 +102,123 @@ pub(crate) async fn fill_from_playlist(db: &PgPool, station_id: Uuid, playlist_i
         return Ok(());
     }
 
-    let upcoming_count: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM station_queue WHERE station_id = $1 AND position > (SELECT COALESCE(current_song_index, 0) FROM stations WHERE id = $1)"
-    )
-    .bind(station_id)
-    .fetch_one(db)
-    .await
-    .db_error("failed to count upcoming songs")?;
+    // The playlist fill tops the queue up to the same songs_ahead window as
+    // every other fill — it must never dump the whole playlist in one go.
+    // The schedule's own setting wins; otherwise the station's AutoDJ
+    // minimum applies, with the legacy default of five.
+    let target: i64 = match songs_ahead {
+        Some(n) => i64::from(n),
+        None => sqlx::query_scalar::<_, Option<i32>>("SELECT songs_ahead FROM station_auto_fill WHERE station_id = $1")
+            .bind(station_id)
+            .fetch_optional(&mut *connection)
+            .await
+            .db_error("failed to load auto-fill songs_ahead")?
+            .flatten()
+            .map(i64::from)
+            .unwrap_or(5),
+    };
 
-    if upcoming_count >= song_ids.len() as i64 * 2 {
+    let need = fill_demand(&mut *connection, station_id, target).await?;
+    if need == 0 {
         return Ok(());
     }
 
-    let next_pos: i32 = sqlx::query_scalar("SELECT COALESCE(MAX(position), 0) + 1 FROM station_queue WHERE station_id = $1")
+    let next_pos: i32 = sqlx::query_scalar("SELECT COALESCE(MAX(position), -1) + 1 FROM station_queue WHERE station_id = $1")
         .bind(station_id)
-        .fetch_one(db)
+        .fetch_one(&mut *connection)
         .await
         .db_error("failed to find next queue position")?;
 
-    for (i, song_id) in song_ids.iter().enumerate() {
+    let active_song_ids = active_song_ids(&mut *connection, station_id).await?;
+    for (added, song_id) in song_ids.iter().filter(|song_id| !active_song_ids.contains(song_id)).enumerate() {
+        if added as i64 >= need {
+            break;
+        }
         sqlx::query(
             "INSERT INTO station_queue (station_id, song_id, position, origin_playlist_id) VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING",
         )
         .bind(station_id)
         .bind(song_id)
-        .bind(next_pos + i as i32)
+        .bind(next_pos + added as i32)
         .bind(playlist_id)
-        .execute(db)
+        .execute(&mut *connection)
         .await
         .db_error("failed to enqueue playlist song")?;
 
-        crate::songs::analysis::spawn_analysis(db, *song_id, station_id, upload_dir);
+        analyze.push(*song_id);
     }
 
     Ok(())
 }
 
-async fn pick_from_playlist(db: &PgPool, playlist_id: Uuid) -> Result<Vec<Uuid>, AppError> {
+async fn pick_from_playlist(connection: &mut PgConnection, playlist_id: Uuid) -> Result<Vec<Uuid>, AppError> {
     sqlx::query_scalar("SELECT ps.song_id FROM playlist_songs ps WHERE ps.playlist_id = $1 ORDER BY ps.position")
         .bind(playlist_id)
-        .fetch_all(db)
+        .fetch_all(&mut *connection)
         .await
         .db_error("failed to pick songs from playlist")
 }
 
-async fn pick_from_station_library(db: &PgPool, station_id: Uuid) -> Result<Vec<Uuid>, AppError> {
+async fn pick_from_station_library(connection: &mut PgConnection, station_id: Uuid) -> Result<Vec<Uuid>, AppError> {
     sqlx::query_scalar("SELECT ss.song_id FROM station_songs ss WHERE ss.station_id = $1")
         .bind(station_id)
-        .fetch_all(db)
+        .fetch_all(&mut *connection)
         .await
         .db_error("failed to pick from station library")
 }
 
-async fn pick_from_global_library(db: &PgPool) -> Result<Vec<Uuid>, AppError> {
+async fn pick_from_global_library(connection: &mut PgConnection) -> Result<Vec<Uuid>, AppError> {
     sqlx::query_scalar("SELECT id FROM songs")
-        .fetch_all(db)
+        .fetch_all(&mut *connection)
         .await
         .db_error("failed to pick from global library")
 }
 
-async fn pick_weighted(db: &PgPool, station_id: Uuid) -> Result<Vec<Uuid>, AppError> {
+async fn pick_weighted(connection: &mut PgConnection, station_id: Uuid, excluded: &HashSet<Uuid>) -> Result<Vec<Uuid>, AppError> {
     let weighted = sqlx::query_as::<_, (Uuid, i32)>(
-        "SELECT safp.playlist_id, safp.weight FROM station_auto_fill_playlists safp WHERE safp.station_id = $1",
+        "SELECT safp.playlist_id, safp.weight FROM station_auto_fill_playlists safp WHERE safp.station_id = $1 AND safp.weight > 0",
     )
     .bind(station_id)
-    .fetch_all(db)
+    .fetch_all(&mut *connection)
     .await
     .db_error("failed to load weighted playlists")?;
 
-    if weighted.is_empty() {
-        return Ok(vec![]);
-    }
-
-    let total_weight: i32 = weighted.iter().map(|(_, w)| w).sum();
-    let mut rng = rand::make_rng::<rand::rngs::StdRng>();
-    let pick = rng.random_range(0..total_weight);
-    let mut cumulative = 0i32;
-    let mut selected_playlist = weighted[0].0;
-    for (pid, w) in &weighted {
-        cumulative += w;
-        if pick < cumulative {
-            selected_playlist = *pid;
-            break;
+    let mut eligible = Vec::new();
+    let mut repeat = Vec::new();
+    for (playlist_id, weight) in weighted {
+        let songs = pick_from_playlist(&mut *connection, playlist_id).await?;
+        if songs.is_empty() {
+            continue;
+        }
+        let unique: Vec<_> = songs.iter().copied().filter(|song_id| !excluded.contains(song_id)).collect();
+        repeat.push((weight, songs));
+        if !unique.is_empty() {
+            eligible.push((weight, unique));
         }
     }
-
-    sqlx::query_scalar("SELECT ps.song_id FROM playlist_songs ps WHERE ps.playlist_id = $1 ORDER BY ps.position")
-        .bind(selected_playlist)
-        .fetch_all(db)
-        .await
-        .db_error("failed to pick from weighted playlist")
+    let candidates = if eligible.is_empty() { repeat } else { eligible };
+    if candidates.is_empty() {
+        return Ok(Vec::new());
+    }
+    let total_weight: i32 = candidates.iter().map(|(weight, _)| *weight).sum();
+    let mut rng = rand::make_rng::<rand::rngs::StdRng>();
+    let pick = rng.random_range(0..total_weight);
+    let mut cumulative = 0;
+    for (weight, songs) in candidates {
+        cumulative += weight;
+        if pick < cumulative {
+            return Ok(songs);
+        }
+    }
+    unreachable!("positive weights cover the sampled range")
 }
 
-async fn apply_mode_to_candidates(db: &PgPool, candidates: &[Uuid], mode: &AutoDjMode, station_id: Uuid) -> Result<Uuid, AppError> {
+async fn apply_mode_to_candidates(
+    connection: &mut PgConnection,
+    candidates: &[Uuid],
+    mode: &AutoDjMode,
+    station_id: Uuid,
+) -> Result<Uuid, AppError> {
     if candidates.is_empty() {
         return Err(AppError::BadRequest("No songs available for selection".into()));
     }
@@ -133,7 +230,7 @@ async fn apply_mode_to_candidates(db: &PgPool, candidates: &[Uuid], mode: &AutoD
             )
             .bind(station_id)
             .bind(candidates)
-            .fetch_optional(db)
+            .fetch_optional(&mut *connection)
             .await
             .db_error("failed to find last sequential position")?
             .flatten()
@@ -148,7 +245,7 @@ async fn apply_mode_to_candidates(db: &PgPool, candidates: &[Uuid], mode: &AutoD
                 "SELECT sq.song_id FROM station_queue sq WHERE sq.station_id = $1 AND sq.position = (SELECT MAX(position) FROM station_queue WHERE station_id = $1)",
             )
             .bind(station_id)
-            .fetch_optional(db)
+            .fetch_optional(&mut *connection)
             .await
             .db_error("failed to find last played song")?
             .flatten();
@@ -168,51 +265,37 @@ async fn apply_mode_to_candidates(db: &PgPool, candidates: &[Uuid], mode: &AutoD
 }
 
 async fn pick_song_for_source(
-    db: &PgPool,
+    connection: &mut PgConnection,
     station_id: Uuid,
     source_type: &SourceType,
     source_playlist_id: Option<Uuid>,
     mode: &AutoDjMode,
     avoid_repeat: bool,
     min_gap: i32,
+    excluded: &HashSet<Uuid>,
 ) -> Result<Option<Uuid>, AppError> {
     let song_ids = match source_type {
         SourceType::Playlist => match source_playlist_id {
-            Some(pid) => pick_from_playlist(db, pid).await?,
+            Some(pid) => pick_from_playlist(&mut *connection, pid).await?,
             None => return Ok(None),
         },
-        SourceType::StationLibrary => pick_from_station_library(db, station_id).await?,
-        SourceType::GlobalLibrary => pick_from_global_library(db).await?,
-        SourceType::WeightedPlaylists => pick_weighted(db, station_id).await?,
+        SourceType::StationLibrary => pick_from_station_library(&mut *connection, station_id).await?,
+        SourceType::GlobalLibrary => pick_from_global_library(&mut *connection).await?,
+        SourceType::WeightedPlaylists => pick_weighted(&mut *connection, station_id, excluded).await?,
     };
 
     if song_ids.is_empty() {
         tracing::warn!(station_id = %station_id, %source_type, "AutoDJ: no songs in source");
         return Ok(None);
     }
-
-    // Never re-add a song that is already anywhere in this station's queue
-    // (played or upcoming): top-ups only pick fresh candidates.
-    let queued: Vec<Uuid> = sqlx::query_scalar("SELECT song_id FROM station_queue WHERE station_id = $1")
-        .bind(station_id)
-        .fetch_all(db)
-        .await
-        .db_error("failed to load current queue song ids")?;
-    let mut candidates = song_ids;
-    if !queued.is_empty() {
-        candidates.retain(|id| !queued.contains(id));
-        if candidates.is_empty() {
-            return Ok(None);
-        }
-    }
-    let song_ids = candidates;
-
-    let selected = apply_mode_to_candidates(db, &song_ids, mode, station_id).await?;
+    let unique: Vec<_> = song_ids.iter().copied().filter(|song_id| !excluded.contains(song_id)).collect();
+    let candidates = if unique.is_empty() { &song_ids } else { &unique };
+    let selected = apply_mode_to_candidates(&mut *connection, candidates, mode, station_id).await?;
 
     let unique_artist_count: i64 = if avoid_repeat {
         sqlx::query_scalar("SELECT COUNT(DISTINCT artist) FROM songs WHERE id = ANY($1) AND artist != ''")
             .bind(&song_ids)
-            .fetch_one(db)
+            .fetch_one(&mut *connection)
             .await
             .db_error("failed to count unique artists")?
     } else {
@@ -225,44 +308,40 @@ async fn pick_song_for_source(
         )
         .bind(station_id)
         .bind(min_gap)
-        .fetch_all(db)
+        .fetch_all(&mut *connection)
         .await
         .db_error("failed to query recent artists")?;
 
         let selected_artist: Option<String> = sqlx::query_scalar("SELECT artist FROM songs WHERE id = $1")
             .bind(selected)
-            .fetch_optional(db)
+            .fetch_optional(&mut *connection)
             .await
             .db_error("failed to find selected artist")?;
 
-        if let Some(ref artist) = selected_artist {
+        if let Some(artist) = &selected_artist {
             if !artist.is_empty() && recent_artists.contains(artist) {
                 let recent_ids: Vec<Uuid> = sqlx::query_scalar(
                     "SELECT sq.song_id FROM station_queue sq WHERE sq.station_id = $1 ORDER BY sq.position DESC LIMIT $2",
                 )
                 .bind(station_id)
                 .bind(min_gap)
-                .fetch_all(db)
+                .fetch_all(&mut *connection)
                 .await
                 .db_error("failed to find recent queue entries")?;
 
                 let mut safe = Vec::new();
                 let mut rng = rand::make_rng::<rand::rngs::StdRng>();
-                for id in &song_ids {
+                for id in candidates {
                     if recent_ids.contains(id) {
                         continue;
                     }
-                    if avoid_repeat {
-                        let artist_name: Option<String> = sqlx::query_scalar("SELECT artist FROM songs WHERE id = $1")
-                            .bind(id)
-                            .fetch_optional(db)
-                            .await
-                            .db_error("failed to check candidate artist")?;
-                        if let Some(ref a) = artist_name {
-                            if recent_artists.contains(a) {
-                                continue;
-                            }
-                        }
+                    let artist_name: Option<String> = sqlx::query_scalar("SELECT artist FROM songs WHERE id = $1")
+                        .bind(id)
+                        .fetch_optional(&mut *connection)
+                        .await
+                        .db_error("failed to check candidate artist")?;
+                    if artist_name.as_ref().is_some_and(|artist| recent_artists.contains(artist)) {
+                        continue;
                     }
                     safe.push(*id);
                 }
@@ -279,41 +358,49 @@ async fn pick_song_for_source(
     Ok(Some(selected))
 }
 
-async fn pick_and_insert_song(db: &PgPool, station_id: Uuid, config: &AutoFillConfig, upload_dir: &str) -> Result<bool, AppError> {
+async fn pick_and_insert_song(
+    connection: &mut PgConnection,
+    station_id: Uuid,
+    config: &AutoFillConfig,
+    excluded: &mut HashSet<Uuid>,
+    analyze: &mut Vec<Uuid>,
+) -> Result<bool, AppError> {
     let song_id = match pick_song_for_source(
-        db,
+        &mut *connection,
         station_id,
         &config.source_type,
         config.source_playlist_id,
         &config.mode,
         config.avoid_repeat,
         config.min_gap,
+        excluded,
     )
     .await
     {
         Ok(sid) => sid,
-        Err(e) => {
-            tracing::warn!(station_id = %station_id, error = ?e, "AutoDJ: pick_song error");
+        Err(error) => {
+            tracing::warn!(station_id = %station_id, ?error, "AutoDJ: pick_song error");
             return Ok(false);
         }
     };
 
-    if let Some(sid) = song_id {
-        let next_pos: i32 = sqlx::query_scalar("SELECT COALESCE(MAX(position), 0) + 1 FROM station_queue WHERE station_id = $1")
+    if let Some(song_id) = song_id {
+        let next_pos: i32 = sqlx::query_scalar("SELECT COALESCE(MAX(position), -1) + 1 FROM station_queue WHERE station_id = $1")
             .bind(station_id)
-            .fetch_one(db)
+            .fetch_one(&mut *connection)
             .await
             .db_error("failed to query next insert position")?;
 
         sqlx::query("INSERT INTO station_queue (station_id, song_id, position, is_auto_dj) VALUES ($1, $2, $3, true)")
             .bind(station_id)
-            .bind(sid)
+            .bind(song_id)
             .bind(next_pos)
-            .execute(db)
+            .execute(&mut *connection)
             .await
             .db_error("failed to insert auto-DJ selection")?;
 
-        crate::songs::analysis::spawn_analysis(db, sid, station_id, upload_dir);
+        analyze.push(song_id);
+        excluded.insert(song_id);
 
         Ok(true)
     } else {
@@ -321,39 +408,23 @@ async fn pick_and_insert_song(db: &PgPool, station_id: Uuid, config: &AutoFillCo
     }
 }
 
-pub(crate) async fn fill_from_auto_dj_source(
-    db: &PgPool,
+pub(crate) async fn fill_from_auto_dj_source_locked(
+    connection: &mut PgConnection,
     station_id: Uuid,
     config: &AutoFillConfig,
-    upcoming_count: Option<i64>,
-    upload_dir: &str,
+    analyze: &mut Vec<Uuid>,
 ) -> Result<(), AppError> {
-    let target = config.songs_ahead as i64;
-
-    let upcoming_count = match upcoming_count {
-        Some(count) => count,
-        None => {
-            sqlx::query_scalar(
-                "SELECT COUNT(*) FROM station_queue WHERE station_id = $1 AND position > (SELECT COALESCE(current_song_index, 0) FROM stations WHERE id = $1)"
-            )
-            .bind(station_id)
-            .fetch_one(db)
-            .await
-            .db_error("failed to count upcoming for auto-fill")?
-        }
-    };
-
-    if upcoming_count >= target {
+    let need = fill_demand(&mut *connection, station_id, i64::from(config.songs_ahead)).await?;
+    if need == 0 {
         return Ok(());
     }
-
-    let need = target - upcoming_count;
+    let mut excluded = active_song_ids(&mut *connection, station_id).await?;
     let mut added = 0i32;
     let mut attempts = 0;
 
     while added < need as i32 && attempts < need * 5 {
         attempts += 1;
-        if pick_and_insert_song(db, station_id, config, upload_dir).await? {
+        if pick_and_insert_song(&mut *connection, station_id, config, &mut excluded, analyze).await? {
             added += 1;
         }
     }
@@ -361,17 +432,16 @@ pub(crate) async fn fill_from_auto_dj_source(
     Ok(())
 }
 
-pub(crate) async fn fill_from_auto_config(
-    db: &PgPool,
+pub(crate) async fn fill_from_auto_config_locked(
+    connection: &mut PgConnection,
     station_id: Uuid,
-    upcoming_count: Option<i64>,
-    upload_dir: &str,
+    analyze: &mut Vec<Uuid>,
 ) -> Result<(), AppError> {
     let config = sqlx::query_as::<_, (bool, AutoDjMode, SourceType, Option<Uuid>, bool, i32, i32)>(
         "SELECT enabled, mode, source_type, source_playlist_id, avoid_artist_repeat, min_song_gap, songs_ahead FROM station_auto_fill WHERE station_id = $1",
     )
     .bind(station_id)
-    .fetch_optional(db)
+    .fetch_optional(&mut *connection)
     .await
     .db_error("failed to load auto-fill config")?;
 
@@ -397,5 +467,5 @@ pub(crate) async fn fill_from_auto_config(
         songs_ahead,
     };
 
-    fill_from_auto_dj_source(db, station_id, &auto_config, upcoming_count, upload_dir).await
+    fill_from_auto_dj_source_locked(&mut *connection, station_id, &auto_config, analyze).await
 }

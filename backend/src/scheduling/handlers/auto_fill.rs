@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use axum::extract::Extension;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
@@ -7,81 +9,14 @@ use serde_json::{json, Value};
 use sqlx::PgPool;
 use uuid::Uuid;
 
+use crate::api::StreamersMap;
 use crate::auth::middleware::AuthUser;
 use crate::config::Config;
 use crate::errors::AppError;
 use crate::scheduling::models::*;
 use crate::scheduling::repository;
 use crate::scheduling::service::fill_queue_from_schedule;
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use chrono::NaiveTime;
-
-    #[test]
-    fn test_time_to_sec_midnight() {
-        let t = NaiveTime::from_hms_opt(0, 0, 0).unwrap();
-        assert_eq!(time_to_sec(t), 0);
-    }
-
-    #[test]
-    fn test_time_to_sec_one_thirty() {
-        let t = NaiveTime::from_hms_opt(1, 30, 0).unwrap();
-        assert_eq!(time_to_sec(t), 5400);
-    }
-
-    #[test]
-    fn test_time_to_sec_almost_midnight() {
-        let t = NaiveTime::from_hms_opt(23, 59, 0).unwrap();
-        assert_eq!(time_to_sec(t), 86340);
-    }
-
-    #[test]
-    fn test_times_overlap_full() {
-        let a_s = NaiveTime::from_hms_opt(10, 0, 0).unwrap();
-        let a_e = NaiveTime::from_hms_opt(12, 0, 0).unwrap();
-        let b_s = NaiveTime::from_hms_opt(10, 30, 0).unwrap();
-        let b_e = NaiveTime::from_hms_opt(11, 0, 0).unwrap();
-        assert!(times_overlap(a_s, a_e, b_s, b_e));
-    }
-
-    #[test]
-    fn test_times_overlap_partial() {
-        let a_s = NaiveTime::from_hms_opt(10, 0, 0).unwrap();
-        let a_e = NaiveTime::from_hms_opt(12, 0, 0).unwrap();
-        let b_s = NaiveTime::from_hms_opt(11, 0, 0).unwrap();
-        let b_e = NaiveTime::from_hms_opt(13, 0, 0).unwrap();
-        assert!(times_overlap(a_s, a_e, b_s, b_e));
-    }
-
-    #[test]
-    fn test_times_overlap_non_overlapping() {
-        let a_s = NaiveTime::from_hms_opt(10, 0, 0).unwrap();
-        let a_e = NaiveTime::from_hms_opt(12, 0, 0).unwrap();
-        let b_s = NaiveTime::from_hms_opt(12, 0, 0).unwrap();
-        let b_e = NaiveTime::from_hms_opt(14, 0, 0).unwrap();
-        assert!(!times_overlap(a_s, a_e, b_s, b_e));
-    }
-
-    #[test]
-    fn test_times_overlap_overnight_a() {
-        let a_s = NaiveTime::from_hms_opt(22, 0, 0).unwrap();
-        let a_e = NaiveTime::from_hms_opt(2, 0, 0).unwrap();
-        let b_s = NaiveTime::from_hms_opt(0, 0, 0).unwrap();
-        let b_e = NaiveTime::from_hms_opt(1, 0, 0).unwrap();
-        assert!(times_overlap(a_s, a_e, b_s, b_e));
-    }
-
-    #[test]
-    fn test_times_overlap_overnight_b() {
-        let a_s = NaiveTime::from_hms_opt(0, 0, 0).unwrap();
-        let a_e = NaiveTime::from_hms_opt(1, 0, 0).unwrap();
-        let b_s = NaiveTime::from_hms_opt(22, 0, 0).unwrap();
-        let b_e = NaiveTime::from_hms_opt(2, 0, 0).unwrap();
-        assert!(times_overlap(a_s, a_e, b_s, b_e));
-    }
-}
+use crate::stations::handlers::stream::StationLifecycleLocks;
 
 pub fn time_to_sec(t: NaiveTime) -> i32 {
     t.hour() as i32 * 3600 + t.minute() as i32 * 60 + t.second() as i32
@@ -260,10 +195,84 @@ pub async fn delete_auto_fill_playlist(
 pub async fn trigger_auto_fill(
     Extension(_user): Extension<AuthUser>,
     State(db): State<PgPool>,
+    State(streamers): State<StreamersMap>,
     State(config): State<Config>,
+    State(lifecycle): State<Arc<StationLifecycleLocks>>,
     Path(station_id): Path<String>,
 ) -> Result<Json<Value>, AppError> {
     let sid: Uuid = station_id.parse().map_err(|_| AppError::BadRequest("Invalid station ID".into()))?;
-    fill_queue_from_schedule(&db, sid, None, &config.upload_dir).await?;
+    fill_queue_from_schedule(&db, sid, &config.upload_dir).await?;
+    // The refill above writes rows straight into the DB; a live streamer keeps
+    // its own in-memory queue copy, so reload it or the new tracks are never
+    // picked up by the running pipeline.
+    crate::stations::handlers::sync_streamer_songs(&db, &streamers, &lifecycle, &config.upload_dir, sid, false).await?;
     Ok(Json(json!({ "status": "ok" })))
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::NaiveTime;
+
+    #[test]
+    fn test_time_to_sec_midnight() {
+        let t = NaiveTime::from_hms_opt(0, 0, 0).unwrap();
+        assert_eq!(time_to_sec(t), 0);
+    }
+
+    #[test]
+    fn test_time_to_sec_one_thirty() {
+        let t = NaiveTime::from_hms_opt(1, 30, 0).unwrap();
+        assert_eq!(time_to_sec(t), 5400);
+    }
+
+    #[test]
+    fn test_time_to_sec_almost_midnight() {
+        let t = NaiveTime::from_hms_opt(23, 59, 0).unwrap();
+        assert_eq!(time_to_sec(t), 86340);
+    }
+
+    #[test]
+    fn test_times_overlap_full() {
+        let a_s = NaiveTime::from_hms_opt(10, 0, 0).unwrap();
+        let a_e = NaiveTime::from_hms_opt(12, 0, 0).unwrap();
+        let b_s = NaiveTime::from_hms_opt(10, 30, 0).unwrap();
+        let b_e = NaiveTime::from_hms_opt(11, 0, 0).unwrap();
+        assert!(times_overlap(a_s, a_e, b_s, b_e));
+    }
+
+    #[test]
+    fn test_times_overlap_partial() {
+        let a_s = NaiveTime::from_hms_opt(10, 0, 0).unwrap();
+        let a_e = NaiveTime::from_hms_opt(12, 0, 0).unwrap();
+        let b_s = NaiveTime::from_hms_opt(11, 0, 0).unwrap();
+        let b_e = NaiveTime::from_hms_opt(13, 0, 0).unwrap();
+        assert!(times_overlap(a_s, a_e, b_s, b_e));
+    }
+
+    #[test]
+    fn test_times_overlap_non_overlapping() {
+        let a_s = NaiveTime::from_hms_opt(10, 0, 0).unwrap();
+        let a_e = NaiveTime::from_hms_opt(12, 0, 0).unwrap();
+        let b_s = NaiveTime::from_hms_opt(12, 0, 0).unwrap();
+        let b_e = NaiveTime::from_hms_opt(14, 0, 0).unwrap();
+        assert!(!times_overlap(a_s, a_e, b_s, b_e));
+    }
+
+    #[test]
+    fn test_times_overlap_overnight_a() {
+        let a_s = NaiveTime::from_hms_opt(22, 0, 0).unwrap();
+        let a_e = NaiveTime::from_hms_opt(2, 0, 0).unwrap();
+        let b_s = NaiveTime::from_hms_opt(0, 0, 0).unwrap();
+        let b_e = NaiveTime::from_hms_opt(1, 0, 0).unwrap();
+        assert!(times_overlap(a_s, a_e, b_s, b_e));
+    }
+
+    #[test]
+    fn test_times_overlap_overnight_b() {
+        let a_s = NaiveTime::from_hms_opt(0, 0, 0).unwrap();
+        let a_e = NaiveTime::from_hms_opt(1, 0, 0).unwrap();
+        let b_s = NaiveTime::from_hms_opt(22, 0, 0).unwrap();
+        let b_e = NaiveTime::from_hms_opt(2, 0, 0).unwrap();
+        assert!(times_overlap(a_s, a_e, b_s, b_e));
+    }
 }

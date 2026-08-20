@@ -19,6 +19,27 @@ pub async fn find_station_by_id(db: &PgPool, id: Uuid) -> Result<Option<Station>
         .db_error("failed to find station")
 }
 
+pub struct PlaybackSettings {
+    pub transition_mode: String,
+    pub default_fade_ms: i32,
+    pub autocue_fade_max_ms: i32,
+}
+
+pub async fn find_playback_settings(db: &PgPool, station_id: Uuid) -> Result<Option<PlaybackSettings>, AppError> {
+    sqlx::query_as::<_, (String, i32, i32)>("SELECT transition_mode, default_fade_ms, autocue_fade_max_ms FROM stations WHERE id = $1")
+        .bind(station_id)
+        .fetch_optional(db)
+        .await
+        .db_error("failed to find station playback settings")
+        .map(|settings| {
+            settings.map(|(transition_mode, default_fade_ms, autocue_fade_max_ms)| PlaybackSettings {
+                transition_mode,
+                default_fade_ms,
+                autocue_fade_max_ms,
+            })
+        })
+}
+
 pub struct CreateStationParams {
     pub id: Uuid,
     pub name: String,
@@ -34,6 +55,7 @@ pub struct CreateStationParams {
 }
 
 pub async fn insert_station(db: &PgPool, params: &CreateStationParams) -> Result<(), AppError> {
+    let mut transaction = db.begin().await.db_error("failed to begin station creation")?;
     sqlx::query(
         "INSERT INTO stations (id, name, description, slug, stream_url, prebuffer_bytes, played_limit, default_fade_ms, transition_mode, autocue_fade_max_ms, created_by) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
     )
@@ -48,9 +70,17 @@ pub async fn insert_station(db: &PgPool, params: &CreateStationParams) -> Result
     .bind(&params.transition_mode)
     .bind(params.autocue_fade_max_ms)
     .bind(params.created_by)
-    .execute(db)
+    .execute(&mut *transaction)
     .await
     .db_error("failed to create station")?;
+
+    sqlx::query("INSERT INTO station_auto_fill (station_id) VALUES ($1)")
+        .bind(params.id)
+        .execute(&mut *transaction)
+        .await
+        .db_error("failed to create default AutoDJ configuration")?;
+
+    transaction.commit().await.db_error("failed to create station")?;
     Ok(())
 }
 
@@ -74,6 +104,41 @@ pub struct UpdateStationParams {
     pub default_fade_ms: i32,
     pub transition_mode: String,
     pub autocue_fade_max_ms: i32,
+}
+
+/// Persists the user's desired lifecycle state. Fails with `NotFound` when
+/// the station does not exist, so command endpoints keep their 404
+/// semantics even for raw UUID paths.
+pub async fn set_station_started(db: &PgPool, id: Uuid, started: bool) -> Result<(), AppError> {
+    let result = sqlx::query("UPDATE stations SET is_started = $1, updated_at = NOW() WHERE id = $2")
+        .bind(started)
+        .bind(id)
+        .execute(db)
+        .await
+        .db_error("failed to update station desired state")?;
+    if result.rows_affected() == 0 {
+        return Err(AppError::NotFound("Station not found".into()));
+    }
+    Ok(())
+}
+
+/// Stations the user wants broadcasting; used by the startup restore.
+pub async fn find_started_stations(db: &PgPool) -> Result<Vec<Station>, AppError> {
+    sqlx::query_as::<_, Station>("SELECT * FROM stations WHERE is_started = TRUE ORDER BY name")
+        .fetch_all(db)
+        .await
+        .db_error("failed to list started stations")
+}
+
+/// The current desired state of one station (`None` when the row no longer
+/// exists); the startup restore re-checks it under the per-station lifecycle
+/// lock, because its earlier snapshot may be stale.
+pub async fn find_station_started(db: &PgPool, id: Uuid) -> Result<Option<bool>, AppError> {
+    sqlx::query_scalar("SELECT is_started FROM stations WHERE id = $1")
+        .bind(id)
+        .fetch_optional(db)
+        .await
+        .db_error("failed to read station desired state")
 }
 
 pub async fn update_station_fields(db: &PgPool, params: &UpdateStationParams) -> Result<(), AppError> {
@@ -206,9 +271,9 @@ pub async fn verify_station_exists(db: &PgPool, station_id: Uuid) -> Result<(), 
 pub async fn find_station_song_info(
     db: &PgPool,
     station_id: Uuid,
-) -> Result<Vec<(String, String, String, i32, String, i32, f64, f64, f64, bool)>, AppError> {
-    sqlx::query_as::<_, (String, String, String, i32, String, i32, f64, f64, f64, bool)>(
-        r#"SELECT s.file_path, s.title, s.artist, s.duration, s.id::text, sq.position,
+) -> Result<Vec<(String, String, String, i32, Uuid, Uuid, i32, f64, f64, f64, bool)>, AppError> {
+    sqlx::query_as::<_, (String, String, String, i32, Uuid, Uuid, i32, f64, f64, f64, bool)>(
+        r#"SELECT s.file_path, s.title, s.artist, s.duration, sq.id, s.id, sq.position,
                   s.cue_in, s.cue_out, s.cross_start_next,
                   (s.analyzed_at IS NOT NULL)::bool AS analyzed
            FROM station_queue sq

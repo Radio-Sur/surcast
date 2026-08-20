@@ -4,7 +4,7 @@ pub mod recurrence;
 pub use recurrence::*;
 
 use chrono::{Datelike, Local, NaiveDate, NaiveTime, Timelike};
-use sqlx::PgPool;
+use sqlx::{PgConnection, PgPool};
 use uuid::Uuid;
 
 use crate::errors::{AppError, DbResult};
@@ -98,8 +98,8 @@ fn find_active_schedule(schedules: &[StationScheduleRow], current_day: i16, curr
     })
 }
 
-async fn fill_from_schedule_entry(
-    db: &PgPool,
+async fn fill_from_schedule_entry_locked(
+    connection: &mut PgConnection,
     station_id: Uuid,
     source_type: &SourceType,
     playlist_id: Option<Uuid>,
@@ -107,8 +107,7 @@ async fn fill_from_schedule_entry(
     auto_dj_avoid_repeat: Option<bool>,
     auto_dj_min_gap: Option<i32>,
     auto_dj_songs_ahead: Option<i32>,
-    upcoming_count: Option<i64>,
-    upload_dir: &str,
+    analyze: &mut Vec<Uuid>,
 ) -> Result<(), AppError> {
     match source_type {
         SourceType::Playlist => {
@@ -122,9 +121,9 @@ async fn fill_from_schedule_entry(
                         min_gap: auto_dj_min_gap.unwrap_or(3),
                         songs_ahead: auto_dj_songs_ahead.unwrap_or(5),
                     };
-                    self::auto_fill::fill_from_auto_dj_source(db, station_id, &config, upcoming_count, upload_dir).await?;
+                    self::auto_fill::fill_from_auto_dj_source_locked(&mut *connection, station_id, &config, analyze).await?;
                 } else {
-                    self::auto_fill::fill_from_playlist(db, station_id, pid, upload_dir).await?;
+                    self::auto_fill::fill_from_playlist_locked(&mut *connection, station_id, pid, auto_dj_songs_ahead, analyze).await?;
                 }
             }
         }
@@ -137,18 +136,37 @@ async fn fill_from_schedule_entry(
                 min_gap: auto_dj_min_gap.unwrap_or(3),
                 songs_ahead: auto_dj_songs_ahead.unwrap_or(5),
             };
-            self::auto_fill::fill_from_auto_dj_source(db, station_id, &config, upcoming_count, upload_dir).await?;
+            self::auto_fill::fill_from_auto_dj_source_locked(&mut *connection, station_id, &config, analyze).await?;
         }
     }
     Ok(())
 }
 
-pub async fn fill_queue_from_schedule(
-    db: &PgPool,
-    station_id: Uuid,
-    upcoming_count: Option<i64>,
-    upload_dir: &str,
-) -> Result<(), AppError> {
+pub async fn fill_queue_from_schedule(db: &PgPool, station_id: Uuid, upload_dir: &str) -> Result<(), AppError> {
+    // One advisory lock for the whole fill, so a manual trigger and a
+    // streamer commit-fill can never count the queue from interleaved
+    // cursor states (which used to over- and under-fill the window).
+    let mut transaction = db.begin().await.db_error("failed to begin AutoDJ queue transaction")?;
+    self::auto_fill::lock_station_queue(&mut transaction, station_id).await?;
+    let analyze = fill_queue_from_schedule_locked(&mut transaction, station_id).await?;
+    transaction.commit().await.db_error("failed to commit AutoDJ queue fill")?;
+    spawn_pending_analyses(db, station_id, upload_dir, &analyze);
+    Ok(())
+}
+
+/// Song analysis is a side effect that cannot be rolled back: it must only
+/// run after the fill transaction committed, never for rows a failed attempt
+/// rolled back (a retry would otherwise analyze the same song repeatedly).
+fn spawn_pending_analyses(db: &PgPool, station_id: Uuid, upload_dir: &str, analyze: &[Uuid]) {
+    for song_id in analyze {
+        crate::songs::analysis::spawn_analysis(db, *song_id, station_id, upload_dir);
+    }
+}
+
+/// Fill variant that runs inside an already locked transaction. The caller
+/// owns the advisory lock; no nested transaction is opened.
+pub(crate) async fn fill_queue_from_schedule_locked(connection: &mut PgConnection, station_id: Uuid) -> Result<Vec<Uuid>, AppError> {
+    let mut analyze = Vec::new();
     let now = Local::now();
     let current_day = now.weekday().num_days_from_monday() as i16;
     let current_time = now.time();
@@ -158,15 +176,15 @@ pub async fn fill_queue_from_schedule(
         "SELECT id, day_of_week, start_time, end_time, source_type, playlist_id, auto_dj_mode, auto_dj_avoid_repeat, auto_dj_min_gap, auto_dj_songs_ahead FROM station_schedules WHERE station_id = $1 ORDER BY day_of_week, start_time",
     )
     .bind(station_id)
-    .fetch_all(db)
+    .fetch_all(&mut *connection)
     .await
     .db_error("failed to load station schedules")?;
 
     let active = find_active_schedule(&schedules, current_day, current_time);
 
     if let Some(active) = active {
-        fill_from_schedule_entry(
-            db,
+        fill_from_schedule_entry_locked(
+            &mut *connection,
             station_id,
             &active.source_type,
             active.playlist_id,
@@ -174,18 +192,17 @@ pub async fn fill_queue_from_schedule(
             active.auto_dj_avoid_repeat,
             active.auto_dj_min_gap,
             active.auto_dj_songs_ahead,
-            upcoming_count,
-            upload_dir,
+            &mut analyze,
         )
         .await?;
-        return Ok(());
+        return Ok(analyze);
     }
 
     let events = sqlx::query_as::<_, StationScheduleEventRow>(
         "SELECT id, title, start_date, start_time, end_time, source_type, playlist_id, auto_dj_mode, auto_dj_avoid_repeat, auto_dj_min_gap, auto_dj_songs_ahead, recurrence_type, recurrence_interval, recurrence_days, recurrence_end_date, recurrence_count FROM station_schedule_events WHERE station_id = $1 ORDER BY start_date, start_time",
     )
     .bind(station_id)
-    .fetch_all(db)
+    .fetch_all(&mut *connection)
     .await
     .db_error("failed to load station events")?;
 
@@ -213,8 +230,8 @@ pub async fn fill_queue_from_schedule(
         };
 
         if is_active {
-            fill_from_schedule_entry(
-                db,
+            fill_from_schedule_entry_locked(
+                &mut *connection,
                 station_id,
                 &event.source_type,
                 event.playlist_id,
@@ -222,15 +239,14 @@ pub async fn fill_queue_from_schedule(
                 event.auto_dj_avoid_repeat,
                 event.auto_dj_min_gap,
                 event.auto_dj_songs_ahead,
-                upcoming_count,
-                upload_dir,
+                &mut analyze,
             )
             .await?;
-            return Ok(());
+            return Ok(analyze);
         }
     }
 
-    self::auto_fill::fill_from_auto_config(db, station_id, upcoming_count, upload_dir).await?;
+    self::auto_fill::fill_from_auto_config_locked(&mut *connection, station_id, &mut analyze).await?;
 
-    Ok(())
+    Ok(analyze)
 }

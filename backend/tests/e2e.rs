@@ -1,13 +1,11 @@
 mod api_common;
-mod common;
 
 use axum_test::TestServer;
 use serde_json::Value;
 use sqlx::PgPool;
 
-async fn setup() -> (PgPool, TestServer, String) {
-    let db = common::setup_db().await;
-    let app = api_common::create_test_app(db.clone());
+async fn setup(db: PgPool) -> (TestServer, String) {
+    let app = api_common::create_test_app(db);
     let server = TestServer::new(app);
     let token = {
         server
@@ -20,16 +18,16 @@ async fn setup() -> (PgPool, TestServer, String) {
             .await;
         resp.json::<Value>()["access_token"].as_str().unwrap().to_string()
     };
-    (db, server, token)
+    (server, token)
 }
 
 fn auth(token: &str) -> String {
     format!("Bearer {token}")
 }
 
-#[tokio::test]
-async fn test_e2e_full_flow() {
-    let (db, server, token) = setup().await;
+#[sqlx::test(migrations = "./migrations")]
+async fn test_e2e_full_flow(db: PgPool) {
+    let (server, token) = setup(db.clone()).await;
 
     // 1. Check setup is complete
     let resp = server.get("/api/setup/status").await;
@@ -56,7 +54,7 @@ async fn test_e2e_full_flow() {
     let resp = server.get("/api/stations").add_header("Authorization", &auth(&token)).await;
     let status = resp.status_code();
     assert!(status == 200 || status == 201 || status == 204, "expected 200 or 201, got {status}");
-    assert!(resp.json::<Vec<Value>>().len() >= 1);
+    assert!(!resp.json::<Vec<Value>>().is_empty());
 
     // 5. Get station
     let resp = server
@@ -123,7 +121,7 @@ async fn test_e2e_full_flow() {
     let status = resp.status_code();
     assert!(status == 200 || status == 201 || status == 204, "expected 200 or 201, got {status}");
     let body = resp.json::<Value>();
-    assert!(body["songs"].as_array().unwrap().len() >= 1);
+    assert!(!body["songs"].as_array().unwrap().is_empty());
 
     // 11. Add song to station queue
     let resp = server

@@ -12,36 +12,6 @@ use crate::api_keys::models::*;
 use crate::auth::middleware::AuthUser;
 use crate::errors::{AppError, DbResult};
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use sha2::{Digest, Sha256};
-
-    #[test]
-    fn test_generate_api_key_starts_with_sur() {
-        let (full, _, _) = generate_api_key();
-        assert!(full.starts_with("sur_"));
-    }
-
-    #[test]
-    fn test_generate_api_key_format() {
-        let (full, hash, prefix) = generate_api_key();
-        assert_eq!(full.len(), 4 + 40);
-        assert_eq!(prefix.len(), 4 + 8);
-        assert_eq!(prefix, &full[..12]);
-        assert_eq!(hash.len(), 64);
-        let expected_hash = hex::encode(Sha256::digest(full.as_bytes()));
-        assert_eq!(hash, expected_hash);
-    }
-
-    #[test]
-    fn test_generate_api_key_unique() {
-        let (full1, _, _) = generate_api_key();
-        let (full2, _, _) = generate_api_key();
-        assert_ne!(full1, full2);
-    }
-}
-
 fn generate_api_key() -> (String, String, String) {
     let mut rng = rand::rng();
     let random_part: String = (0..40)
@@ -157,4 +127,33 @@ pub async fn delete_api_key(
     }
 
     Ok(StatusCode::NO_CONTENT)
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sha2::{Digest, Sha256};
+
+    #[test]
+    fn test_generate_api_key_starts_with_sur() {
+        let (full, _, _) = generate_api_key();
+        assert!(full.starts_with("sur_"));
+    }
+
+    #[test]
+    fn test_generate_api_key_format() {
+        let (full, hash, prefix) = generate_api_key();
+        assert_eq!(full.len(), 4 + 40);
+        assert_eq!(prefix.len(), 4 + 8);
+        assert_eq!(prefix, &full[..12]);
+        assert_eq!(hash.len(), 64);
+        let expected_hash = hex::encode(Sha256::digest(full.as_bytes()));
+        assert_eq!(hash, expected_hash);
+    }
+
+    #[test]
+    fn test_generate_api_key_unique() {
+        let (full1, _, _) = generate_api_key();
+        let (full2, _, _) = generate_api_key();
+        assert_ne!(full1, full2);
+    }
 }

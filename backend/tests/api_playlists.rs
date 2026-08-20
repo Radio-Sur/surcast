@@ -1,11 +1,10 @@
 mod api_common;
-mod common;
 
 use axum_test::TestServer;
 use serde_json::json;
+use sqlx::PgPool;
 
-async fn setup_auth() -> (TestServer, String) {
-    let pool = common::setup_db().await;
+async fn setup_auth(pool: PgPool) -> (TestServer, String) {
     let app = api_common::create_test_app(pool);
     let server = TestServer::new(app);
 
@@ -24,9 +23,9 @@ async fn setup_auth() -> (TestServer, String) {
     (server, token)
 }
 
-#[tokio::test]
-async fn test_create_playlist_returns_201() {
-    let (server, token) = setup_auth().await;
+#[sqlx::test(migrations = "./migrations")]
+async fn test_create_playlist_returns_201(pool: PgPool) {
+    let (server, token) = setup_auth(pool).await;
 
     let resp = server
         .post("/api/playlists")
@@ -39,9 +38,9 @@ async fn test_create_playlist_returns_201() {
     assert_eq!(body["song_count"].as_i64().unwrap(), 0);
 }
 
-#[tokio::test]
-async fn test_list_playlists_returns_200() {
-    let (server, token) = setup_auth().await;
+#[sqlx::test(migrations = "./migrations")]
+async fn test_list_playlists_returns_200(pool: PgPool) {
+    let (server, token) = setup_auth(pool).await;
 
     server
         .post("/api/playlists")
@@ -58,9 +57,9 @@ async fn test_list_playlists_returns_200() {
     assert!(!list.is_empty());
 }
 
-#[tokio::test]
-async fn test_get_playlist_returns_200() {
-    let (server, token) = setup_auth().await;
+#[sqlx::test(migrations = "./migrations")]
+async fn test_get_playlist_returns_200(pool: PgPool) {
+    let (server, token) = setup_auth(pool).await;
 
     let create_resp = server
         .post("/api/playlists")
@@ -77,9 +76,9 @@ async fn test_get_playlist_returns_200() {
     assert_eq!(resp.json::<serde_json::Value>()["name"].as_str().unwrap(), "Specific Playlist");
 }
 
-#[tokio::test]
-async fn test_update_playlist_returns_200() {
-    let (server, token) = setup_auth().await;
+#[sqlx::test(migrations = "./migrations")]
+async fn test_update_playlist_returns_200(pool: PgPool) {
+    let (server, token) = setup_auth(pool).await;
 
     let create_resp = server
         .post("/api/playlists")
@@ -97,9 +96,9 @@ async fn test_update_playlist_returns_200() {
     assert_eq!(resp.json::<serde_json::Value>()["name"].as_str().unwrap(), "New Name");
 }
 
-#[tokio::test]
-async fn test_delete_playlist_returns_204() {
-    let (server, token) = setup_auth().await;
+#[sqlx::test(migrations = "./migrations")]
+async fn test_delete_playlist_returns_204(pool: PgPool) {
+    let (server, token) = setup_auth(pool).await;
 
     let create_resp = server
         .post("/api/playlists")
@@ -115,9 +114,9 @@ async fn test_delete_playlist_returns_204() {
     assert_eq!(resp.status_code(), 204);
 }
 
-#[tokio::test]
-async fn test_list_playlist_songs_empty_returns_200() {
-    let (server, token) = setup_auth().await;
+#[sqlx::test(migrations = "./migrations")]
+async fn test_list_playlist_songs_empty_returns_200(pool: PgPool) {
+    let (server, token) = setup_auth(pool).await;
 
     let create_resp = server
         .post("/api/playlists")
@@ -135,9 +134,9 @@ async fn test_list_playlist_songs_empty_returns_200() {
     assert!(body["songs"].as_array().unwrap().is_empty());
 }
 
-#[tokio::test]
-async fn test_add_playlist_songs_needs_songs_first() {
-    let (server, token) = setup_auth().await;
+#[sqlx::test(migrations = "./migrations")]
+async fn test_add_playlist_songs_needs_songs_first(pool: PgPool) {
+    let (server, token) = setup_auth(pool).await;
 
     let create_resp = server
         .post("/api/playlists")
@@ -155,9 +154,9 @@ async fn test_add_playlist_songs_needs_songs_first() {
     assert!(body["songs"].as_array().unwrap().is_empty());
 }
 
-#[tokio::test]
-async fn test_add_playlist_to_queue() {
-    let (server, token) = setup_auth().await;
+#[sqlx::test(migrations = "./migrations")]
+async fn test_add_playlist_to_queue(pool: PgPool) {
+    let (server, token) = setup_auth(pool).await;
 
     let create_resp = server
         .post("/api/playlists")

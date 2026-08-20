@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::Extension;
@@ -11,6 +13,7 @@ use crate::config::Config;
 use crate::errors::AppError;
 use crate::playlists::models::*;
 use crate::playlists::repository;
+use crate::stations::handlers::stream::StationLifecycleLocks;
 use crate::stations::queue_repo;
 
 fn song_has_cover(cover_path: &str) -> bool {
@@ -262,6 +265,7 @@ pub async fn add_playlist_to_queue(
     State(db): State<PgPool>,
     State(streamers): State<StreamersMap>,
     State(config): State<Config>,
+    State(lifecycle): State<Arc<StationLifecycleLocks>>,
     Path((playlist_id_or_slug, station_id)): Path<(String, String)>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), AppError> {
     let playlist_id = repository::resolve_playlist_id(&db, &playlist_id_or_slug).await?;
@@ -272,6 +276,7 @@ pub async fn add_playlist_to_queue(
     }
 
     let song_ids = repository::find_playlist_song_ids(&db, playlist_id).await?;
+    queue_repo::trim_consumed_queue_items(&db, station_id).await?;
     let pos = queue_repo::queue_next_position(&db, station_id).await?;
     queue_repo::insert_queue_items_batch(&db, station_id, &song_ids, pos, Some(playlist_id)).await?;
 
@@ -279,7 +284,7 @@ pub async fn add_playlist_to_queue(
         crate::songs::analysis::spawn_analysis(&db, song_id, station_id, &config.upload_dir);
     }
 
-    crate::stations::handlers::sync_streamer_songs(&db, &streamers, &config.upload_dir, station_id).await?;
+    crate::stations::handlers::sync_streamer_songs(&db, &streamers, &lifecycle, &config.upload_dir, station_id, false).await?;
 
     Ok((StatusCode::CREATED, Json(serde_json::json!({ "added": song_ids.len() as i32 }))))
 }

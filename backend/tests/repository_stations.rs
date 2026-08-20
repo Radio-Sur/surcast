@@ -1,5 +1,4 @@
-mod common;
-
+use sqlx::PgPool;
 use surcast_backend::auth::models::Role;
 use surcast_backend::auth::repository as auth_repo;
 use surcast_backend::songs::repository as songs_repo;
@@ -8,7 +7,7 @@ use surcast_backend::stations::repository;
 use surcast_backend::stations::repository::{CreateStationParams, UpdateStationParams};
 use uuid::Uuid;
 
-async fn make_user(db: &sqlx::PgPool) -> Uuid {
+async fn make_user(db: &PgPool) -> Uuid {
     let id = Uuid::new_v4();
     auth_repo::insert_user(db, id, &format!("user_{id}"), "hash", "Station Tester", &Role::Admin)
         .await
@@ -16,7 +15,7 @@ async fn make_user(db: &sqlx::PgPool) -> Uuid {
     id
 }
 
-async fn make_song(db: &sqlx::PgPool, user_id: Uuid) -> Uuid {
+async fn make_song(db: &PgPool, user_id: Uuid) -> Uuid {
     let id = Uuid::new_v4();
     songs_repo::insert_song_record(
         db,
@@ -39,9 +38,8 @@ async fn make_song(db: &sqlx::PgPool, user_id: Uuid) -> Uuid {
     id
 }
 
-#[tokio::test]
-async fn test_insert_and_find_station() {
-    let db = common::setup_db().await;
+#[sqlx::test(migrations = "./migrations")]
+async fn test_insert_and_find_station(db: PgPool) {
     let user_id = make_user(&db).await;
     let id = Uuid::new_v4();
 
@@ -73,9 +71,44 @@ async fn test_insert_and_find_station() {
     assert_eq!(station.slug, "test-station");
 }
 
-#[tokio::test]
-async fn test_find_all_stations() {
-    let db = common::setup_db().await;
+#[sqlx::test(migrations = "./migrations")]
+async fn test_new_station_persists_enabled_auto_dj_defaults(db: PgPool) {
+    let user_id = make_user(&db).await;
+    let station_id = Uuid::new_v4();
+
+    repository::insert_station(
+        &db,
+        &CreateStationParams {
+            id: station_id,
+            name: "AutoDJ Station".into(),
+            description: "".into(),
+            slug: "autodj-station".into(),
+            stream_url: None,
+            prebuffer_bytes: 0,
+            played_limit: 5,
+            default_fade_ms: 2000,
+            transition_mode: "autocue".into(),
+            autocue_fade_max_ms: 5000,
+            created_by: user_id,
+        },
+    )
+    .await
+    .unwrap();
+
+    let config: (bool, String, String, Option<Uuid>, bool, i32, i32) = sqlx::query_as(
+        "SELECT enabled, mode, source_type, source_playlist_id, avoid_artist_repeat, min_song_gap, songs_ahead
+         FROM station_auto_fill WHERE station_id = $1",
+    )
+    .bind(station_id)
+    .fetch_one(&db)
+    .await
+    .expect("new station must persist its enabled AutoDJ configuration");
+
+    assert_eq!(config, (true, "random".into(), "station_library".into(), None, true, 3, 4,));
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn test_find_all_stations(db: PgPool) {
     let user_id = make_user(&db).await;
 
     repository::insert_station(
@@ -120,9 +153,8 @@ async fn test_find_all_stations() {
     assert!(stations.len() >= 2);
 }
 
-#[tokio::test]
-async fn test_update_station() {
-    let db = common::setup_db().await;
+#[sqlx::test(migrations = "./migrations")]
+async fn test_update_station(db: PgPool) {
     let user_id = make_user(&db).await;
     let id = Uuid::new_v4();
 
@@ -173,9 +205,8 @@ async fn test_update_station() {
     assert_eq!(station.stream_url, Some("https://example.com/stream".into()));
 }
 
-#[tokio::test]
-async fn test_delete_station() {
-    let db = common::setup_db().await;
+#[sqlx::test(migrations = "./migrations")]
+async fn test_delete_station(db: PgPool) {
     let user_id = make_user(&db).await;
     let id = Uuid::new_v4();
 
@@ -204,9 +235,8 @@ async fn test_delete_station() {
     assert!(station.is_none());
 }
 
-#[tokio::test]
-async fn test_verify_station_exists() {
-    let db = common::setup_db().await;
+#[sqlx::test(migrations = "./migrations")]
+async fn test_verify_station_exists(db: PgPool) {
     let user_id = make_user(&db).await;
     let id = Uuid::new_v4();
 
@@ -233,9 +263,8 @@ async fn test_verify_station_exists() {
     assert!(repository::verify_station_exists(&db, Uuid::new_v4()).await.is_err());
 }
 
-#[tokio::test]
-async fn test_list_station_songs_empty() {
-    let db = common::setup_db().await;
+#[sqlx::test(migrations = "./migrations")]
+async fn test_list_station_songs_empty(db: PgPool) {
     let mut conn = db.acquire().await.unwrap();
     let user_id = make_user(&db).await;
     let station_id = Uuid::new_v4();
@@ -265,9 +294,8 @@ async fn test_list_station_songs_empty() {
     assert!(songs.is_empty());
 }
 
-#[tokio::test]
-async fn test_insert_and_delete_station_song() {
-    let db = common::setup_db().await;
+#[sqlx::test(migrations = "./migrations")]
+async fn test_insert_and_delete_station_song(db: PgPool) {
     let mut conn = db.acquire().await.unwrap();
     let user_id = make_user(&db).await;
     let station_id = Uuid::new_v4();
@@ -312,9 +340,8 @@ async fn test_insert_and_delete_station_song() {
     assert!(songs.is_empty());
 }
 
-#[tokio::test]
-async fn test_resolve_station_id_from_slug() {
-    let db = common::setup_db().await;
+#[sqlx::test(migrations = "./migrations")]
+async fn test_resolve_station_id_from_slug(db: PgPool) {
     let user_id = make_user(&db).await;
     let id = Uuid::new_v4();
 

@@ -1,11 +1,10 @@
 mod api_common;
-mod common;
 
 use axum_test::TestServer;
 use serde_json::json;
+use sqlx::PgPool;
 
-async fn setup_two_users() -> (TestServer, String, String) {
-    let pool = common::setup_db().await;
+async fn setup_two_users(pool: PgPool) -> (TestServer, String, String) {
     let app = api_common::create_test_app(pool);
     let server = TestServer::new(app);
 
@@ -32,9 +31,9 @@ async fn setup_two_users() -> (TestServer, String, String) {
     (server, admin_token, user_token)
 }
 
-#[tokio::test]
-async fn test_list_users_as_admin_returns_200() {
-    let (server, admin_token, _) = setup_two_users().await;
+#[sqlx::test(migrations = "./migrations")]
+async fn test_list_users_as_admin_returns_200(pool: PgPool) {
+    let (server, admin_token, _) = setup_two_users(pool).await;
 
     let resp = server
         .get("/api/users")
@@ -46,9 +45,8 @@ async fn test_list_users_as_admin_returns_200() {
     assert_eq!(list[0]["username"].as_str().unwrap(), "admin");
 }
 
-#[tokio::test]
-async fn test_list_users_without_admin_returns_403() {
-    let pool = common::setup_db().await;
+#[sqlx::test(migrations = "./migrations")]
+async fn test_list_users_without_admin_returns_403(pool: PgPool) {
     let app = api_common::create_test_app(pool);
     let server = TestServer::new(app);
 
@@ -70,9 +68,9 @@ async fn test_list_users_without_admin_returns_403() {
     assert_eq!(resp.status_code(), 200);
 }
 
-#[tokio::test]
-async fn test_update_user_role_returns_200() {
-    let (server, admin_token, _) = setup_two_users().await;
+#[sqlx::test(migrations = "./migrations")]
+async fn test_update_user_role_returns_200(pool: PgPool) {
+    let (server, admin_token, _) = setup_two_users(pool).await;
 
     let list_resp = server
         .get("/api/users")
@@ -90,9 +88,8 @@ async fn test_update_user_role_returns_200() {
     assert_eq!(resp.json::<serde_json::Value>()["role"].as_str().unwrap(), "viewer");
 }
 
-#[tokio::test]
-async fn test_delete_user_returns_204() {
-    let pool = common::setup_db().await;
+#[sqlx::test(migrations = "./migrations")]
+async fn test_delete_user_returns_204(pool: PgPool) {
     let app = api_common::create_test_app(pool);
     let server = TestServer::new(app);
 

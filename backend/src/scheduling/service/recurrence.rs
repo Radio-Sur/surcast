@@ -2,6 +2,103 @@ use chrono::{Datelike, NaiveDate};
 
 use crate::scheduling::models::RecurrenceType;
 
+fn match_daily(event_date: NaiveDate, date: NaiveDate, count: Option<i32>) -> bool {
+    if let Some(max) = count {
+        (date - event_date).num_days() < max as i64
+    } else {
+        true
+    }
+}
+
+fn match_weekly(event_date: NaiveDate, date: NaiveDate, count: Option<i32>) -> bool {
+    let diff = (date - event_date).num_days();
+    if diff >= 0 && diff % 7 == 0 {
+        if let Some(max) = count {
+            diff / 7 < max as i64
+        } else {
+            true
+        }
+    } else {
+        false
+    }
+}
+
+fn match_every_n_days(event_date: NaiveDate, date: NaiveDate, interval: i32, count: Option<i32>) -> bool {
+    let diff = (date - event_date).num_days();
+    if diff >= 0 && diff % interval as i64 == 0 {
+        if let Some(max) = count {
+            diff / (interval as i64) < max as i64
+        } else {
+            true
+        }
+    } else {
+        false
+    }
+}
+
+fn match_biweekly(event_date: NaiveDate, date: NaiveDate, count: Option<i32>) -> bool {
+    let diff = (date - event_date).num_days();
+    if diff >= 0 && diff % 14 == 0 {
+        if let Some(max) = count {
+            diff / 14 < max as i64
+        } else {
+            true
+        }
+    } else {
+        false
+    }
+}
+
+fn match_monthly(event_date: NaiveDate, date: NaiveDate, count: Option<i32>) -> bool {
+    if date.day() == event_date.day() {
+        if let Some(max) = count {
+            let months = (date.year() - event_date.year()) * 12 + (date.month() as i32 - event_date.month() as i32);
+            months < max
+        } else {
+            true
+        }
+    } else {
+        false
+    }
+}
+
+fn match_custom_days(date: NaiveDate, days: Option<&str>) -> bool {
+    if let Some(days_str) = days {
+        let target = date.weekday().num_days_from_monday() as i32;
+        days_str.split(',').any(|d| d.trim().parse::<i32>().ok() == Some(target))
+    } else {
+        false
+    }
+}
+
+pub fn matches_recurrence(
+    date: NaiveDate,
+    start_date: NaiveDate,
+    recurrence_type: &RecurrenceType,
+    recurrence_interval: Option<i32>,
+    recurrence_days: Option<&str>,
+    recurrence_end_date: Option<NaiveDate>,
+    recurrence_count: Option<i32>,
+) -> bool {
+    if date < start_date {
+        return false;
+    }
+    if let Some(end) = recurrence_end_date {
+        if date > end {
+            return false;
+        }
+    }
+
+    match recurrence_type {
+        RecurrenceType::None => date == start_date,
+        RecurrenceType::Daily => match_daily(start_date, date, recurrence_count),
+        RecurrenceType::EveryNDays => match_every_n_days(start_date, date, recurrence_interval.unwrap_or(1).max(1), recurrence_count),
+        RecurrenceType::Weekly => match_weekly(start_date, date, recurrence_count),
+        RecurrenceType::Biweekly => match_biweekly(start_date, date, recurrence_count),
+        RecurrenceType::Monthly => match_monthly(start_date, date, recurrence_count),
+        RecurrenceType::CustomDays => match_custom_days(date, recurrence_days),
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -239,103 +336,5 @@ mod tests {
             None,
             None
         ));
-    }
-}
-
-fn match_daily(event_date: NaiveDate, date: NaiveDate, count: Option<i32>) -> bool {
-    if let Some(max) = count {
-        (date - event_date).num_days() < max as i64
-    } else {
-        true
-    }
-}
-
-fn match_weekly(event_date: NaiveDate, date: NaiveDate, count: Option<i32>) -> bool {
-    let diff = (date - event_date).num_days();
-    if diff >= 0 && diff % 7 == 0 {
-        if let Some(max) = count {
-            diff / 7 < max as i64
-        } else {
-            true
-        }
-    } else {
-        false
-    }
-}
-
-fn match_every_n_days(event_date: NaiveDate, date: NaiveDate, interval: i32, count: Option<i32>) -> bool {
-    let diff = (date - event_date).num_days();
-    if diff >= 0 && diff % interval as i64 == 0 {
-        if let Some(max) = count {
-            diff / (interval as i64) < max as i64
-        } else {
-            true
-        }
-    } else {
-        false
-    }
-}
-
-fn match_biweekly(event_date: NaiveDate, date: NaiveDate, count: Option<i32>) -> bool {
-    let diff = (date - event_date).num_days();
-    if diff >= 0 && diff % 14 == 0 {
-        if let Some(max) = count {
-            diff / 14 < max as i64
-        } else {
-            true
-        }
-    } else {
-        false
-    }
-}
-
-fn match_monthly(event_date: NaiveDate, date: NaiveDate, count: Option<i32>) -> bool {
-    if date.day() == event_date.day() {
-        if let Some(max) = count {
-            let months = (date.year() - event_date.year()) * 12 + (date.month() as i32 - event_date.month() as i32);
-            months < max
-        } else {
-            true
-        }
-    } else {
-        false
-    }
-}
-
-fn match_custom_days(date: NaiveDate, days: Option<&str>) -> bool {
-    if let Some(days_str) = days {
-        let target = date.weekday().num_days_from_monday() as i32;
-        days_str.split(',').any(|d| d.trim().parse::<i32>().ok() == Some(target))
-    } else {
-        false
-    }
-}
-
-pub fn matches_recurrence(
-    date: NaiveDate,
-    start_date: NaiveDate,
-    recurrence_type: &RecurrenceType,
-    recurrence_interval: Option<i32>,
-    recurrence_days: Option<&str>,
-    recurrence_end_date: Option<NaiveDate>,
-    recurrence_count: Option<i32>,
-) -> bool {
-    if date < start_date {
-        return false;
-    }
-    if let Some(end) = recurrence_end_date {
-        if date > end {
-            return false;
-        }
-    }
-
-    match recurrence_type {
-        RecurrenceType::None => date == start_date,
-        RecurrenceType::Daily => match_daily(start_date, date, recurrence_count),
-        RecurrenceType::EveryNDays => match_every_n_days(start_date, date, recurrence_interval.unwrap_or(1).max(1), recurrence_count),
-        RecurrenceType::Weekly => match_weekly(start_date, date, recurrence_count),
-        RecurrenceType::Biweekly => match_biweekly(start_date, date, recurrence_count),
-        RecurrenceType::Monthly => match_monthly(start_date, date, recurrence_count),
-        RecurrenceType::CustomDays => match_custom_days(date, recurrence_days),
     }
 }
