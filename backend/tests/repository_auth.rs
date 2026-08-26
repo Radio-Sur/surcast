@@ -1,13 +1,10 @@
-mod common;
-
+use sqlx::PgPool;
 use surcast_backend::auth::models::Role;
 use surcast_backend::auth::repository;
 use uuid::Uuid;
 
-#[tokio::test]
-async fn test_insert_and_find_user() {
-    let db = common::setup_db().await;
-
+#[sqlx::test(migrations = "./migrations")]
+async fn test_insert_and_find_user(db: PgPool) {
     let id = Uuid::new_v4();
     repository::insert_user(&db, id, "testuser", "hash", "Test User", &Role::Viewer)
         .await
@@ -23,10 +20,8 @@ async fn test_insert_and_find_user() {
     assert_eq!(user.role, Role::Viewer);
 }
 
-#[tokio::test]
-async fn test_find_user_by_id() {
-    let db = common::setup_db().await;
-
+#[sqlx::test(migrations = "./migrations")]
+async fn test_find_user_by_id(db: PgPool) {
     let id = Uuid::new_v4();
     repository::insert_user(&db, id, "byid", "hash", "By ID", &Role::Admin)
         .await
@@ -38,10 +33,8 @@ async fn test_find_user_by_id() {
     assert_eq!(user.role, Role::Admin);
 }
 
-#[tokio::test]
-async fn test_find_all_users() {
-    let db = common::setup_db().await;
-
+#[sqlx::test(migrations = "./migrations")]
+async fn test_find_all_users(db: PgPool) {
     let id1 = Uuid::new_v4();
     let id2 = Uuid::new_v4();
     repository::insert_user(&db, id1, "user_a", "hash", "User A", &Role::Manager)
@@ -58,10 +51,8 @@ async fn test_find_all_users() {
     assert!(names.contains(&"User B"));
 }
 
-#[tokio::test]
-async fn test_update_user() {
-    let db = common::setup_db().await;
-
+#[sqlx::test(migrations = "./migrations")]
+async fn test_update_user(db: PgPool) {
     let id = Uuid::new_v4();
     repository::insert_user(&db, id, "update_me", "hash", "Old Name", &Role::Viewer)
         .await
@@ -77,10 +68,8 @@ async fn test_update_user() {
     assert_eq!(user.role, Role::Admin);
 }
 
-#[tokio::test]
-async fn test_delete_user() {
-    let db = common::setup_db().await;
-
+#[sqlx::test(migrations = "./migrations")]
+async fn test_delete_user(db: PgPool) {
     let id = Uuid::new_v4();
     repository::insert_user(&db, id, "delete_me", "hash", "Delete Me", &Role::Viewer)
         .await
@@ -93,10 +82,8 @@ async fn test_delete_user() {
     assert!(user.is_none());
 }
 
-#[tokio::test]
-async fn test_is_setup_complete() {
-    let db = common::setup_db().await;
-
+#[sqlx::test(migrations = "./migrations")]
+async fn test_is_setup_complete(db: PgPool) {
     let count = repository::count_users(&db).await.expect("count failed");
     assert_eq!(count, 0);
 
@@ -108,10 +95,8 @@ async fn test_is_setup_complete() {
     assert!(count > 0);
 }
 
-#[tokio::test]
-async fn test_count_users() {
-    let db = common::setup_db().await;
-
+#[sqlx::test(migrations = "./migrations")]
+async fn test_count_users(db: PgPool) {
     let before = repository::count_users(&db).await.expect("count failed");
     repository::insert_user(
         &db,
@@ -135,5 +120,5 @@ async fn test_count_users() {
     .unwrap();
 
     let after = repository::count_users(&db).await.expect("count failed");
-    assert!(after >= before + 2, "expected at least {}, got {}", before + 2, after);
+    assert_eq!(after, before + 2);
 }

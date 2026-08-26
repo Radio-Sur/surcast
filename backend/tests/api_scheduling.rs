@@ -1,12 +1,11 @@
 mod api_common;
-mod common;
 
 use axum_test::TestServer;
 use serde_json::json;
+use sqlx::PgPool;
 use uuid::Uuid;
 
-async fn setup_with_station() -> (TestServer, String, Uuid) {
-    let pool = common::setup_db().await;
+async fn setup_with_station(pool: PgPool) -> (TestServer, String, Uuid) {
     let app = api_common::create_test_app(pool);
     let server = TestServer::new(app);
 
@@ -31,9 +30,9 @@ async fn setup_with_station() -> (TestServer, String, Uuid) {
     (server, token, station_id)
 }
 
-#[tokio::test]
-async fn test_create_schedule_event_returns_201() {
-    let (server, token, station_id) = setup_with_station().await;
+#[sqlx::test(migrations = "./migrations")]
+async fn test_create_schedule_event_returns_201(pool: PgPool) {
+    let (server, token, station_id) = setup_with_station(pool).await;
 
     let resp = server
         .post(&format!("/api/stations/{station_id}/schedule-events"))
@@ -52,9 +51,9 @@ async fn test_create_schedule_event_returns_201() {
     assert_eq!(body["source_type"].as_str().unwrap(), "station_library");
 }
 
-#[tokio::test]
-async fn test_list_schedule_events_returns_200() {
-    let (server, token, station_id) = setup_with_station().await;
+#[sqlx::test(migrations = "./migrations")]
+async fn test_list_schedule_events_returns_200(pool: PgPool) {
+    let (server, token, station_id) = setup_with_station(pool).await;
 
     let create_resp = server
         .post(&format!("/api/stations/{station_id}/schedule-events"))
@@ -78,9 +77,9 @@ async fn test_list_schedule_events_returns_200() {
     assert!(!list.is_empty());
 }
 
-#[tokio::test]
-async fn test_create_then_list_then_update_then_delete() {
-    let (server, token, station_id) = setup_with_station().await;
+#[sqlx::test(migrations = "./migrations")]
+async fn test_create_then_list_then_update_then_delete(pool: PgPool) {
+    let (server, token, station_id) = setup_with_station(pool).await;
 
     let create_resp = server
         .post(&format!("/api/stations/{station_id}/schedule-events"))
@@ -119,9 +118,9 @@ async fn test_create_then_list_then_update_then_delete() {
     assert_eq!(delete_resp.status_code(), 204);
 }
 
-#[tokio::test]
-async fn test_create_schedule_returns_201() {
-    let (server, token, station_id) = setup_with_station().await;
+#[sqlx::test(migrations = "./migrations")]
+async fn test_create_schedule_returns_201(pool: PgPool) {
+    let (server, token, station_id) = setup_with_station(pool).await;
 
     let resp = server
         .post(&format!("/api/stations/{station_id}/schedules"))
@@ -136,9 +135,9 @@ async fn test_create_schedule_returns_201() {
     assert_eq!(resp.status_code(), 201);
 }
 
-#[tokio::test]
-async fn test_list_schedules_returns_200() {
-    let (server, token, station_id) = setup_with_station().await;
+#[sqlx::test(migrations = "./migrations")]
+async fn test_list_schedules_returns_200(pool: PgPool) {
+    let (server, token, station_id) = setup_with_station(pool).await;
 
     server
         .post(&format!("/api/stations/{station_id}/schedules"))
@@ -160,9 +159,9 @@ async fn test_list_schedules_returns_200() {
     assert!(!schedules.is_empty());
 }
 
-#[tokio::test]
-async fn test_update_schedule_returns_200() {
-    let (server, token, station_id) = setup_with_station().await;
+#[sqlx::test(migrations = "./migrations")]
+async fn test_update_schedule_returns_200(pool: PgPool) {
+    let (server, token, station_id) = setup_with_station(pool).await;
 
     let resp = server
         .post(&format!("/api/stations/{station_id}/schedules"))
@@ -184,9 +183,9 @@ async fn test_update_schedule_returns_200() {
     assert_eq!(resp.status_code(), 200);
 }
 
-#[tokio::test]
-async fn test_delete_schedule_returns_204() {
-    let (server, token, station_id) = setup_with_station().await;
+#[sqlx::test(migrations = "./migrations")]
+async fn test_delete_schedule_returns_204(pool: PgPool) {
+    let (server, token, station_id) = setup_with_station(pool).await;
 
     let resp = server
         .post(&format!("/api/stations/{station_id}/schedules"))
@@ -207,9 +206,9 @@ async fn test_delete_schedule_returns_204() {
     assert!(resp.status_code() == 204 || resp.status_code() == 200);
 }
 
-#[tokio::test]
-async fn test_get_auto_fill_returns_200() {
-    let (server, token, station_id) = setup_with_station().await;
+#[sqlx::test(migrations = "./migrations")]
+async fn test_get_auto_fill_returns_200(pool: PgPool) {
+    let (server, token, station_id) = setup_with_station(pool).await;
 
     let resp = server
         .get(&format!("/api/stations/{station_id}/auto-fill"))
@@ -218,9 +217,9 @@ async fn test_get_auto_fill_returns_200() {
     assert!(resp.status_code() == 200 || resp.status_code() == 404);
 }
 
-#[tokio::test]
-async fn test_update_auto_fill_returns_200() {
-    let (server, token, station_id) = setup_with_station().await;
+#[sqlx::test(migrations = "./migrations")]
+async fn test_update_auto_fill_returns_200(pool: PgPool) {
+    let (server, token, station_id) = setup_with_station(pool).await;
 
     let resp = server
         .put(&format!("/api/stations/{station_id}/auto-fill"))
@@ -237,9 +236,9 @@ async fn test_update_auto_fill_returns_200() {
     assert!(resp.status_code() == 200 || resp.status_code() == 201);
 }
 
-#[tokio::test]
-async fn test_trigger_auto_fill_returns_200() {
-    let (server, token, station_id) = setup_with_station().await;
+#[sqlx::test(migrations = "./migrations")]
+async fn test_trigger_auto_fill_returns_200(pool: PgPool) {
+    let (server, token, station_id) = setup_with_station(pool).await;
 
     let resp = server
         .post(&format!("/api/stations/{station_id}/auto-fill/trigger"))
@@ -248,9 +247,9 @@ async fn test_trigger_auto_fill_returns_200() {
     assert!(resp.status_code() == 200 || resp.status_code() == 202);
 }
 
-#[tokio::test]
-async fn test_create_overlapping_events_returns_409() {
-    let (server, token, station_id) = setup_with_station().await;
+#[sqlx::test(migrations = "./migrations")]
+async fn test_create_overlapping_events_returns_409(pool: PgPool) {
+    let (server, token, station_id) = setup_with_station(pool).await;
 
     let first = server
         .post(&format!("/api/stations/{station_id}/schedule-events"))

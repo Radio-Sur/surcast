@@ -34,6 +34,29 @@ pub(crate) fn mime_from_ext(filename: &str) -> &'static str {
     }
 }
 
+pub(crate) fn cover_extension_from_mime(mime: &str) -> Option<&'static str> {
+    match mime {
+        "image/jpeg" | "image/jpg" => Some("jpg"),
+        "image/png" => Some("png"),
+        "image/webp" => Some("webp"),
+        "image/gif" => Some("gif"),
+        "image/avif" => Some("avif"),
+        "image/bmp" => Some("bmp"),
+        _ => None,
+    }
+}
+
+pub(crate) fn cover_mime_from_filename(filename: &str) -> &'static str {
+    match filename.rsplit('.').next().unwrap_or("") {
+        "png" => "image/png",
+        "webp" => "image/webp",
+        "gif" => "image/gif",
+        "avif" => "image/avif",
+        "bmp" => "image/bmp",
+        _ => "image/jpeg",
+    }
+}
+
 pub(crate) fn is_audio_file(name: &str) -> bool {
     let ext = name.rsplit('.').next().unwrap_or("").to_lowercase();
     matches!(ext.as_str(), "mp3" | "wav" | "ogg" | "flac" | "aac" | "m4a" | "wma" | "opus")
@@ -43,6 +66,18 @@ pub(crate) fn ext_from_filename(name: &str) -> &str {
     name.rsplit('.').next().unwrap_or("bin")
 }
 
+pub(crate) async fn save_uploaded_file(upload_dir: &str, bytes: &[u8], ext: &str) -> Result<String, AppError> {
+    let audio_dir = format!("{upload_dir}/audio");
+    tokio::fs::create_dir_all(&audio_dir)
+        .await
+        .db_error("failed to prepare upload directory")?;
+
+    let filename = format!("{}.{ext}", Uuid::new_v4());
+    let path = format!("{audio_dir}/{filename}");
+    tokio::fs::write(&path, bytes).await.db_error("failed to save uploaded file")?;
+
+    Ok(filename)
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -153,6 +188,17 @@ mod tests {
         assert_eq!(result, "sub/cover.jpg");
     }
 
+    #[test]
+    fn test_cover_format_preserves_supported_image_type() {
+        assert_eq!(cover_extension_from_mime("image/webp"), Some("webp"));
+        assert_eq!(cover_mime_from_filename("cover.webp"), "image/webp");
+    }
+
+    #[test]
+    fn test_cover_format_rejects_raw_samples() {
+        assert_eq!(cover_extension_from_mime("video/x-raw"), None);
+    }
+
     #[tokio::test]
     async fn test_save_uploaded_file_creates_file() {
         let dir = tempfile::tempdir().unwrap();
@@ -166,17 +212,4 @@ mod tests {
         let content = tokio::fs::read(&full_path).await.unwrap();
         assert_eq!(content, b"fake content");
     }
-}
-
-pub(crate) async fn save_uploaded_file(upload_dir: &str, bytes: &[u8], ext: &str) -> Result<String, AppError> {
-    let audio_dir = format!("{upload_dir}/audio");
-    tokio::fs::create_dir_all(&audio_dir)
-        .await
-        .db_error("failed to prepare upload directory")?;
-
-    let filename = format!("{}.{ext}", Uuid::new_v4());
-    let path = format!("{audio_dir}/{filename}");
-    tokio::fs::write(&path, bytes).await.db_error("failed to save uploaded file")?;
-
-    Ok(filename)
 }

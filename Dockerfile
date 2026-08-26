@@ -7,7 +7,7 @@ RUN bun run build
 
 FROM rust:slim-bookworm AS backend-builder
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends pkg-config libssl-dev \
+  && apt-get install -y --no-install-recommends pkg-config libssl-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
   && rm -rf /var/lib/apt/lists/*
 WORKDIR /workspace
 ENV CARGO_TARGET_DIR=/workspace/target
@@ -24,7 +24,7 @@ RUN cargo build --release --manifest-path backend/Cargo.toml
 
 FROM debian:bookworm-slim
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends ca-certificates icecast2 ffmpeg curl \
+  && apt-get install -y --no-install-recommends ca-certificates icecast2 ffmpeg curl gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-libav \
   && rm -rf /var/lib/apt/lists/* \
   && (groupadd -r icecast2 || true) \
   && usermod -g icecast2 icecast2

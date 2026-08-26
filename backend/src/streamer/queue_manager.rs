@@ -1,401 +1,278 @@
-use sqlx::PgPool;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
-use tokio::sync::broadcast;
+
+use sqlx::PgPool;
 use uuid::Uuid;
 
-use super::SongInfo;
-use super::StatusEvent;
-use crate::stations::repository;
+use super::pipeline::TrackKey;
+use super::{
+    queue_repository::QueueRepository,
+    queue_state::{QueueAnchor, QueueCursor, QueueState},
+    SongInfo,
+};
 
-/// Resolves the "now playing" index for a freshly loaded song list. Keeps the
-/// pointer anchored on the song that was playing (by `song_id` and its
-/// occurrence rank, so duplicated entries resolve uniquely) across queue edits
-/// (reorder / insert / remove). When that song is gone, falls back to the first
-/// song whose `position` is at or after `saved_position`, then to the end of the
-/// list (so the engine idles and refills).
-pub(crate) fn resolve_index(anchor: Option<(&str, usize)>, songs: &[SongInfo], saved_position: i32) -> usize {
-    if let Some((id, rank)) = anchor {
-        if rank > 0 {
-            let mut seen = 0usize;
-            for (i, s) in songs.iter().enumerate() {
-                if s.song_id == id {
-                    seen += 1;
-                    if seen == rank {
-                        return i;
-                    }
-                }
-            }
-        }
-    }
-    songs.iter().position(|s| s.position >= saved_position).unwrap_or(songs.len())
+pub(crate) struct QueueManager {
+    repository: QueueRepository,
+    state: Mutex<QueueState>,
+    dirty_cursor: Mutex<Option<(Option<Uuid>, QueueCursor)>>,
+    refill_attempted_for: Mutex<Option<TrackKey>>,
 }
 
-pub struct QueueManager {
-    pub db: PgPool,
-    pub station_id: Uuid,
-    pub upload_dir: String,
-    pub songs: Mutex<Vec<SongInfo>>,
-    pub current_idx: AtomicUsize,
-    pub status_tx: broadcast::Sender<StatusEvent>,
-    pub queue_tx: broadcast::Sender<String>,
+/// What a `commit_current` did with the target song. The in-memory current
+/// ALWAYS advances to the song — the caller only commits songs the physical
+/// pipeline has actually adopted, so the logical current must represent them
+/// regardless of persistence or membership. The variants only describe how
+/// the database side went.
+pub(crate) enum CommitOutcome {
+    /// The cursor (and refill) persisted and the in-memory current advanced.
+    Applied {
+        /// The next unconsumed queue item after the committed song.
+        successor: Option<SongInfo>,
+    },
+    /// Persisting the cursor failed; it is retried on the next queue reload
+    /// (dirty-cursor convention). The in-memory current advanced anyway.
+    Deferred { successor: Option<SongInfo> },
+    /// The committed song is no longer a queue member (it was removed or
+    /// replaced by a reload while a physical operation targeting it was in
+    /// flight). The in-memory current represents it as a phantom until a
+    /// handover commits a queue member — the same representation the queue
+    /// already uses for a current that vanished while playing. The cursor is
+    /// persisted best-effort (the database accepts cursors referencing
+    /// deleted queue items, the documented heal convention).
+    Missing { successor: Option<SongInfo> },
 }
 
 impl QueueManager {
-    pub fn new(
-        db: PgPool,
-        station_id: Uuid,
-        upload_dir: String,
-        songs: Vec<SongInfo>,
-        initial_idx: usize,
-        status_tx: broadcast::Sender<StatusEvent>,
-        queue_tx: broadcast::Sender<String>,
-    ) -> Self {
+    #[cfg(test)]
+    pub fn new(db: PgPool, station_id: Uuid, upload_dir: String, songs: Vec<SongInfo>, initial_idx: usize) -> Self {
         Self {
-            db,
-            station_id,
-            upload_dir,
-            songs: Mutex::new(songs),
-            current_idx: AtomicUsize::new(initial_idx),
-            status_tx,
-            queue_tx,
+            repository: QueueRepository::new(db, station_id, upload_dir),
+            state: Mutex::new(QueueState::new(songs, initial_idx)),
+            dirty_cursor: Mutex::new(None),
+            refill_attempted_for: Mutex::new(None),
+        }
+    }
+    pub fn new_with_cursor(db: PgPool, station_id: Uuid, upload_dir: String, songs: Vec<SongInfo>, cursor: QueueCursor) -> Self {
+        Self {
+            repository: QueueRepository::new(db, station_id, upload_dir),
+            state: Mutex::new(QueueState::from_cursor(songs, cursor)),
+            dirty_cursor: Mutex::new(None),
+            refill_attempted_for: Mutex::new(None),
         }
     }
 
-    pub async fn advance_song(&self) {
-        self.persist_index().await;
-        self.trim_played_items().await;
-        self.reload_from_db().await;
+    pub(crate) fn station_id(&self) -> Uuid {
+        self.repository.station_id()
+    }
 
-        let upcoming = {
-            let songs = self.songs.lock().unwrap_or_else(|e| e.into_inner());
-            songs.len().saturating_sub(self.current_idx.load(Ordering::Acquire) + 1) as i64
+    async fn retry_dirty_cursor(&self) {
+        let dirty = self.dirty_cursor.lock().unwrap_or_else(|error| error.into_inner()).clone();
+        let Some((previous_current_queue_item_id, cursor)) = dirty else {
+            return;
         };
-
-        if let Err(e) =
-            crate::scheduling::service::fill_queue_from_schedule(&self.db, self.station_id, Some(upcoming), &self.upload_dir).await
+        if self
+            .repository
+            .persist_cursor_if_current(previous_current_queue_item_id, &cursor)
+            .await
+            .is_ok()
         {
-            tracing::warn!(station_id = %self.station_id, error = ?e, "AutoDJ advance error");
+            let mut dirty = self.dirty_cursor.lock().unwrap_or_else(|error| error.into_inner());
+            if dirty.as_ref() == Some(&(previous_current_queue_item_id, cursor)) {
+                *dirty = None;
+            }
         }
-        self.reload_from_db().await;
-        self.push_queue_update().await;
+    }
+
+    /// Ask AutoDJ / schedule fill to top the queue up from the locked database
+    /// state. Returns `false` only when the fill call itself failed.
+    pub(crate) async fn refill(&self) -> bool {
+        self.repository.refill().await
     }
 
     pub async fn reload_from_db(&self) {
-        let anchor = {
-            let songs = self.songs.lock().unwrap_or_else(|e| e.into_inner());
-            let idx = self.current_idx.load(Ordering::Acquire);
-            songs.get(idx).map(|s| {
-                let rank = songs[..=idx].iter().filter(|x| x.song_id == s.song_id).count();
-                (s.song_id.clone(), rank)
-            })
-        };
-        let anchor_ref = anchor.as_ref().map(|(id, rank)| (id.as_str(), *rank));
-
-        let rows = repository::find_station_song_info(&self.db, self.station_id)
-            .await
-            .unwrap_or_default();
-        let songs: Vec<SongInfo> = rows
-            .into_iter()
-            .map(
-                |(file_path, title, artist, duration, song_id, position, cue_in, cue_out, cross_start_next, analyzed)| SongInfo {
-                    file_path: crate::songs::handlers::resolve_audio_path(&self.upload_dir, &file_path),
-                    title,
-                    artist,
-                    duration,
-                    song_id,
-                    position,
-                    cue_in,
-                    cue_out,
-                    cross_start_next,
-                    analyzed,
-                },
-            )
-            .collect();
-
-        let saved_index = sqlx::query_scalar::<_, i32>("SELECT current_song_index FROM stations WHERE id = $1")
-            .bind(self.station_id)
-            .fetch_optional(&self.db)
-            .await
-            .ok()
-            .flatten()
-            .unwrap_or(0)
-            .max(0);
-
-        let new_idx = resolve_index(anchor_ref, &songs, saved_index);
-
-        {
-            let mut list = self.songs.lock().unwrap_or_else(|e| e.into_inner());
-            *list = songs;
-        }
-        self.current_idx.store(new_idx, Ordering::Release);
+        self.retry_dirty_cursor().await;
+        let (songs, _current_index) = self.repository.load().await;
+        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        state.replace(songs, true);
     }
 
-    /// Replaces the in-memory song list (used after queue edits) while keeping
-    /// the "now playing" pointer anchored on the same song (id + duplicate rank).
-    pub fn reload_songs(&self, new_songs: Vec<SongInfo>) {
-        let anchor = {
-            let songs = self.songs.lock().unwrap_or_else(|e| e.into_inner());
-            let idx = self.current_idx.load(Ordering::Acquire);
-            songs.get(idx).map(|s| {
-                let rank = songs[..=idx].iter().filter(|x| x.song_id == s.song_id).count();
-                (s.song_id.clone(), rank)
-            })
-        };
-        let anchor_ref = anchor.as_ref().map(|(id, rank)| (id.as_str(), *rank));
-        let new_idx = resolve_index(anchor_ref, &new_songs, 0);
-
-        let mut songs = self.songs.lock().unwrap_or_else(|e| e.into_inner());
-        *songs = new_songs;
-        self.current_idx.store(new_idx, Ordering::Release);
+    pub fn reload_songs(&self, songs: Vec<SongInfo>, retain_missing_current: bool) {
+        self.state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .replace(songs, retain_missing_current);
     }
 
-    async fn persist_index(&self) {
-        let saved_index = sqlx::query_scalar::<_, i32>("SELECT current_song_index FROM stations WHERE id = $1")
-            .bind(self.station_id)
-            .fetch_optional(&self.db)
-            .await
-            .ok()
-            .flatten()
-            .unwrap_or(0);
-
-        let idx = self.current_idx.load(Ordering::Acquire);
-        let position = {
-            let songs = self.songs.lock().unwrap_or_else(|e| e.into_inner());
-            songs
-                .get(idx)
-                .map(|s| s.position)
-                .unwrap_or_else(|| songs.last().map(|s| s.position + 1).unwrap_or(saved_index))
+    pub async fn finish_current(&self) {
+        let Some((previous_current_queue_item_id, cursor)) = ({
+            let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+            state.finish_current()
+        }) else {
+            return;
         };
-
-        if let Err(e) = sqlx::query("UPDATE stations SET current_song_index = $1 WHERE id = $2")
-            .bind(position)
-            .bind(self.station_id)
-            .execute(&self.db)
+        if let Err(error) = self
+            .repository
+            .persist_cursor_if_current(Some(previous_current_queue_item_id), &cursor)
             .await
         {
-            tracing::warn!("Failed to persist current_song_index: {e}");
+            tracing::warn!(station_id = %self.station_id(), %error, "deferring terminal queue cursor persistence");
+            *self.dirty_cursor.lock().unwrap_or_else(|error| error.into_inner()) = Some((Some(previous_current_queue_item_id), cursor));
+        } else {
+            *self.dirty_cursor.lock().unwrap_or_else(|error| error.into_inner()) = None;
         }
     }
 
     pub async fn trim_played_items(&self) {
-        let row: Option<(i32, i32)> = sqlx::query_as("SELECT current_song_index, played_limit FROM stations WHERE id = $1")
-            .bind(self.station_id)
-            .fetch_optional(&self.db)
-            .await
-            .ok()
-            .flatten();
-
-        let (current_idx, played_limit) = match row {
-            Some(r) => r,
-            None => return,
-        };
-
-        if played_limit <= 0 || current_idx <= 0 {
-            return;
-        }
-
-        let played_items: Vec<(Uuid, Option<Uuid>)> =
-            sqlx::query_as("SELECT id, origin_playlist_id FROM station_queue WHERE station_id = $1 AND position < $2 ORDER BY position")
-                .bind(self.station_id)
-                .bind(current_idx)
-                .fetch_all(&self.db)
-                .await
-                .unwrap_or_default();
-
-        if played_items.is_empty() {
-            return;
-        }
-
-        let mut visible = 0i32;
-        let mut i = 0;
-        while i < played_items.len() {
-            visible += 1;
-            if let Some(pid) = played_items[i].1 {
-                i += 1;
-                while i < played_items.len() && played_items[i].1 == Some(pid) {
-                    i += 1;
-                }
-            } else {
-                i += 1;
-            }
-        }
-
-        if visible <= played_limit {
-            return;
-        }
-
-        let to_remove = visible - played_limit;
-        let mut removed = 0i32;
-        let mut delete_ids: Vec<Uuid> = Vec::new();
-        let mut i = 0;
-
-        while i < played_items.len() && removed < to_remove {
-            let item = &played_items[i];
-            delete_ids.push(item.0);
-            i += 1;
-            removed += 1;
-
-            if let Some(pid) = item.1 {
-                while i < played_items.len() && played_items[i].1 == Some(pid) {
-                    delete_ids.push(played_items[i].0);
-                    i += 1;
-                }
-            }
-        }
-
-        if delete_ids.is_empty() {
-            return;
-        }
-
-        for id in &delete_ids {
-            if let Err(e) = sqlx::query("DELETE FROM station_queue WHERE id = $1 AND station_id = $2")
-                .bind(id)
-                .bind(self.station_id)
-                .execute(&self.db)
-                .await
-            {
-                tracing::warn!("Failed to clean up queue items: {e}");
-            }
-        }
+        self.repository.trim_played_items().await;
     }
 
-    pub fn subscribe_status(&self) -> broadcast::Receiver<StatusEvent> {
-        self.status_tx.subscribe()
-    }
-
-    pub fn publish_status(&self, event: StatusEvent) {
-        if self.status_tx.send(event).is_err() {
-            tracing::debug!("No status listeners for station {}", self.station_id);
-        }
-    }
-
-    pub fn subscribe_queue(&self) -> broadcast::Receiver<String> {
-        self.queue_tx.subscribe()
-    }
-
-    pub async fn push_queue_update(&self) {
-        let items: Vec<serde_json::Value> = sqlx::query_as::<
-            _,
-            (
-                Uuid,
-                Uuid,
-                Uuid,
-                i32,
-                String,
-                String,
-                String,
-                i32,
-                String,
-                String,
-                Option<Uuid>,
-                Option<String>,
-                bool,
-            ),
-        >(
-            r#"SELECT sq.id, sq.station_id, sq.song_id, sq.position,
-                      s.title, s.artist, s.album, s.duration, s.mime_type, s.cover_path,
-                      sq.origin_playlist_id, p.name as playlist_name, sq.is_auto_dj
-               FROM station_queue sq
-               JOIN songs s ON s.id = sq.song_id
-               LEFT JOIN playlists p ON p.id = sq.origin_playlist_id
-               WHERE sq.station_id = $1
-               ORDER BY sq.position"#,
-        )
-        .bind(self.station_id)
-        .fetch_all(&self.db)
-        .await
-        .unwrap_or_default()
-        .into_iter()
-        .map(
-            |(
-                id,
-                station_id,
-                song_id,
-                position,
-                title,
-                artist,
-                album,
-                duration,
-                mime_type,
-                cover_path,
-                origin_playlist_id,
-                playlist_name,
-                is_auto_dj,
-            )| {
-                serde_json::json!({
-                    "id": id,
-                    "station_id": station_id,
-                    "song_id": song_id,
-                    "position": position,
-                    "title": title,
-                    "artist": artist,
-                    "album": album,
-                    "duration": duration,
-                    "has_cover": !cover_path.is_empty(),
-                    "mime_type": mime_type,
-                    "origin_playlist_id": origin_playlist_id,
-                    "playlist_name": playlist_name,
-                    "is_auto_dj": is_auto_dj,
-                })
-            },
-        )
-        .collect();
-
-        let msg = serde_json::to_string(&items).unwrap_or_else(|_| "[]".into());
-        if self.queue_tx.send(msg).is_err() {
-            tracing::debug!("No queue listeners for station {}", self.station_id);
-        }
+    pub async fn queue_json(&self) -> String {
+        self.repository.queue_json().await
     }
 
     pub fn current_song_index(&self) -> usize {
-        let songs = self.songs.lock().unwrap_or_else(|e| e.into_inner());
-        let len = songs.len();
-        if len == 0 {
-            return 0;
-        }
-        self.current_idx.load(Ordering::Acquire).min(len - 1)
+        self.state.lock().unwrap_or_else(|error| error.into_inner()).current_song_index()
     }
 
     pub fn song_count(&self) -> usize {
-        self.songs.lock().unwrap_or_else(|e| e.into_inner()).len()
+        self.state.lock().unwrap_or_else(|error| error.into_inner()).song_count()
     }
 
-    pub fn song_info(&self, idx: usize) -> Option<SongInfo> {
-        self.songs.lock().unwrap_or_else(|e| e.into_inner()).get(idx).cloned()
+    #[cfg(test)]
+    pub fn song_at(&self, index: usize) -> Option<SongInfo> {
+        self.state.lock().unwrap_or_else(|error| error.into_inner()).song_at(index)
+    }
+
+    #[cfg(test)]
+    pub fn songs(&self) -> Vec<SongInfo> {
+        self.state.lock().unwrap_or_else(|error| error.into_inner()).songs()
     }
 
     pub fn current_song_info(&self) -> Option<SongInfo> {
-        let idx = self.current_idx.load(Ordering::Acquire);
-        self.song_info(idx)
+        self.state.lock().unwrap_or_else(|error| error.into_inner()).current_song_info()
     }
 
     pub fn peek_next_song(&self) -> Option<SongInfo> {
-        let idx = self.current_idx.load(Ordering::Acquire);
-        self.song_info(idx + 1)
+        self.state.lock().unwrap_or_else(|error| error.into_inner()).peek_next_song()
     }
 
-    pub fn current_idx(&self) -> usize {
-        self.current_idx.load(Ordering::Acquire)
+    pub fn successor_after(&self, key: &TrackKey) -> Option<SongInfo> {
+        self.state.lock().unwrap_or_else(|error| error.into_inner()).successor_after(key)
+    }
+    pub(crate) fn anchor_after_current(&self) -> QueueAnchor {
+        self.state.lock().unwrap_or_else(|error| error.into_inner()).anchor_after_current()
     }
 
-    pub fn advance_idx(&self, delta: usize) {
-        self.current_idx.fetch_add(delta, Ordering::Release);
+    pub async fn commit_current(&self, song: &SongInfo, anchor: QueueAnchor) -> CommitOutcome {
+        let key = TrackKey {
+            queue_item_id: song.queue_item_id,
+            song_id: song.song_id,
+        };
+        let (previous_current_queue_item_id, in_items, cursor) = {
+            let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+            let previous_current_queue_item_id = state.current_song_info().map(|song| song.queue_item_id);
+            let in_items = state.song_by_queue_item_id(song.queue_item_id).is_some();
+            // Build the cursor without mutating the in-memory state yet: the
+            // database commit (cursor + AutoDJ refill) is atomic, and memory
+            // must not move ahead of it — otherwise a status snapshot could
+            // observe the new song index together with the pre-refill queue
+            // and report a short upcoming window. The cursor is built from
+            // the caller's song even when it is no longer a queue member:
+            // the pipeline has physically adopted it, and the database
+            // accepts cursors referencing deleted queue items (the heal
+            // convention for cleared queues).
+            let mut consumed_queue_item_ids: Vec<_> = anchor.consumed_queue_item_ids.iter().copied().collect();
+            consumed_queue_item_ids.sort_unstable();
+            let cursor = QueueCursor {
+                current_queue_item_id: Some(song.queue_item_id),
+                consumed_queue_item_ids,
+                legacy_position: song.position,
+            };
+            (previous_current_queue_item_id, in_items, cursor)
+        };
+        let owns_refill = reserve_refill(
+            &mut self.refill_attempted_for.lock().unwrap_or_else(|error| error.into_inner()),
+            &key,
+        );
+        let result = if owns_refill {
+            self.repository
+                .commit_cursor_and_refill(previous_current_queue_item_id, &cursor)
+                .await
+        } else {
+            self.repository
+                .persist_cursor_if_current(previous_current_queue_item_id, &cursor)
+                .await
+        };
+        if let Err(error) = result {
+            if owns_refill {
+                release_refill(
+                    &mut self.refill_attempted_for.lock().unwrap_or_else(|error| error.into_inner()),
+                    &key,
+                );
+            }
+            tracing::warn!(station_id = %self.station_id(), %error, "deferring queue cursor persistence");
+            *self.dirty_cursor.lock().unwrap_or_else(|error| error.into_inner()) = Some((previous_current_queue_item_id, cursor));
+            // The pipeline has already adopted the song, so the in-memory
+            // current follows it even when the persist failed; the dirty
+            // cursor catches the database up on the next queue reload. The
+            // snapshot-straddle cost (new current with pre-refill queue) is
+            // transient and preferable to claiming a track the pipeline is
+            // no longer playing.
+            {
+                let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+                state.commit_current(song.clone(), anchor);
+            }
+            let successor = self.successor_after(&key);
+            return if in_items {
+                CommitOutcome::Deferred { successor }
+            } else {
+                CommitOutcome::Missing { successor }
+            };
+        }
+        // The database cursor and refill are committed: only now advance the
+        // in-memory state so status snapshots never straddle the two.
+        {
+            let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+            state.commit_current(song.clone(), anchor);
+        }
+        *self.dirty_cursor.lock().unwrap_or_else(|error| error.into_inner()) = None;
+        if owns_refill {
+            self.reload_from_db().await;
+        }
+        let successor = self.successor_after(&key);
+        if in_items {
+            CommitOutcome::Applied { successor }
+        } else {
+            CommitOutcome::Missing { successor }
+        }
+    }
+}
+
+fn reserve_refill(attempted_for: &mut Option<TrackKey>, target: &TrackKey) -> bool {
+    if attempted_for.as_ref() == Some(target) {
+        false
+    } else {
+        *attempted_for = Some(target.clone());
+        true
+    }
+}
+fn release_refill(attempted_for: &mut Option<TrackKey>, target: &TrackKey) {
+    if attempted_for.as_ref() == Some(target) {
+        *attempted_for = None;
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::resolve_index;
-    use super::SongInfo;
+    use super::*;
 
-    fn song(id: &str, position: i32) -> SongInfo {
+    fn song(queue_item_id: Uuid, song_id: Uuid, position: i32) -> SongInfo {
         SongInfo {
-            song_id: id.into(),
-            title: "t".into(),
-            artist: "a".into(),
-            duration: 10,
-            file_path: "/tmp/x.mp3".into(),
+            queue_item_id,
+            song_id,
+            title: String::new(),
+            artist: String::new(),
+            duration: 1,
+            file_path: String::new(),
             position,
             cue_in: 0.0,
             cue_out: 0.0,
@@ -405,57 +282,58 @@ mod tests {
     }
 
     #[test]
-    fn test_resolve_index_keeps_same_song_after_reorder() {
-        // playing A; user moved C to the top -> [C, A, B]
-        let songs = vec![song("C", 0), song("A", 1), song("B", 2)];
-        assert_eq!(resolve_index(Some(("A", 1)), &songs, 0), 1);
-        assert_eq!(resolve_index(Some(("B", 1)), &songs, 0), 2);
-        assert_eq!(resolve_index(Some(("C", 1)), &songs, 0), 0);
+    fn successor_uses_queue_item_identity_for_duplicate_songs() {
+        let repeated_song = Uuid::new_v4();
+        let first_item = Uuid::new_v4();
+        let second_item = Uuid::new_v4();
+        let state = QueueState::new(
+            vec![
+                song(first_item, repeated_song, 1),
+                song(second_item, repeated_song, 2),
+                song(Uuid::new_v4(), Uuid::new_v4(), 3),
+            ],
+            0,
+        );
+
+        let successor = state
+            .successor_after(&TrackKey {
+                queue_item_id: first_item,
+                song_id: repeated_song,
+            })
+            .unwrap();
+
+        assert_eq!(successor.queue_item_id, second_item);
     }
 
     #[test]
-    fn test_resolve_index_keeps_pointer_stable_without_edits() {
-        let songs = vec![song("A", 0), song("B", 1), song("C", 2)];
-        assert_eq!(resolve_index(Some(("A", 1)), &songs, 0), 0);
-        assert_eq!(resolve_index(Some(("B", 1)), &songs, 0), 1);
+    fn state_commits_current_item_and_returns_the_successor() {
+        let first = song(Uuid::new_v4(), Uuid::new_v4(), 1);
+        let second = song(Uuid::new_v4(), Uuid::new_v4(), 2);
+        let mut state = QueueState::new(vec![first, second.clone()], 0);
+
+        let anchor = state.anchor_after_current();
+        assert!(state.commit_current(second.clone(), anchor).is_none());
+        assert_eq!(state.current_song_info().unwrap().queue_item_id, second.queue_item_id);
     }
 
     #[test]
-    fn test_resolve_index_missing_anchor_uses_saved_position() {
-        // current song removed; fall back to first song at/after saved position
-        let songs = vec![song("X", 0), song("Y", 1)];
-        assert_eq!(resolve_index(Some(("GONE", 1)), &songs, 0), 0);
-        assert_eq!(resolve_index(Some(("GONE", 1)), &songs, 1), 1);
-        assert_eq!(resolve_index(Some(("GONE", 1)), &songs, 3), songs.len());
-    }
+    fn refill_is_attempted_once_per_pair_target() {
+        let target = TrackKey {
+            queue_item_id: Uuid::new_v4(),
+            song_id: Uuid::new_v4(),
+        };
+        let replacement = TrackKey {
+            queue_item_id: Uuid::new_v4(),
+            song_id: Uuid::new_v4(),
+        };
+        let mut attempted_for = None;
 
-    #[test]
-    fn test_resolve_index_no_anchor_uses_saved_position() {
-        let songs = vec![song("A", 0), song("B", 1), song("C", 2)];
-        assert_eq!(resolve_index(None, &songs, 1), 1);
-        assert_eq!(resolve_index(None, &songs, 5), songs.len());
-    }
-
-    #[test]
-    fn test_resolve_index_empty_list() {
-        assert_eq!(resolve_index(Some(("A", 1)), &[], 0), 0);
-        assert_eq!(resolve_index(None, &[], 0), 0);
-    }
-
-    #[test]
-    fn test_resolve_index_duplicate_songs_rank_uniquely() {
-        // [A, A, B] — playing the SECOND copy of A must stay on it, not jump to the first
-        let songs = vec![song("A", 0), song("A", 1), song("B", 2)];
-        assert_eq!(resolve_index(Some(("A", 1)), &songs, 0), 0);
-        assert_eq!(resolve_index(Some(("A", 2)), &songs, 1), 1);
-        assert_eq!(resolve_index(Some(("B", 1)), &songs, 0), 2);
-    }
-
-    #[test]
-    fn test_resolve_index_duplicates_survive_reorder() {
-        // A (1st copy) playing; reorder brings another song to the front
-        let songs = vec![song("A", 0), song("B", 1), song("A", 2), song("C", 3)];
-        assert_eq!(resolve_index(Some(("A", 1)), &songs, 0), 0);
-        assert_eq!(resolve_index(Some(("A", 2)), &songs, 0), 2);
+        assert!(reserve_refill(&mut attempted_for, &target));
+        assert!(!reserve_refill(&mut attempted_for, &target));
+        release_refill(&mut attempted_for, &target);
+        assert!(reserve_refill(&mut attempted_for, &target));
+        release_refill(&mut attempted_for, &replacement);
+        assert!(!reserve_refill(&mut attempted_for, &target));
+        assert!(reserve_refill(&mut attempted_for, &replacement));
     }
 }

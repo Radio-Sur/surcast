@@ -40,11 +40,16 @@ CREATE TABLE IF NOT EXISTS stations (
     slug VARCHAR(255) NOT NULL DEFAULT '',
     stream_url TEXT,
     current_song_index INTEGER NOT NULL DEFAULT 0,
+    current_queue_item_id UUID,
+    consumed_queue_item_ids UUID[] NOT NULL DEFAULT '{}',
+    current_queue_cursor_format SMALLINT NOT NULL DEFAULT 0
+        CONSTRAINT stations_current_queue_cursor_format_check CHECK (current_queue_cursor_format IN (0, 1)),
     prebuffer_bytes INTEGER NOT NULL DEFAULT 16384,
     played_limit INTEGER NOT NULL DEFAULT 100,
     default_fade_ms INTEGER NOT NULL DEFAULT 3000,
     transition_mode TEXT NOT NULL DEFAULT 'autocue',
     autocue_fade_max_ms INTEGER NOT NULL DEFAULT 5000,
+    is_started BOOLEAN NOT NULL DEFAULT FALSE,
     created_by UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -52,6 +57,10 @@ CREATE TABLE IF NOT EXISTS stations (
 
 CREATE INDEX IF NOT EXISTS idx_stations_created_by ON stations(created_by);
 CREATE INDEX IF NOT EXISTS idx_stations_slug ON stations(slug);
+
+-- Persistent desired lifecycle state (started/stopped); re-applied safely on
+-- existing databases. Never the transient pipeline state.
+ALTER TABLE stations ADD COLUMN IF NOT EXISTS is_started BOOLEAN NOT NULL DEFAULT FALSE;
 
 -- ---------------------------------------------------------------
 -- Songs (incl. autocue analysis columns)
@@ -165,7 +174,7 @@ CREATE TABLE IF NOT EXISTS station_auto_fill (
     source_playlist_id UUID REFERENCES playlists(id) ON DELETE SET NULL,
     avoid_artist_repeat BOOLEAN NOT NULL DEFAULT true,
     min_song_gap INTEGER NOT NULL DEFAULT 3,
-    songs_ahead INTEGER NOT NULL DEFAULT 5
+    songs_ahead INTEGER NOT NULL DEFAULT 4
 );
 
 CREATE TABLE IF NOT EXISTS station_auto_fill_playlists (

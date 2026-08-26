@@ -20,6 +20,10 @@ pub struct Station {
     pub created_by: Uuid,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    /// The user's desired lifecycle state: `true` = the station should be
+    /// broadcasting (and is restored after a backend restart). This is NOT
+    /// the transient pipeline state.
+    pub is_started: bool,
 }
 
 impl Station {

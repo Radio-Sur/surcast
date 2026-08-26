@@ -9,7 +9,9 @@ use sqlx::PgPool;
 
 use crate::errors::AppError;
 use crate::icecast::models::{get_settings, IcecastMode};
-use crate::listeners::{ListenerUpdate, ListenersState, POLL_INTERVAL, RETENTION_DAYS};
+use crate::listeners::{
+    ListenerUpdate, ListenersState, HISTORY_SAMPLE_INTERVAL, LIVE_POLL_INTERVAL, RETENTION_DAYS, STATS_REQUEST_TIMEOUT,
+};
 use crate::stations::repository::find_all_stations;
 use crate::util::url_encode;
 
@@ -64,6 +66,12 @@ fn parse_stats_xml(xml: &str) -> Vec<SourceStats> {
     sources
 }
 
+fn listener_count_for_mount(by_mount: &HashMap<String, i32>, mount: &str) -> i32 {
+    let mount = mount.trim_start_matches('/');
+    let encoded = url_encode(mount);
+    by_mount.get(mount).or_else(|| by_mount.get(&encoded)).copied().unwrap_or(0)
+}
+
 /// Builds the admin stats URL and credentials from Icecast settings.
 fn stats_endpoint(settings: &crate::icecast::models::IcecastSettings) -> Option<(String, String, String)> {
     match settings.mode {
@@ -83,8 +91,9 @@ fn stats_endpoint(settings: &crate::icecast::models::IcecastSettings) -> Option<
     }
 }
 
-/// Fetches live listener counts for every station and persists a sample.
-async fn poll_once(db: &PgPool, state: &Arc<ListenersState>, client: &Client) -> Result<(), AppError> {
+/// Fetches live listener counts for every station and optionally persists a
+/// historical sample.
+async fn poll_once(db: &PgPool, state: &Arc<ListenersState>, client: &Client, persist_sample: bool) -> Result<(), AppError> {
     let settings = get_settings(db).await?;
     let Some((url, user, password)) = stats_endpoint(&settings) else {
         return Ok(());
@@ -93,7 +102,7 @@ async fn poll_once(db: &PgPool, state: &Arc<ListenersState>, client: &Client) ->
     let response = client
         .get(&url)
         .basic_auth(user, Some(password))
-        .timeout(POLL_INTERVAL)
+        .timeout(STATS_REQUEST_TIMEOUT)
         .send()
         .await;
 
@@ -118,27 +127,26 @@ async fn poll_once(db: &PgPool, state: &Arc<ListenersState>, client: &Client) ->
 
     let stations = find_all_stations(db).await?;
     let now = Utc::now();
-    let mut samples = Vec::with_capacity(stations.len());
-    let mut updates = Vec::with_capacity(stations.len());
+    let mut samples = persist_sample.then(|| Vec::with_capacity(stations.len()));
 
     for station in stations {
-        let mount = station.mount();
-        let encoded = url_encode(&mount);
-        let listeners = by_mount.get(&mount).or_else(|| by_mount.get(&encoded)).copied().unwrap_or(0);
-        samples.push((station.id, listeners));
-        updates.push(ListenerUpdate {
-            station_id: station.id,
-            listeners,
-            updated_at: now,
-            online: true,
-        });
+        let listeners = listener_count_for_mount(&by_mount, &station.mount());
+        if let Some(samples) = samples.as_mut() {
+            samples.push((station.id, listeners));
+        }
+        state
+            .publish(ListenerUpdate {
+                station_id: station.id,
+                listeners,
+                updated_at: now,
+                online: true,
+            })
+            .await;
     }
 
-    crate::listeners::models::insert_samples(db, &samples, now).await?;
-    crate::listeners::models::prune_older_than(db, RETENTION_DAYS).await?;
-
-    for update in updates {
-        state.publish(update);
+    if let Some(samples) = samples {
+        crate::listeners::models::insert_samples(db, &samples, now).await?;
+        crate::listeners::models::prune_older_than(db, RETENTION_DAYS).await?;
     }
 
     Ok(())
@@ -155,23 +163,30 @@ async fn mark_offline(db: &PgPool, state: &Arc<ListenersState>) {
     };
     let now = Utc::now();
     for station in stations {
-        state.publish(ListenerUpdate {
-            station_id: station.id,
-            listeners: 0,
-            updated_at: now,
-            online: false,
-        });
+        state
+            .publish(ListenerUpdate {
+                station_id: station.id,
+                listeners: 0,
+                updated_at: now,
+                online: false,
+            })
+            .await;
     }
 }
 
 pub async fn run(db: PgPool, state: Arc<ListenersState>) {
     let client = Client::new();
-    let mut interval = tokio::time::interval(POLL_INTERVAL);
+    let mut interval = tokio::time::interval(LIVE_POLL_INTERVAL);
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut last_sample_at = None;
 
     loop {
         interval.tick().await;
-        if let Err(e) = poll_once(&db, &state, &client).await {
+        let persist_sample = last_sample_at.is_none_or(|last: tokio::time::Instant| last.elapsed() >= HISTORY_SAMPLE_INTERVAL);
+        if persist_sample {
+            last_sample_at = Some(tokio::time::Instant::now());
+        }
+        if let Err(e) = poll_once(&db, &state, &client, persist_sample).await {
             tracing::error!("Listener poll failed: {e}");
         }
     }
@@ -231,13 +246,15 @@ mod tests {
     }
 
     #[test]
-    fn mount_key_trims_leading_slash() {
-        let xml = r#"<icestats><source mount="/rock.mp3"><listeners>5</listeners></source></icestats>"#;
+    fn matches_station_mount_with_or_without_leading_slash() {
+        let xml = r#"<icestats><source mount="/main.mp3"><listeners>5</listeners></source></icestats>"#;
         let sources = parse_stats_xml(xml);
         let by_mount: HashMap<String, i32> = sources
             .iter()
             .map(|s| (s.mount.trim_start_matches('/').to_string(), s.listeners))
             .collect();
-        assert_eq!(by_mount.get("rock.mp3"), Some(&5));
+
+        assert_eq!(listener_count_for_mount(&by_mount, "main.mp3"), 5);
+        assert_eq!(listener_count_for_mount(&by_mount, "/main.mp3"), 5);
     }
 }

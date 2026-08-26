@@ -9,7 +9,7 @@ futures = "0.3"
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "postgres", "chrono", "uuid"] }
+sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "postgres", "chrono", "uuid", "macros", "migrate"] }
 jsonwebtoken = "9"
 bcrypt = "0.19"
 tower-http = { version = "0.6", features = ["cors", "trace", "fs", "catch-panic"] }
@@ -23,7 +23,6 @@ sha2 = "0.11"
 hex = "0.4"
 rand = "0.10"
 reqwest = { version = "0.12", features = ["json"] }
-id3 = "1"
 zip = "8"
 tokio-stream = "0.1"
 base64 = "0.23"
@@ -31,11 +30,26 @@ async-trait = "0.1"
 quick-xml = "0.37"
 mime_guess = "2"
 autocue-rs = { path = "../autocue-rs" }
+gstreamer = { version = "0.25.3", features = ["v1_20"] }
+gstreamer-controller = { version = "0.25.2", features = ["v1_20"] }
+gstreamer-pbutils = { version = "0.25.2", features = ["v1_20"] }
+
+[features]
+# Shared test-database provisioner (`src/test_db.rs`). Enabled whenever any
+# test target builds (see the self dev-dependency below), so production
+# builds compile without the CREATE/DROP/sweep support in the library API.
+test-support = []
 
 [dev-dependencies]
-axum-test = "21"
+# Self dev-dependency: turns `test-support` on for every test target
+# (lib unit tests, integration tests) and off for production builds.
+surcast-backend = { path = ".", features = ["test-support"] }
+axum-test = { version = "21", features = ["ws"] }
 tempfile = "3"
 serde_json = "1"
 reqwest = { version = "0.12", features = ["json"] }
 uuid = { version = "1", features = ["v4"] }
 serial_test = "4"
+id3 = "1"
+tokio-tungstenite = "0.24"
+parking_lot = "0.12"
