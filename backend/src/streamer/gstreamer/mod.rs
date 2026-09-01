@@ -180,6 +180,23 @@ impl GStreamerPipeline {
         let (result, current, pending) = self.pipeline.state(gst::ClockTime::from_seconds(5));
         result.map_err(|error| PipelineError::Pipeline(error.to_string()))?;
         if current != target {
+            // Diagnostic for stalled transitions: log bus errors and fakesink state
+            // without spamming StateChanged. The bus sync handler already routes
+            // DecodeFailed/SinkDisconnected, but a stalled transition without
+            // an Error message indicates preroll blocking (e.g. live sink async).
+            if let Some(bus) = self.pipeline.bus() {
+                while let Some(msg) = bus.pop() {
+                    if let gst::MessageView::Error(err) = msg.view() {
+                        tracing::error!(
+                            "GStreamer bus error during set_state to {:?}: {} (debug: {:?}) from {:?}",
+                            target,
+                            err.error(),
+                            err.debug(),
+                            msg.src().map(|s| s.path_string().to_string())
+                        );
+                    }
+                }
+            }
             return Err(PipelineError::Pipeline(format!(
                 "state transition to {target:?} stalled at {current:?} with {pending:?} pending"
             )));

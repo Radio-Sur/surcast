@@ -16,6 +16,7 @@ pub(super) fn build(factory: &'static str, target: &IcecastTarget) -> Result<gst
         configure(&sink, target);
     } else {
         sink.set_property("sync", false);
+        sink.set_property("async", false);
     }
     Ok(sink)
 }

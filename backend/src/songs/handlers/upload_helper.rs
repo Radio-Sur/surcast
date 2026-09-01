@@ -1,12 +1,16 @@
+use std::path::PathBuf;
+
 use uuid::Uuid;
 
 use crate::errors::{AppError, DbResult};
+use crate::util::normalize_lexically;
 
 pub(crate) fn resolve_audio_path(upload_dir: &str, filename: &str) -> String {
     if filename.starts_with('/') || filename.contains('/') {
         filename.to_string()
     } else {
-        format!("{upload_dir}/audio/{filename}")
+        let p = PathBuf::from(upload_dir).join("audio").join(filename);
+        normalize_lexically(&p).to_string_lossy().into_owned()
     }
 }
 
@@ -17,7 +21,8 @@ pub(crate) fn resolve_cover_path(upload_dir: &str, filename: &str) -> String {
     if filename.starts_with('/') || filename.contains('/') {
         filename.to_string()
     } else {
-        format!("{upload_dir}/covers/{filename}")
+        let p = PathBuf::from(upload_dir).join("covers").join(filename);
+        normalize_lexically(&p).to_string_lossy().into_owned()
     }
 }
 
@@ -67,13 +72,13 @@ pub(crate) fn ext_from_filename(name: &str) -> &str {
 }
 
 pub(crate) async fn save_uploaded_file(upload_dir: &str, bytes: &[u8], ext: &str) -> Result<String, AppError> {
-    let audio_dir = format!("{upload_dir}/audio");
+    let audio_dir = normalize_lexically(&PathBuf::from(upload_dir).join("audio"));
     tokio::fs::create_dir_all(&audio_dir)
         .await
         .db_error("failed to prepare upload directory")?;
 
     let filename = format!("{}.{ext}", Uuid::new_v4());
-    let path = format!("{audio_dir}/{filename}");
+    let path = audio_dir.join(&filename);
     tokio::fs::write(&path, bytes).await.db_error("failed to save uploaded file")?;
 
     Ok(filename)

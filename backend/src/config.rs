@@ -1,5 +1,7 @@
 use std::{env, path::PathBuf};
 
+use crate::util::normalize_lexically;
+
 #[derive(Clone)]
 pub struct Config {
     pub database_url: String,
@@ -41,11 +43,12 @@ impl Config {
 fn absolute_upload_dir(path: String) -> String {
     let path = PathBuf::from(path);
     let absolute = if path.is_absolute() {
-        path
+        normalize_lexically(&path)
     } else {
-        env::current_dir()
+        let joined = env::current_dir()
             .expect("failed to resolve UPLOAD_DIR from the current directory")
-            .join(path)
+            .join(path);
+        normalize_lexically(&joined)
     };
     absolute.to_string_lossy().into_owned()
 }
@@ -124,7 +127,13 @@ mod tests {
         env::set_var("UPLOAD_DIR", "./../uploads");
 
         let config = Config::from_env();
-        assert!(std::path::Path::new(&config.upload_dir).is_absolute());
+        let p = std::path::Path::new(&config.upload_dir);
+        assert!(p.is_absolute());
+        // must be lexically normalized - no ./ or ../ segments
+        let s = config.upload_dir.clone();
+        assert!(!s.contains("/./"), "upload_dir not normalized: {s}");
+        assert!(!s.contains("/../"), "upload_dir not normalized: {s}");
+        assert!(!s.ends_with("/."), "upload_dir not normalized: {s}");
 
         cleanup_env();
     }

@@ -1,7 +1,10 @@
+use std::path::PathBuf;
+
 use crate::errors::AppError;
 use crate::songs::analysis::{analyze_audio_with_discovered_duration, discover_media, DiscoveredMedia};
 use crate::songs::handlers::{cover_extension_from_mime, ext_from_filename, mime_from_ext, resolve_audio_path, save_uploaded_file};
 use crate::songs::repository;
+use crate::util::normalize_lexically;
 use sqlx::PgPool;
 use uuid::Uuid;
 
@@ -112,10 +115,10 @@ async fn save_cover(data: &[u8], mime: &str, upload_dir: &str) -> String {
         tracing::warn!(%mime, "Unsupported embedded cover format");
         return String::new();
     };
-    let covers_dir = format!("{upload_dir}/covers");
+    let covers_dir = normalize_lexically(&PathBuf::from(upload_dir).join("covers"));
     let _ = tokio::fs::create_dir_all(&covers_dir).await;
     let cover_filename = format!("{}.{}", Uuid::new_v4(), ext);
-    let cover_file = format!("{covers_dir}/{cover_filename}");
+    let cover_file = covers_dir.join(&cover_filename);
     if let Err(e) = tokio::fs::write(&cover_file, data).await {
         tracing::warn!("Failed to save cover art: {e}");
         String::new()
