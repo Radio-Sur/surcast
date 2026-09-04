@@ -461,7 +461,12 @@ async fn natural_queue_exhaustion_refills_from_auto_dj() {
         if advanced.total < 3 {
             return Err(failure(format!("Auto DJ refill did not populate queue: {advanced:?}")));
         }
-        if advanced.song_index != 1 {
+        // NOTE: AutoDJ picks are random and refills can stack, so the first
+        // observed non-A status may be past index 1 (e.g. a repeated pick or
+        // a handover landing between polls, worse under llvm-cov slowdown).
+        // The regression under test is a stopped radio after exhaustion, so
+        // advancing past A with a refilled queue is the invariant.
+        if advanced.song_index < 1 {
             return Err(failure(format!("Auto DJ pick played at wrong index: {advanced:?}")));
         }
         Ok(())
@@ -681,8 +686,12 @@ async fn mixed_queue_drain_keeps_playing_with_auto_dj_picks() {
         if pick.total < 4 {
             return Err(failure(format!("Auto DJ did not refill past manual tail: {pick:?}")));
         }
-        let second = if pick.title == "tone D" { "tone E" } else { "tone D" };
-        app.wait_title_playing(&station, second)
+        // NOTE: AutoDJ picks are random (mode "random"), so asserting a
+        // specific next title (D->E) is flaky (~20% miss rate in a 30s
+        // window). The regression under test is stopped playback after the
+        // manual tail, so prove the station advances past the first pick
+        // instead of demanding a particular title.
+        app.wait_advance(&station, pick.song_index)
             .await
             .map_err(|e| failure(format!("playback stopped between Auto DJ picks: {e}")))?;
         Ok(())

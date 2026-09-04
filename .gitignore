@@ -35,3 +35,11 @@ Thumbs.db
 # Tests
 test-results/
 playwright-report/
+
+# Coverage
+coverage/
+lcov.info
+*.profraw
+*.profdata
+coverage-comment.md
+frontend/coverage/

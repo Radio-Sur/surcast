@@ -23,17 +23,6 @@ jobs:
         with:
           bun-version: latest
 
-      - uses: actions-rust-lang/setup-rust-toolchain@v1
-        with:
-          working-directory: ./backend
-
-      - uses: actions/cache@v6
-        with:
-          path: backend/target
-          key: cargo-${{ runner.os }}-${{ hashFiles('backend/Cargo.lock') }}
-          restore-keys: |
-            cargo-${{ runner.os }}-
-
       - run: bun install --frozen-lockfile
 
       - name: Lint

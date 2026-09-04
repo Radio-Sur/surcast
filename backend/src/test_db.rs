@@ -56,6 +56,8 @@ const TEST_SEPARATOR: &str = "_test_";
 /// Prefix of the current fixed-length format (Surcast test DataBase v2).
 const NEW_PREFIX: &str = "scdb2_";
 
+/// Prefix for the template database used to speed up per-test creation.
+
 // Fixed field widths of the current format. The total budget is
 // `NEW_PREFIX (6) + fingerprint (16) + 1 + timestamp (10) + 1 + pid (8) + 1
 // + random (16) = 59` ASCII bytes, independent of the base database name.
@@ -262,7 +264,15 @@ async fn default_init(options: &PgConnectOptions, db_name: &str) -> Result<PgPoo
         .connect_with(options.clone().database(db_name))
         .await
         .map_err(SetupError::Connect)?;
-    db::run_migrations(&pool).await;
+    // If DB was created from template it already has tables - skip migrations
+    let has_tables: bool =
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name='stations')")
+            .fetch_one(&pool)
+            .await
+            .unwrap_or(false);
+    if !has_tables {
+        db::run_migrations(&pool).await;
+    }
     Ok(pool)
 }
 
@@ -282,10 +292,8 @@ async fn create_and_init(
         .connect_with(options.clone().database("postgres"))
         .await
         .unwrap_or_else(|error| panic!("failed to connect for test database setup: {error}"));
-    if let Err(error) = sqlx::query(&format!("CREATE DATABASE {}", quote_pg_identifier(db_name)))
-        .execute(&admin_pool)
-        .await
-    {
+    let create_sql = format!("CREATE DATABASE {}", quote_pg_identifier(db_name));
+    if let Err(error) = sqlx::query(&create_sql).execute(&admin_pool).await {
         admin_pool.close().await;
         panic!("failed to create test database '{db_name}': {error}");
     }

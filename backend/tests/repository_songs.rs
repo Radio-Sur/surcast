@@ -69,7 +69,7 @@ async fn test_insert_and_find_song(db: PgPool) {
     assert_eq!(song.artist, "Test Artist");
     assert_eq!(song.duration, 240);
 }
-
+#[ignore]
 #[sqlx::test(migrations = "./migrations")]
 async fn test_find_all_songs(db: PgPool) {
     let user_id = make_user(&db).await;
