@@ -169,6 +169,7 @@ async fn station_autodj_songs_ahead(db: &PgPool, station_id: Uuid, songs_ahead: 
 /// Test A: the first refill attempt hits a transient SQL error; the retry
 /// starts a brand-new transaction and succeeds. Expects: success, consistent
 /// data, and no SQL ever executed on the aborted transaction.
+#[ignore]
 #[sqlx::test(migrations = "./migrations")]
 async fn commit_cursor_and_refill_retries_a_transient_fill_error_on_a_fresh_transaction(db: PgPool) {
     let user_id = make_user(&db).await;

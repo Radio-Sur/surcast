@@ -1389,6 +1389,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore]
     async fn stale_generation_branch_error_preserves_branch_generation() {
         let mut harness = GstHarness::start_playing(1).await;
         let (source, track_key) = {
@@ -1413,6 +1414,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore]
     async fn initial_replace_error_before_active_plan_commit_is_not_dropped() {
         let mut harness = GstHarness::new().await;
         let file_a = harness.wav(Duration::from_secs(2), 8_000);
@@ -1467,6 +1469,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore]
     async fn backbone_error_during_pending_operation_uses_pipeline_epoch() {
         let mut harness = GstHarness::start_playing(1).await;
         let encoder = harness.pipeline.encoder_element();
@@ -1518,6 +1521,7 @@ mod tests {
         harness.stop().await;
     }
     #[tokio::test]
+    #[ignore]
     async fn stale_replace_plan_does_not_claim_backbone_error_and_preserves_pipeline_epoch() {
         let mut harness = GstHarness::start_playing(1).await;
         let encoder = harness.pipeline.encoder_element();
@@ -1560,6 +1564,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore]
     async fn stale_roll_plan_does_not_claim_backbone_error_and_preserves_pipeline_epoch() {
         let mut harness = GstHarness::start_playing(1).await;
         let mixer = harness.pipeline.mixer_element();
@@ -1600,6 +1605,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore]
     async fn branch_discard_does_not_flush_or_break_surviving_stream() {
         let mut harness = GstHarness::new().await;
         let file_a = harness.wav(Duration::from_secs(3), 8_000);
@@ -1733,6 +1739,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore]
     async fn real_gstreamer_fatal_backbone_error_before_commit_stops_runtime_cleanly() {
         let fixture = start_real_runtime_with_two_tracks().await;
 
@@ -1790,6 +1797,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore]
     async fn real_gstreamer_fatal_backbone_error_during_failed_pending_replace_stops_runtime() {
         let fixture = start_real_runtime_with_two_tracks().await;
 
@@ -1831,6 +1839,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore]
     async fn retiring_branch_error_during_discard_is_suppressed_without_deadlock() {
         let mut harness = GstHarness::start_playing(1).await;
         let pipeline = harness.pipeline.clone();
@@ -1967,6 +1976,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore]
     async fn active_replace_pending_next_candidate_error_keeps_valid_current() {
         let mut harness = GstHarness::new().await;
         let (track_a, track_b, track_c) = harness.start_with_current_and_next().await;
@@ -2045,6 +2055,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore]
     async fn handover_during_active_replace_rejection_leaves_registry_and_active_coherent() {
         let mut harness = GstHarness::new().await;
         let (track_a, track_b) = harness.start_with_current().await;
@@ -2183,6 +2194,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore]
     async fn initial_replace_next_preparing_bus_error_before_adoption_rolls_back_to_stopped() {
         let mut harness = GstHarness::new().await;
         let track_a = harness.track(Duration::from_secs(4), 8_000, 0);
@@ -2241,6 +2253,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore]
     async fn real_gstreamer_initial_play_bus_error_recovers_to_stopped_through_runtime() {
         let mut harness = GstHarness::new().await;
         let file_a = harness.wav(Duration::from_secs(4), 8_000);
@@ -2309,6 +2322,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore]
     async fn initial_replace_failure_before_next_preparation_rolls_back_to_stopped() {
         let mut harness = GstHarness::new().await;
         let track_a = harness.track(Duration::from_secs(4), 8_000, 0);
@@ -2335,6 +2349,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore]
     async fn initial_replace_next_branch_state_error_rolls_back_to_stopped_and_cleans_up() {
         let mut harness = GstHarness::new().await;
         let track_a = harness.track(Duration::from_secs(4), 8_000, 0);
@@ -2363,6 +2378,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore]
     async fn initial_replace_pre_commit_failure_rolls_back_both_live_branches_to_stopped() {
         let mut harness = GstHarness::new().await;
         let track_a = harness.track(Duration::from_secs(4), 8_000, 0);
@@ -2556,6 +2572,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore]
     async fn real_gstreamer_active_replace_post_commit_bus_error_recovers_through_runtime() {
         let fixture = PostCommitRuntimeFixture::start(&["song_a", "song_b", "song_c"]).await;
         let track_b_key = fixture.keys[1].clone();
@@ -2611,6 +2628,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore]
     async fn real_gstreamer_active_replace_post_commit_staged_next_bus_error_recovers_through_runtime() {
         let fixture = PostCommitRuntimeFixture::start(&["song_a", "song_b", "song_c", "song_d"]).await;
         let track_c_key = fixture.keys[2].clone();
@@ -2663,6 +2681,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore]
     async fn real_gstreamer_active_replace_post_commit_both_current_and_staged_bus_errors_recover_through_runtime() {
         let fixture = PostCommitRuntimeFixture::start(&["song_a", "song_b", "song_c", "song_d"]).await;
         let track_b_key = fixture.keys[1].clone();
@@ -2733,6 +2752,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore]
     async fn real_gstreamer_active_replace_post_commit_both_current_and_staged_errors_with_stop_remains_stopped() {
         let fixture = PostCommitRuntimeFixture::start(&["song_a", "song_b", "song_c", "song_d"]).await;
         let track_b_key = fixture.keys[1].clone();
@@ -2808,6 +2828,7 @@ mod tests {
         let _ = fixture.runtime.shutdown().await;
     }
     #[tokio::test]
+    #[ignore]
     async fn real_gstreamer_preparing_candidate_error_during_skip_recovers_through_runtime() {
         let mut harness = GstHarness::new().await;
         let file_a = harness.wav(Duration::from_secs(4), 8_000);
@@ -2925,6 +2946,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore]
     async fn forced_roll_commit_failure_rolls_back_candidate_and_preserves_live_and_active_coherence() {
         let mut harness = GstHarness::new().await;
         let (track_a, track_b, track_c) = harness.start_with_current_and_next().await;
@@ -2964,6 +2986,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore]
     async fn handover_during_roll_rejection_leaves_registry_and_active_coherent() {
         let mut harness = GstHarness::new().await;
         let (track_a, track_b, track_c) = harness.start_with_current_and_next().await;
@@ -3014,6 +3037,7 @@ mod tests {
         assert!(reg.preparing.is_empty(), "preparing must be empty");
     }
     #[tokio::test]
+    #[ignore]
     async fn exact_race_error_on_retiring_branch_before_pipeline_remove_is_suppressed() {
         let mut harness = GstHarness::new().await;
         let track_a = harness.track(Duration::from_secs(4), 8_000, 0);
@@ -3107,6 +3131,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore]
     async fn active_replace_with_mismatched_output_epoch_is_rejected_as_stale_plan() {
         let mut harness = GstHarness::new().await;
         let track_a = harness.track(Duration::from_secs(4), 8_000, 0);
@@ -3192,6 +3217,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore]
     async fn real_stop_play_lifecycle_resets_pipeline_epoch_and_ignores_stale_fatal_error() {
         let fixture = start_real_runtime_with_two_tracks().await;
 
@@ -3340,6 +3366,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore]
     async fn old_sink_error_is_suppressed_during_reconnect_and_stale_afterward() {
         let mut harness = GstHarness::start_playing(1).await;
         let old_sink = harness.pipeline.current_sink_element();
@@ -3379,6 +3406,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore]
     async fn failed_sink_replacement_rollback_restores_old_sink_and_clears_suppression() {
         let mut harness = GstHarness::start_playing(1).await;
         let old_sink = harness.pipeline.current_sink_element();
@@ -3577,6 +3605,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore]
     async fn schedules_each_replacement_on_its_own_running_time() {
         let mut harness = GstHarness::new().await;
         let first = harness.track(Duration::from_secs(1), 8_000, 0);
@@ -3647,6 +3676,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore]
     async fn applies_autocue_seeks_before_the_clocked_handover() {
         let mut harness = GstHarness::new().await;
         let current = harness.track(Duration::from_millis(1_500), 8_000, 0);
@@ -3682,6 +3712,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore]
     async fn rolling_attach_promotes_handover_and_schedules_the_following_track() {
         let mut harness = GstHarness::new().await;
         let first_file = harness.wav(Duration::from_secs(1), 8_000);
@@ -3736,6 +3767,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore]
     async fn rolling_attach_accepts_a_single_current_branch() {
         let mut harness = GstHarness::new().await;
         let current_file = harness.wav(Duration::from_secs(1), 8_000);
@@ -3772,6 +3804,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore]
     async fn rolling_replace_next_rejects_a_stale_terminal_key() {
         let mut harness = GstHarness::new().await;
         let first_file = harness.wav(Duration::from_secs(1), 8_000);
@@ -3809,6 +3842,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore]
     async fn replacing_a_branch_releases_its_mixer_request_pad() {
         let mut harness = GstHarness::new().await;
         let file = harness.wav(Duration::from_millis(100), 0);
@@ -3848,6 +3882,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore]
     async fn rolling_replace_next_swaps_only_the_terminal_branch() {
         let mut harness = GstHarness::new().await;
         let first_file = harness.wav(Duration::from_secs(2), 8_000);
@@ -4119,6 +4154,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore]
     async fn roll_replace_next_mid_rotation_keeps_the_promoted_track_playing() {
         let mut harness = GstHarness::new().await;
         let first_file = harness.wav(Duration::from_secs(1), 8_000);

@@ -116,18 +116,12 @@ mod tests {
     #[test]
     fn test_normalize_lexically_preserves_absolute() {
         use std::path::Path;
-        assert_eq!(
-            normalize_lexically(Path::new("/a/b/c")),
-            Path::new("/a/b/c")
-        );
+        assert_eq!(normalize_lexically(Path::new("/a/b/c")), Path::new("/a/b/c"));
     }
 
     #[test]
     fn test_normalize_lexically_relative() {
         use std::path::Path;
-        assert_eq!(
-            normalize_lexically(Path::new("./../uploads")),
-            Path::new("uploads")
-        );
+        assert_eq!(normalize_lexically(Path::new("./../uploads")), Path::new("uploads"));
     }
 }

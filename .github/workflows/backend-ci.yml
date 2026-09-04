@@ -7,9 +7,97 @@ on:
     branches: [main]
 
 jobs:
-  backend:
+  fmt:
     runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          components: rustfmt
+      - name: Check formatting
+        working-directory: ./backend
+        run: cargo fmt --all -- --check
 
+  clippy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache-workspaces: ./backend
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ./backend
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Lint with clippy
+        working-directory: ./backend
+        run: cargo clippy -- -D warnings
+        env:
+          DATABASE_URL: postgres://surcast:surcast@localhost:5433/surcast
+          JWT_SECRET: ci-lint-secret
+
+  test-lib:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache-workspaces: ./backend
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ./backend
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - uses: taiki-e/install-action@nextest
+      - name: Run lib tests (fast, without real GStreamer)
+        working-directory: ./backend
+        run: cargo nextest run --lib --profile ci
+        env:
+          DATABASE_URL: postgres://surcast:surcast@localhost:5433/surcast
+          JWT_SECRET: ci-test-secret
+
+  test-gstreamer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+      - name: Install GStreamer
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libgstreamer1.0-dev \
+            libgstreamer-plugins-base1.0-dev \
+            gstreamer1.0-tools \
+            gstreamer1.0-plugins-base \
+            gstreamer1.0-plugins-good \
+            gstreamer1.0-plugins-bad \
+            gstreamer1.0-plugins-ugly \
+            gstreamer1.0-libav
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache-workspaces: ./backend
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ./backend
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - uses: taiki-e/install-action@nextest
+      - name: Run GStreamer real pipeline tests
+        working-directory: ./backend
+        run: cargo nextest run --lib --profile ci --run-ignored ignored-only -- --ignored
+        env:
+          DATABASE_URL: postgres://surcast:surcast@localhost:5433/surcast
+          JWT_SECRET: ci-test-secret
+          GST_PLUGIN_SYSTEM_PATH_1_0: /usr/lib/x86_64-linux-gnu/gstreamer-1.0
+
+  test-integration:
+    runs-on: ubuntu-latest
     services:
       postgres:
         image: postgres:16-alpine
@@ -24,13 +112,11 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 5
-
     steps:
       - uses: actions/checkout@v7
         with:
           submodules: recursive
-
-      - name: Install GStreamer and Icecast
+      - name: Install GStreamer and Icecast (for e2e)
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
@@ -43,46 +129,39 @@ jobs:
             gstreamer1.0-plugins-bad \
             gstreamer1.0-plugins-ugly \
             gstreamer1.0-libav
-
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
-          # The action has no `working-directory` input; point its built-in
-          # rust-cache at the backend workspace so `cargo metadata` runs there
-          # instead of failing in the repository root.
           cache-workspaces: ./backend
-
-      - uses: actions/cache@v6
+      - uses: Swatinem/rust-cache@v2
         with:
-          path: backend/target
-          key: cargo-${{ runner.os }}-${{ hashFiles('backend/Cargo.lock') }}
-          restore-keys: |
-            cargo-${{ runner.os }}-
-
-      - name: Check formatting
-        working-directory: ./backend
-        run: cargo fmt --all -- --check
-
-      - name: Lint with clippy
-        working-directory: ./backend
-        run: cargo clippy -- -D warnings
-        env:
-          DATABASE_URL: postgres://surcast:surcast@localhost:5433/surcast
-          JWT_SECRET: ci-lint-secret
-
-      - name: Run unit tests
-        working-directory: ./backend
-        run: cargo test --lib
-        env:
-          DATABASE_URL: postgres://surcast:surcast@localhost:5433/surcast
-          JWT_SECRET: ci-test-secret
-
+          workspaces: ./backend
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - uses: taiki-e/install-action@nextest
       - name: Run integration tests
         working-directory: ./backend
-        run: cargo test --tests -- --test-threads=1
+        run: cargo nextest run --tests --profile ci
         env:
           DATABASE_URL: postgres://surcast:surcast@localhost:5433/surcast
           JWT_SECRET: ci-test-secret
 
+  build-release:
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+      - name: Install GStreamer deps (for build)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends pkg-config libssl-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache-workspaces: ./backend
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ./backend
+          save-if: true
       - name: Build release
         working-directory: ./backend
         run: cargo build --release

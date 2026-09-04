@@ -32,6 +32,7 @@
 
 use std::ops::Deref;
 use std::str::FromStr;
+use std::sync::OnceLock;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use futures::FutureExt;
@@ -55,6 +56,10 @@ const TEST_SEPARATOR: &str = "_test_";
 
 /// Prefix of the current fixed-length format (Surcast test DataBase v2).
 const NEW_PREFIX: &str = "scdb2_";
+
+/// Prefix for the template database used to speed up per-test creation.
+/// One template per base fingerprint, created once and reused via `CREATE DATABASE ... TEMPLATE`.
+const TEMPLATE_PREFIX: &str = "scdb_template_";
 
 // Fixed field widths of the current format. The total budget is
 // `NEW_PREFIX (6) + fingerprint (16) + 1 + timestamp (10) + 1 + pid (8) + 1
@@ -172,6 +177,47 @@ fn new_test_db_name(base: &str) -> String {
     new_test_db_name_with(base, timestamp, pid, &random)
 }
 
+fn template_db_name(base: &str) -> String {
+    format!("{TEMPLATE_PREFIX}{:016x}", base_fingerprint(base))
+}
+
+async fn ensure_template_db(admin_pool: &PgPool, options: &PgConnectOptions, base: &str) {
+    let template_name = template_db_name(base);
+    let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM pg_database WHERE datname = $1)")
+        .bind(&template_name)
+        .fetch_one(admin_pool)
+        .await
+        .unwrap_or(false);
+    if exists {
+        return;
+    }
+    static LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
+    let lock = LOCK.get_or_init(|| tokio::sync::Mutex::new(()));
+    let _guard = lock.lock().await;
+    let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM pg_database WHERE datname = $1)")
+        .bind(&template_name)
+        .fetch_one(admin_pool)
+        .await
+        .unwrap_or(false);
+    if exists {
+        return;
+    }
+    let create_sql = format!("CREATE DATABASE {} TEMPLATE template0", quote_pg_identifier(&template_name));
+    if let Err(e) = sqlx::query(&create_sql).execute(admin_pool).await {
+        if !e.to_string().contains("already exists") {
+            panic!("failed to create template database '{}': {e}", template_name);
+        }
+        return;
+    }
+    let pool = PgPoolOptions::new()
+        .max_connections(1)
+        .connect_with(options.clone().database(&template_name))
+        .await
+        .unwrap_or_else(|e| panic!("failed to connect to template DB '{}': {e}", template_name));
+    db::run_migrations(&pool).await;
+    pool.close().await;
+}
+
 /// PostgreSQL quoted-identifier quoting: wraps the name in `"` and doubles
 /// embedded `"` (SQL standard). Used for every interpolated database name
 /// (CREATE, cleanup DROP, sweep DROP, regression DROP) — Rust's `Debug`
@@ -262,7 +308,15 @@ async fn default_init(options: &PgConnectOptions, db_name: &str) -> Result<PgPoo
         .connect_with(options.clone().database(db_name))
         .await
         .map_err(SetupError::Connect)?;
-    db::run_migrations(&pool).await;
+    // If DB was created from template it already has tables - skip migrations
+    let has_tables: bool =
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name='stations')")
+            .fetch_one(&pool)
+            .await
+            .unwrap_or(false);
+    if !has_tables {
+        db::run_migrations(&pool).await;
+    }
     Ok(pool)
 }
 
@@ -282,10 +336,28 @@ async fn create_and_init(
         .connect_with(options.clone().database("postgres"))
         .await
         .unwrap_or_else(|error| panic!("failed to connect for test database setup: {error}"));
-    if let Err(error) = sqlx::query(&format!("CREATE DATABASE {}", quote_pg_identifier(db_name)))
-        .execute(&admin_pool)
+    // Try to use template DB for faster creation (per base fingerprint)
+    let base = options
+        .get_database()
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| "postgres".to_string());
+    ensure_template_db(&admin_pool, options, &base).await;
+    let template_name = template_db_name(&base);
+    let template_exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM pg_database WHERE datname = $1)")
+        .bind(&template_name)
+        .fetch_one(&admin_pool)
         .await
-    {
+        .unwrap_or(false);
+    let create_sql = if template_exists {
+        format!(
+            "CREATE DATABASE {} TEMPLATE {}",
+            quote_pg_identifier(db_name),
+            quote_pg_identifier(&template_name)
+        )
+    } else {
+        format!("CREATE DATABASE {}", quote_pg_identifier(db_name))
+    };
+    if let Err(error) = sqlx::query(&create_sql).execute(&admin_pool).await {
         admin_pool.close().await;
         panic!("failed to create test database '{db_name}': {error}");
     }
