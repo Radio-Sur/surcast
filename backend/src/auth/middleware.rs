@@ -90,44 +90,39 @@ pub struct AuthUser {
     pub role: Role,
 }
 
-pub async fn auth_middleware(State(state): State<AppState>, mut req: Request<axum::body::Body>, next: Next) -> Result<Response, Response> {
-    let auth_header = req
-        .headers()
-        .get("Authorization")
-        .and_then(|v| v.to_str().ok())
-        .ok_or_else(|| (StatusCode::UNAUTHORIZED, Json(json!({ "error": "Missing Authorization header" }))).into_response())?;
+pub async fn auth_middleware(State(state): State<AppState>, mut req: Request<axum::body::Body>, next: Next) -> Response {
+    let Some(auth_header) = req.headers().get("Authorization").and_then(|v| v.to_str().ok()) else {
+        return (StatusCode::UNAUTHORIZED, Json(json!({ "error": "Missing Authorization header" }))).into_response();
+    };
 
-    let token = auth_header.strip_prefix("Bearer ").ok_or_else(|| {
-        (
+    let Some(token) = auth_header.strip_prefix("Bearer ") else {
+        return (
             StatusCode::UNAUTHORIZED,
             Json(json!({ "error": "Invalid Authorization header format" })),
         )
-            .into_response()
-    })?;
+            .into_response();
+    };
 
     if token.starts_with("sur_") {
         let hash = hex::encode(Sha256::digest(token.as_bytes()));
 
-        let key_row = sqlx::query_as::<_, (Uuid, Uuid, Role)>(
+        let Ok(key_row) = sqlx::query_as::<_, (Uuid, Uuid, Role)>(
             "SELECT ak.id, u.id, u.role FROM api_keys ak JOIN users u ON u.id = ak.user_id WHERE ak.key_hash = $1 AND ak.is_active = true AND (ak.expires_at IS NULL OR ak.expires_at > NOW())",
         )
         .bind(&hash)
         .fetch_optional(&state.db)
         .await
-        .map_err(|_| {
-            (
+        else {
+            return (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(json!({ "error": "Database error" })),
             )
-                .into_response()
-        })?
-        .ok_or_else(|| {
-            (
-                StatusCode::UNAUTHORIZED,
-                Json(json!({ "error": "Invalid or inactive API key" })),
-            )
-                .into_response()
-        })?;
+                .into_response();
+        };
+
+        let Some(key_row) = key_row else {
+            return (StatusCode::UNAUTHORIZED, Json(json!({ "error": "Invalid or inactive API key" }))).into_response();
+        };
 
         let (_key_id, user_id, role) = key_row;
 
@@ -141,36 +136,43 @@ pub async fn auth_middleware(State(state): State<AppState>, mut req: Request<axu
 
         let auth_user = AuthUser { id: user_id, role };
         req.extensions_mut().insert(auth_user);
-        Ok(next.run(req).await)
+        next.run(req).await
     } else {
-        let token_data = decode::<Claims>(
+        let Ok(token_data) = decode::<Claims>(
             token,
             &DecodingKey::from_secret(state.config.jwt_secret.as_bytes()),
             &Validation::default(),
-        )
-        .map_err(|_| (StatusCode::UNAUTHORIZED, Json(json!({ "error": "Invalid or expired token" }))).into_response())?;
+        ) else {
+            return (StatusCode::UNAUTHORIZED, Json(json!({ "error": "Invalid or expired token" }))).into_response();
+        };
 
-        let user_id = Uuid::parse_str(&token_data.claims.sub)
-            .map_err(|_| (StatusCode::UNAUTHORIZED, Json(json!({ "error": "Invalid token payload" }))).into_response())?;
+        let Ok(user_id) = Uuid::parse_str(&token_data.claims.sub) else {
+            return (StatusCode::UNAUTHORIZED, Json(json!({ "error": "Invalid token payload" }))).into_response();
+        };
 
-        let user = sqlx::query_as::<_, (Uuid, Role)>("SELECT id, role FROM users WHERE id = $1")
+        let Ok(user_opt) = sqlx::query_as::<_, (Uuid, Role)>("SELECT id, role FROM users WHERE id = $1")
             .bind(user_id)
             .fetch_optional(&state.db)
             .await
-            .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": "Database error" }))).into_response())?
-            .ok_or_else(|| (StatusCode::UNAUTHORIZED, Json(json!({ "error": "User not found" }))).into_response())?;
+        else {
+            return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": "Database error" }))).into_response();
+        };
+
+        let Some(user) = user_opt else {
+            return (StatusCode::UNAUTHORIZED, Json(json!({ "error": "User not found" }))).into_response();
+        };
 
         let (id, role) = user;
 
         let auth_user = AuthUser { id, role };
         req.extensions_mut().insert(auth_user);
-        Ok(next.run(req).await)
+        next.run(req).await
     }
 }
 
-pub async fn require_admin(Extension(user): Extension<AuthUser>, req: Request<axum::body::Body>, next: Next) -> Result<Response, Response> {
+pub async fn require_admin(Extension(user): Extension<AuthUser>, req: Request<axum::body::Body>, next: Next) -> Response {
     if user.role != Role::Admin {
-        return Err((StatusCode::FORBIDDEN, Json(json!({ "error": "Admin access required" }))).into_response());
+        return (StatusCode::FORBIDDEN, Json(json!({ "error": "Admin access required" }))).into_response();
     }
-    Ok(next.run(req).await)
+    next.run(req).await
 }

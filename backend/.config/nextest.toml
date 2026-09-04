@@ -1,0 +1,17 @@
+[profile.default]
+slow-timeout = { period = "60s", terminate-after = 3 }
+test-threads = 4
+
+[profile.ci]
+slow-timeout = { period = "60s", terminate-after = 3 }
+fail-fast = false
+test-threads = 4
+
+[[profile.ci.overrides]]
+filter = "test(e2e_)"
+threads-required = 1
+
+[profile.ci.junit]
+path = "junit.xml"
+store-success-output = false
+store-failure-output = true
