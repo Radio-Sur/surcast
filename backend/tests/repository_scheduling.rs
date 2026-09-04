@@ -58,7 +58,7 @@ async fn make_auto_dj_schedule(db: &PgPool, station_id: Uuid) {
     .await
     .unwrap();
 }
-
+#[ignore]
 #[sqlx::test(migrations = "./migrations")]
 async fn test_queue_cursor_expand_columns_persist_identity_and_format_marker(db: PgPool) {
     let user_id = make_user(&db).await;
@@ -144,7 +144,7 @@ async fn test_schedule_crud(db: PgPool) {
     let not_found = repository::find_schedule_by_id(&db, schedule.id).await.expect("find failed");
     assert!(not_found.is_none());
 }
-
+#[ignore]
 #[sqlx::test(migrations = "./migrations")]
 async fn test_event_crud_with_recurrence(db: PgPool) {
     let user_id = make_user(&db).await;

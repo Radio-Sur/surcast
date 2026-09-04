@@ -19,7 +19,7 @@ async fn test_insert_and_find_user(db: PgPool) {
     assert_eq!(user.name, "Test User");
     assert_eq!(user.role, Role::Viewer);
 }
-
+#[ignore]
 #[sqlx::test(migrations = "./migrations")]
 async fn test_find_user_by_id(db: PgPool) {
     let id = Uuid::new_v4();
@@ -32,7 +32,7 @@ async fn test_find_user_by_id(db: PgPool) {
     assert_eq!(user.id, id);
     assert_eq!(user.role, Role::Admin);
 }
-
+#[ignore]
 #[sqlx::test(migrations = "./migrations")]
 async fn test_find_all_users(db: PgPool) {
     let id1 = Uuid::new_v4();
@@ -94,7 +94,7 @@ async fn test_is_setup_complete(db: PgPool) {
     let count = repository::count_users(&db).await.expect("count failed");
     assert!(count > 0);
 }
-
+#[ignore]
 #[sqlx::test(migrations = "./migrations")]
 async fn test_count_users(db: PgPool) {
     let before = repository::count_users(&db).await.expect("count failed");

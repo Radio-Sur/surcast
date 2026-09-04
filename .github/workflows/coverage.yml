@@ -1,0 +1,135 @@
+name: Coverage
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: write
+  pages: write
+
+jobs:
+  coverage:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: surcast
+          POSTGRES_PASSWORD: surcast
+          POSTGRES_DB: surcast
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U surcast"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      - name: Install deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            icecast2 \
+            libglib2.0-dev \
+            libgstreamer1.0-dev \
+            libgstreamer-plugins-base1.0-dev \
+            gstreamer1.0-tools \
+            gstreamer1.0-plugins-base \
+            gstreamer1.0-plugins-good \
+            gstreamer1.0-plugins-bad \
+            gstreamer1.0-plugins-ugly \
+            gstreamer1.0-libav \
+            lcov \
+            jq
+
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          components: llvm-tools-preview
+          cache-workspaces: ./backend
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ./backend
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - uses: taiki-e/install-action@nextest
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install cargo-llvm-cov
+        run: cargo install cargo-llvm-cov --locked
+
+      - name: Generate Rust coverage
+        working-directory: ./backend
+        run: |
+          mkdir -p ../coverage
+          # e2e kills any Icecast (kill_zombie_icecast), so keep 1 thread like test-integration
+          cargo llvm-cov nextest --workspace --lcov --output-path ../coverage/lcov.info -- --profile ci --test-threads 1
+        env:
+          DATABASE_URL: postgres://surcast:surcast@localhost:5433/surcast
+          JWT_SECRET: ci-coverage-secret
+          GST_PLUGIN_SYSTEM_PATH_1_0: /usr/lib/x86_64-linux-gnu/gstreamer-1.0
+
+      - name: Generate Frontend coverage
+        working-directory: ./frontend
+        run: |
+          bun install --frozen-lockfile
+          bun run test -- --coverage --reporter=json --outputFile=../coverage/frontend-coverage.json || bun run test -- --coverage
+
+      - name: Merge lcov files
+        run: |
+          mkdir -p coverage/html
+          # backend lcov at coverage/lcov.info, frontend at frontend/coverage/lcov.info
+          ls -lh coverage/ frontend/coverage/ 2>&1 | head -n 20 || true
+          if [ -f frontend/coverage/lcov.info ] && [ -f coverage/lcov.info ]; then
+            cat coverage/lcov.info frontend/coverage/lcov.info > coverage/lcov.merged.info
+            mv coverage/lcov.merged.info coverage/lcov.info
+          fi
+          ls -lh coverage/ 2>&1 | head -n 20
+
+      - name: Generate coverage comment
+        run: |
+          chmod +x ./scripts/generate-coverage-comment.sh
+          ./scripts/generate-coverage-comment.sh > coverage-comment.md || echo "Coverage report generated" > coverage-comment.md
+          cat coverage-comment.md
+
+      - name: Comment PR
+        if: github.event_name == 'pull_request'
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: coverage
+          path: coverage-comment.md
+
+      - name: Upload coverage artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-lcov
+          path: |
+            coverage/lcov.info
+            frontend/coverage/lcov.info
+            coverage-comment.md
+
+      - name: Generate HTML report
+        if: github.ref == 'refs/heads/main'
+        run: |
+          genhtml coverage/lcov.info -o coverage/html --ignore-errors source 2>&1 | tail -n 20 || echo "genhtml failed, skipping HTML"
+          ls -lh coverage/html 2>&1 | head -n 20 || true
+
+      - name: Publish to GitHub Pages
+        if: github.ref == 'refs/heads/main'
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./coverage/html
+          destination_dir: coverage
