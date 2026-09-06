@@ -37,7 +37,7 @@
           </tr>
           <tr>
             <td class="headerItem">Test Date:</td>
-            <td class="headerValue">2026-09-06 18:16:30</td>
+            <td class="headerValue">2026-09-06 18:18:07</td>
             <td></td>
             <td class="headerItem">Functions:</td>
             <td class="headerCovTableEntryLo">38.7&nbsp;%</td>
@@ -181,8 +181,8 @@
 <span id="L119"><span class="lineNum">     119</span>              : /// wait is bounded by actual progress of the condition.</span>
 <span id="L120"><span class="lineNum">     120</span> <span class="tlaGNC">          12 : pub(crate) async fn wait_for_timeout(timeout: Duration, what: &amp;str, mut cond: impl FnMut() -&gt; bool) {</span></span>
 <span id="L121"><span class="lineNum">     121</span> <span class="tlaGNC">          12 :     tokio::time::timeout(timeout, async {</span></span>
-<span id="L122"><span class="lineNum">     122</span> <span class="tlaGNC">      247297 :         while !cond() {</span></span>
-<span id="L123"><span class="lineNum">     123</span> <span class="tlaGNC">      247285 :             tokio::task::yield_now().await;</span></span>
+<span id="L122"><span class="lineNum">     122</span> <span class="tlaGNC">      333516 :         while !cond() {</span></span>
+<span id="L123"><span class="lineNum">     123</span> <span class="tlaGNC">      333504 :             tokio::task::yield_now().await;</span></span>
 <span id="L124"><span class="lineNum">     124</span>              :         }</span>
 <span id="L125"><span class="lineNum">     125</span> <span class="tlaGNC">          12 :     })</span></span>
 <span id="L126"><span class="lineNum">     126</span> <span class="tlaGNC">          12 :     .await</span></span>
@@ -377,9 +377,9 @@
 <span id="L315"><span class="lineNum">     315</span> <span class="tlaGNC">           5 :     }</span></span>
 <span id="L316"><span class="lineNum">     316</span>              : </span>
 <span id="L317"><span class="lineNum">     317</span>              :     /// How many times `call` has been invoked (including failed attempts).</span>
-<span id="L318"><span class="lineNum">     318</span> <span class="tlaGNC">      247345 :     pub(crate) fn count(&amp;self, call: Call) -&gt; usize {</span></span>
-<span id="L319"><span class="lineNum">     319</span> <span class="tlaGNC">      247412 :         self.calls.lock().iter().filter(|recorded| **recorded == call).count()</span></span>
-<span id="L320"><span class="lineNum">     320</span> <span class="tlaGNC">      247345 :     }</span></span>
+<span id="L318"><span class="lineNum">     318</span> <span class="tlaGNC">      333564 :     pub(crate) fn count(&amp;self, call: Call) -&gt; usize {</span></span>
+<span id="L319"><span class="lineNum">     319</span> <span class="tlaGNC">      333631 :         self.calls.lock().iter().filter(|recorded| **recorded == call).count()</span></span>
+<span id="L320"><span class="lineNum">     320</span> <span class="tlaGNC">      333564 :     }</span></span>
 <span id="L321"><span class="lineNum">     321</span>              : </span>
 <span id="L322"><span class="lineNum">     322</span>              :     /// The exact sequence of calls, in invocation order.</span>
 <span id="L323"><span class="lineNum">     323</span> <span class="tlaGNC">           3 :     pub(crate) fn calls(&amp;self) -&gt; Vec&lt;Call&gt; {</span></span>

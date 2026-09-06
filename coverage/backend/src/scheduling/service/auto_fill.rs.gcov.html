@@ -37,7 +37,7 @@
           </tr>
           <tr>
             <td class="headerItem">Test Date:</td>
-            <td class="headerValue">2026-09-06 18:16:30</td>
+            <td class="headerValue">2026-09-06 18:18:07</td>
             <td></td>
             <td class="headerItem">Functions:</td>
             <td class="headerCovTableEntryLo">44.4&nbsp;%</td>
@@ -79,73 +79,73 @@
 <span id="L17"><span class="lineNum">      17</span>              :     pub songs_ahead: i32,</span>
 <span id="L18"><span class="lineNum">      18</span>              : }</span>
 <span id="L19"><span class="lineNum">      19</span>              : </span>
-<span id="L20"><span class="lineNum">      20</span> <span class="tlaGNC tlaBgGNC">         156 : pub(crate) async fn lock_station_queue(connection: &amp;mut PgConnection, station_id: Uuid) -&gt; Result&lt;(), AppError&gt; {</span></span>
-<span id="L21"><span class="lineNum">      21</span> <span class="tlaGNC">         156 :     sqlx::query(&quot;SELECT pg_advisory_xact_lock(hashtextextended($1, 0))&quot;)</span></span>
-<span id="L22"><span class="lineNum">      22</span> <span class="tlaGNC">         156 :         .bind(station_id.to_string())</span></span>
-<span id="L23"><span class="lineNum">      23</span> <span class="tlaGNC">         156 :         .execute(connection)</span></span>
-<span id="L24"><span class="lineNum">      24</span> <span class="tlaGNC">         156 :         .await</span></span>
-<span id="L25"><span class="lineNum">      25</span> <span class="tlaGNC">         156 :         .db_error(&quot;failed to lock AutoDJ queue&quot;)?;</span></span>
-<span id="L26"><span class="lineNum">      26</span> <span class="tlaGNC">         156 :     Ok(())</span></span>
-<span id="L27"><span class="lineNum">      27</span> <span class="tlaGNC">         156 : }</span></span>
+<span id="L20"><span class="lineNum">      20</span> <span class="tlaGNC tlaBgGNC">         157 : pub(crate) async fn lock_station_queue(connection: &amp;mut PgConnection, station_id: Uuid) -&gt; Result&lt;(), AppError&gt; {</span></span>
+<span id="L21"><span class="lineNum">      21</span> <span class="tlaGNC">         157 :     sqlx::query(&quot;SELECT pg_advisory_xact_lock(hashtextextended($1, 0))&quot;)</span></span>
+<span id="L22"><span class="lineNum">      22</span> <span class="tlaGNC">         157 :         .bind(station_id.to_string())</span></span>
+<span id="L23"><span class="lineNum">      23</span> <span class="tlaGNC">         157 :         .execute(connection)</span></span>
+<span id="L24"><span class="lineNum">      24</span> <span class="tlaGNC">         157 :         .await</span></span>
+<span id="L25"><span class="lineNum">      25</span> <span class="tlaGNC">         157 :         .db_error(&quot;failed to lock AutoDJ queue&quot;)?;</span></span>
+<span id="L26"><span class="lineNum">      26</span> <span class="tlaGNC">         157 :     Ok(())</span></span>
+<span id="L27"><span class="lineNum">      27</span> <span class="tlaGNC">         157 : }</span></span>
 <span id="L28"><span class="lineNum">      28</span>              : </span>
-<span id="L29"><span class="lineNum">      29</span> <span class="tlaGNC">          68 : async fn count_upcoming(connection: &amp;mut PgConnection, station_id: Uuid) -&gt; Result&lt;i64, AppError&gt; {</span></span>
-<span id="L30"><span class="lineNum">      30</span> <span class="tlaGNC">          68 :     sqlx::query_scalar(</span></span>
-<span id="L31"><span class="lineNum">      31</span> <span class="tlaGNC">          68 :         &quot;SELECT COUNT(*)</span></span>
-<span id="L32"><span class="lineNum">      32</span> <span class="tlaGNC">          68 :          FROM station_queue sq</span></span>
-<span id="L33"><span class="lineNum">      33</span> <span class="tlaGNC">          68 :          JOIN stations st ON st.id = sq.station_id</span></span>
-<span id="L34"><span class="lineNum">      34</span> <span class="tlaGNC">          68 :          WHERE sq.station_id = $1</span></span>
-<span id="L35"><span class="lineNum">      35</span> <span class="tlaGNC">          68 :            AND sq.id &lt;&gt; ALL(st.consumed_queue_item_ids)</span></span>
-<span id="L36"><span class="lineNum">      36</span> <span class="tlaGNC">          68 :            AND (</span></span>
-<span id="L37"><span class="lineNum">      37</span> <span class="tlaGNC">          68 :                (st.current_queue_item_id IS NULL AND sq.position &gt; st.current_song_index)</span></span>
-<span id="L38"><span class="lineNum">      38</span> <span class="tlaGNC">          68 :                OR (st.current_queue_item_id IS NOT NULL AND sq.id IS DISTINCT FROM st.current_queue_item_id)</span></span>
-<span id="L39"><span class="lineNum">      39</span> <span class="tlaGNC">          68 :            )&quot;,</span></span>
-<span id="L40"><span class="lineNum">      40</span> <span class="tlaGNC">          68 :     )</span></span>
-<span id="L41"><span class="lineNum">      41</span> <span class="tlaGNC">          68 :     .bind(station_id)</span></span>
-<span id="L42"><span class="lineNum">      42</span> <span class="tlaGNC">          68 :     .fetch_one(connection)</span></span>
-<span id="L43"><span class="lineNum">      43</span> <span class="tlaGNC">          68 :     .await</span></span>
-<span id="L44"><span class="lineNum">      44</span> <span class="tlaGNC">          67 :     .db_error(&quot;failed to count upcoming songs&quot;)</span></span>
-<span id="L45"><span class="lineNum">      45</span> <span class="tlaGNC">          67 : }</span></span>
-<span id="L46"><span class="lineNum">      46</span> <span class="tlaGNC">          68 : async fn fill_demand(connection: &amp;mut PgConnection, station_id: Uuid, target: i64) -&gt; Result&lt;i64, AppError&gt; {</span></span>
-<span id="L47"><span class="lineNum">      47</span> <span class="tlaGNC">          68 :     let upcoming = count_upcoming(&amp;mut *connection, station_id).await?;</span></span>
-<span id="L48"><span class="lineNum">      48</span> <span class="tlaGNC">          67 :     if upcoming &gt;= target {</span></span>
+<span id="L29"><span class="lineNum">      29</span> <span class="tlaGNC">          69 : async fn count_upcoming(connection: &amp;mut PgConnection, station_id: Uuid) -&gt; Result&lt;i64, AppError&gt; {</span></span>
+<span id="L30"><span class="lineNum">      30</span> <span class="tlaGNC">          69 :     sqlx::query_scalar(</span></span>
+<span id="L31"><span class="lineNum">      31</span> <span class="tlaGNC">          69 :         &quot;SELECT COUNT(*)</span></span>
+<span id="L32"><span class="lineNum">      32</span> <span class="tlaGNC">          69 :          FROM station_queue sq</span></span>
+<span id="L33"><span class="lineNum">      33</span> <span class="tlaGNC">          69 :          JOIN stations st ON st.id = sq.station_id</span></span>
+<span id="L34"><span class="lineNum">      34</span> <span class="tlaGNC">          69 :          WHERE sq.station_id = $1</span></span>
+<span id="L35"><span class="lineNum">      35</span> <span class="tlaGNC">          69 :            AND sq.id &lt;&gt; ALL(st.consumed_queue_item_ids)</span></span>
+<span id="L36"><span class="lineNum">      36</span> <span class="tlaGNC">          69 :            AND (</span></span>
+<span id="L37"><span class="lineNum">      37</span> <span class="tlaGNC">          69 :                (st.current_queue_item_id IS NULL AND sq.position &gt; st.current_song_index)</span></span>
+<span id="L38"><span class="lineNum">      38</span> <span class="tlaGNC">          69 :                OR (st.current_queue_item_id IS NOT NULL AND sq.id IS DISTINCT FROM st.current_queue_item_id)</span></span>
+<span id="L39"><span class="lineNum">      39</span> <span class="tlaGNC">          69 :            )&quot;,</span></span>
+<span id="L40"><span class="lineNum">      40</span> <span class="tlaGNC">          69 :     )</span></span>
+<span id="L41"><span class="lineNum">      41</span> <span class="tlaGNC">          69 :     .bind(station_id)</span></span>
+<span id="L42"><span class="lineNum">      42</span> <span class="tlaGNC">          69 :     .fetch_one(connection)</span></span>
+<span id="L43"><span class="lineNum">      43</span> <span class="tlaGNC">          69 :     .await</span></span>
+<span id="L44"><span class="lineNum">      44</span> <span class="tlaGNC">          68 :     .db_error(&quot;failed to count upcoming songs&quot;)</span></span>
+<span id="L45"><span class="lineNum">      45</span> <span class="tlaGNC">          68 : }</span></span>
+<span id="L46"><span class="lineNum">      46</span> <span class="tlaGNC">          69 : async fn fill_demand(connection: &amp;mut PgConnection, station_id: Uuid, target: i64) -&gt; Result&lt;i64, AppError&gt; {</span></span>
+<span id="L47"><span class="lineNum">      47</span> <span class="tlaGNC">          69 :     let upcoming = count_upcoming(&amp;mut *connection, station_id).await?;</span></span>
+<span id="L48"><span class="lineNum">      48</span> <span class="tlaGNC">          68 :     if upcoming &gt;= target {</span></span>
 <span id="L49"><span class="lineNum">      49</span> <span class="tlaGNC">           7 :         return Ok(0);</span></span>
-<span id="L50"><span class="lineNum">      50</span> <span class="tlaGNC">          60 :     }</span></span>
+<span id="L50"><span class="lineNum">      50</span> <span class="tlaGNC">          61 :     }</span></span>
 <span id="L51"><span class="lineNum">      51</span>              : </span>
 <span id="L52"><span class="lineNum">      52</span>              :     // Without an unconsumed current row, the first inserted song becomes</span>
 <span id="L53"><span class="lineNum">      53</span>              :     // current and does not count toward the requested upcoming window.</span>
-<span id="L54"><span class="lineNum">      54</span> <span class="tlaGNC">          60 :     let queue_empty: bool = sqlx::query_scalar(</span></span>
-<span id="L55"><span class="lineNum">      55</span> <span class="tlaGNC">          60 :         &quot;SELECT NOT EXISTS (</span></span>
-<span id="L56"><span class="lineNum">      56</span> <span class="tlaGNC">          60 :              SELECT 1 FROM station_queue sq</span></span>
-<span id="L57"><span class="lineNum">      57</span> <span class="tlaGNC">          60 :              JOIN stations st ON st.id = sq.station_id</span></span>
-<span id="L58"><span class="lineNum">      58</span> <span class="tlaGNC">          60 :              WHERE sq.station_id = $1</span></span>
-<span id="L59"><span class="lineNum">      59</span> <span class="tlaGNC">          60 :                AND sq.id &lt;&gt; ALL(st.consumed_queue_item_ids)</span></span>
-<span id="L60"><span class="lineNum">      60</span> <span class="tlaGNC">          60 :          )&quot;,</span></span>
-<span id="L61"><span class="lineNum">      61</span> <span class="tlaGNC">          60 :     )</span></span>
-<span id="L62"><span class="lineNum">      62</span> <span class="tlaGNC">          60 :     .bind(station_id)</span></span>
-<span id="L63"><span class="lineNum">      63</span> <span class="tlaGNC">          60 :     .fetch_one(&amp;mut *connection)</span></span>
-<span id="L64"><span class="lineNum">      64</span> <span class="tlaGNC">          60 :     .await</span></span>
-<span id="L65"><span class="lineNum">      65</span> <span class="tlaGNC">          60 :     .db_error(&quot;failed to check whether the queue is empty&quot;)?;</span></span>
+<span id="L54"><span class="lineNum">      54</span> <span class="tlaGNC">          61 :     let queue_empty: bool = sqlx::query_scalar(</span></span>
+<span id="L55"><span class="lineNum">      55</span> <span class="tlaGNC">          61 :         &quot;SELECT NOT EXISTS (</span></span>
+<span id="L56"><span class="lineNum">      56</span> <span class="tlaGNC">          61 :              SELECT 1 FROM station_queue sq</span></span>
+<span id="L57"><span class="lineNum">      57</span> <span class="tlaGNC">          61 :              JOIN stations st ON st.id = sq.station_id</span></span>
+<span id="L58"><span class="lineNum">      58</span> <span class="tlaGNC">          61 :              WHERE sq.station_id = $1</span></span>
+<span id="L59"><span class="lineNum">      59</span> <span class="tlaGNC">          61 :                AND sq.id &lt;&gt; ALL(st.consumed_queue_item_ids)</span></span>
+<span id="L60"><span class="lineNum">      60</span> <span class="tlaGNC">          61 :          )&quot;,</span></span>
+<span id="L61"><span class="lineNum">      61</span> <span class="tlaGNC">          61 :     )</span></span>
+<span id="L62"><span class="lineNum">      62</span> <span class="tlaGNC">          61 :     .bind(station_id)</span></span>
+<span id="L63"><span class="lineNum">      63</span> <span class="tlaGNC">          61 :     .fetch_one(&amp;mut *connection)</span></span>
+<span id="L64"><span class="lineNum">      64</span> <span class="tlaGNC">          61 :     .await</span></span>
+<span id="L65"><span class="lineNum">      65</span> <span class="tlaGNC">          61 :     .db_error(&quot;failed to check whether the queue is empty&quot;)?;</span></span>
 <span id="L66"><span class="lineNum">      66</span>              : </span>
-<span id="L67"><span class="lineNum">      67</span> <span class="tlaGNC">          60 :     let needed = target - upcoming + i64::from(queue_empty);</span></span>
-<span id="L68"><span class="lineNum">      68</span> <span class="tlaGNC">          60 :     tracing::debug!(station_id = %station_id, target, upcoming, queue_empty, needed, &quot;AutoDJ fill demand&quot;);</span></span>
-<span id="L69"><span class="lineNum">      69</span> <span class="tlaGNC">          60 :     Ok(needed)</span></span>
-<span id="L70"><span class="lineNum">      70</span> <span class="tlaGNC">          67 : }</span></span>
+<span id="L67"><span class="lineNum">      67</span> <span class="tlaGNC">          61 :     let needed = target - upcoming + i64::from(queue_empty);</span></span>
+<span id="L68"><span class="lineNum">      68</span> <span class="tlaGNC">          61 :     tracing::debug!(station_id = %station_id, target, upcoming, queue_empty, needed, &quot;AutoDJ fill demand&quot;);</span></span>
+<span id="L69"><span class="lineNum">      69</span> <span class="tlaGNC">          61 :     Ok(needed)</span></span>
+<span id="L70"><span class="lineNum">      70</span> <span class="tlaGNC">          68 : }</span></span>
 <span id="L71"><span class="lineNum">      71</span>              : </span>
-<span id="L72"><span class="lineNum">      72</span> <span class="tlaGNC">          60 : async fn active_song_ids(connection: &amp;mut PgConnection, station_id: Uuid) -&gt; Result&lt;HashSet&lt;Uuid&gt;, AppError&gt; {</span></span>
-<span id="L73"><span class="lineNum">      73</span> <span class="tlaGNC">          60 :     sqlx::query_scalar(</span></span>
-<span id="L74"><span class="lineNum">      74</span> <span class="tlaGNC">          60 :         &quot;SELECT sq.song_id</span></span>
-<span id="L75"><span class="lineNum">      75</span> <span class="tlaGNC">          60 :          FROM station_queue sq</span></span>
-<span id="L76"><span class="lineNum">      76</span> <span class="tlaGNC">          60 :          JOIN stations st ON st.id = sq.station_id</span></span>
-<span id="L77"><span class="lineNum">      77</span> <span class="tlaGNC">          60 :          WHERE sq.station_id = $1</span></span>
-<span id="L78"><span class="lineNum">      78</span> <span class="tlaGNC">          60 :            AND (sq.id IS NOT DISTINCT FROM st.current_queue_item_id</span></span>
-<span id="L79"><span class="lineNum">      79</span> <span class="tlaGNC">          60 :                 OR sq.id &lt;&gt; ALL(st.consumed_queue_item_ids))&quot;,</span></span>
-<span id="L80"><span class="lineNum">      80</span> <span class="tlaGNC">          60 :     )</span></span>
-<span id="L81"><span class="lineNum">      81</span> <span class="tlaGNC">          60 :     .bind(station_id)</span></span>
-<span id="L82"><span class="lineNum">      82</span> <span class="tlaGNC">          60 :     .fetch_all(connection)</span></span>
-<span id="L83"><span class="lineNum">      83</span> <span class="tlaGNC">          60 :     .await</span></span>
-<span id="L84"><span class="lineNum">      84</span> <span class="tlaGNC">          60 :     .db_error(&quot;failed to load active queue songs&quot;)</span></span>
-<span id="L85"><span class="lineNum">      85</span> <span class="tlaGNC">          60 :     .map(|song_ids: Vec&lt;Uuid&gt;| song_ids.into_iter().collect())</span></span>
-<span id="L86"><span class="lineNum">      86</span> <span class="tlaGNC">          60 : }</span></span>
+<span id="L72"><span class="lineNum">      72</span> <span class="tlaGNC">          61 : async fn active_song_ids(connection: &amp;mut PgConnection, station_id: Uuid) -&gt; Result&lt;HashSet&lt;Uuid&gt;, AppError&gt; {</span></span>
+<span id="L73"><span class="lineNum">      73</span> <span class="tlaGNC">          61 :     sqlx::query_scalar(</span></span>
+<span id="L74"><span class="lineNum">      74</span> <span class="tlaGNC">          61 :         &quot;SELECT sq.song_id</span></span>
+<span id="L75"><span class="lineNum">      75</span> <span class="tlaGNC">          61 :          FROM station_queue sq</span></span>
+<span id="L76"><span class="lineNum">      76</span> <span class="tlaGNC">          61 :          JOIN stations st ON st.id = sq.station_id</span></span>
+<span id="L77"><span class="lineNum">      77</span> <span class="tlaGNC">          61 :          WHERE sq.station_id = $1</span></span>
+<span id="L78"><span class="lineNum">      78</span> <span class="tlaGNC">          61 :            AND (sq.id IS NOT DISTINCT FROM st.current_queue_item_id</span></span>
+<span id="L79"><span class="lineNum">      79</span> <span class="tlaGNC">          61 :                 OR sq.id &lt;&gt; ALL(st.consumed_queue_item_ids))&quot;,</span></span>
+<span id="L80"><span class="lineNum">      80</span> <span class="tlaGNC">          61 :     )</span></span>
+<span id="L81"><span class="lineNum">      81</span> <span class="tlaGNC">          61 :     .bind(station_id)</span></span>
+<span id="L82"><span class="lineNum">      82</span> <span class="tlaGNC">          61 :     .fetch_all(connection)</span></span>
+<span id="L83"><span class="lineNum">      83</span> <span class="tlaGNC">          61 :     .await</span></span>
+<span id="L84"><span class="lineNum">      84</span> <span class="tlaGNC">          61 :     .db_error(&quot;failed to load active queue songs&quot;)</span></span>
+<span id="L85"><span class="lineNum">      85</span> <span class="tlaGNC">          61 :     .map(|song_ids: Vec&lt;Uuid&gt;| song_ids.into_iter().collect())</span></span>
+<span id="L86"><span class="lineNum">      86</span> <span class="tlaGNC">          61 : }</span></span>
 <span id="L87"><span class="lineNum">      87</span>              : </span>
 <span id="L88"><span class="lineNum">      88</span> <span class="tlaGNC">           1 : pub(crate) async fn fill_from_playlist_locked(</span></span>
 <span id="L89"><span class="lineNum">      89</span> <span class="tlaGNC">           1 :     connection: &amp;mut PgConnection,</span></span>
@@ -221,13 +221,13 @@
 <span id="L159"><span class="lineNum">     159</span> <span class="tlaUNC">           0 :         .db_error(&quot;failed to pick songs from playlist&quot;)</span></span>
 <span id="L160"><span class="lineNum">     160</span> <span class="tlaUNC">           0 : }</span></span>
 <span id="L161"><span class="lineNum">     161</span>              : </span>
-<span id="L162"><span class="lineNum">     162</span> <span class="tlaGNC tlaBgGNC">         234 : async fn pick_from_station_library(connection: &amp;mut PgConnection, station_id: Uuid) -&gt; Result&lt;Vec&lt;Uuid&gt;, AppError&gt; {</span></span>
-<span id="L163"><span class="lineNum">     163</span> <span class="tlaGNC">         234 :     sqlx::query_scalar(&quot;SELECT ss.song_id FROM station_songs ss WHERE ss.station_id = $1&quot;)</span></span>
-<span id="L164"><span class="lineNum">     164</span> <span class="tlaGNC">         234 :         .bind(station_id)</span></span>
-<span id="L165"><span class="lineNum">     165</span> <span class="tlaGNC">         234 :         .fetch_all(&amp;mut *connection)</span></span>
-<span id="L166"><span class="lineNum">     166</span> <span class="tlaGNC">         234 :         .await</span></span>
-<span id="L167"><span class="lineNum">     167</span> <span class="tlaGNC">         234 :         .db_error(&quot;failed to pick from station library&quot;)</span></span>
-<span id="L168"><span class="lineNum">     168</span> <span class="tlaGNC">         234 : }</span></span>
+<span id="L162"><span class="lineNum">     162</span> <span class="tlaGNC tlaBgGNC">         235 : async fn pick_from_station_library(connection: &amp;mut PgConnection, station_id: Uuid) -&gt; Result&lt;Vec&lt;Uuid&gt;, AppError&gt; {</span></span>
+<span id="L163"><span class="lineNum">     163</span> <span class="tlaGNC">         235 :     sqlx::query_scalar(&quot;SELECT ss.song_id FROM station_songs ss WHERE ss.station_id = $1&quot;)</span></span>
+<span id="L164"><span class="lineNum">     164</span> <span class="tlaGNC">         235 :         .bind(station_id)</span></span>
+<span id="L165"><span class="lineNum">     165</span> <span class="tlaGNC">         235 :         .fetch_all(&amp;mut *connection)</span></span>
+<span id="L166"><span class="lineNum">     166</span> <span class="tlaGNC">         235 :         .await</span></span>
+<span id="L167"><span class="lineNum">     167</span> <span class="tlaGNC">         235 :         .db_error(&quot;failed to pick from station library&quot;)</span></span>
+<span id="L168"><span class="lineNum">     168</span> <span class="tlaGNC">         235 : }</span></span>
 <span id="L169"><span class="lineNum">     169</span>              : </span>
 <span id="L170"><span class="lineNum">     170</span> <span class="tlaGNC">           4 : async fn pick_from_global_library(connection: &amp;mut PgConnection) -&gt; Result&lt;Vec&lt;Uuid&gt;, AppError&gt; {</span></span>
 <span id="L171"><span class="lineNum">     171</span> <span class="tlaGNC">           4 :     sqlx::query_scalar(&quot;SELECT id FROM songs&quot;)</span></span>
@@ -275,17 +275,17 @@
 <span id="L213"><span class="lineNum">     213</span> <span class="tlaUNC">           0 :     unreachable!(&quot;positive weights cover the sampled range&quot;)</span></span>
 <span id="L214"><span class="lineNum">     214</span> <span class="tlaUNC">           0 : }</span></span>
 <span id="L215"><span class="lineNum">     215</span>              : </span>
-<span id="L216"><span class="lineNum">     216</span> <span class="tlaGNC tlaBgGNC">          98 : async fn apply_mode_to_candidates(</span></span>
-<span id="L217"><span class="lineNum">     217</span> <span class="tlaGNC">          98 :     connection: &amp;mut PgConnection,</span></span>
-<span id="L218"><span class="lineNum">     218</span> <span class="tlaGNC">          98 :     candidates: &amp;[Uuid],</span></span>
-<span id="L219"><span class="lineNum">     219</span> <span class="tlaGNC">          98 :     mode: &amp;AutoDjMode,</span></span>
-<span id="L220"><span class="lineNum">     220</span> <span class="tlaGNC">          98 :     station_id: Uuid,</span></span>
-<span id="L221"><span class="lineNum">     221</span> <span class="tlaGNC">          98 : ) -&gt; Result&lt;Uuid, AppError&gt; {</span></span>
-<span id="L222"><span class="lineNum">     222</span> <span class="tlaGNC">          98 :     if candidates.is_empty() {</span></span>
+<span id="L216"><span class="lineNum">     216</span> <span class="tlaGNC tlaBgGNC">          99 : async fn apply_mode_to_candidates(</span></span>
+<span id="L217"><span class="lineNum">     217</span> <span class="tlaGNC">          99 :     connection: &amp;mut PgConnection,</span></span>
+<span id="L218"><span class="lineNum">     218</span> <span class="tlaGNC">          99 :     candidates: &amp;[Uuid],</span></span>
+<span id="L219"><span class="lineNum">     219</span> <span class="tlaGNC">          99 :     mode: &amp;AutoDjMode,</span></span>
+<span id="L220"><span class="lineNum">     220</span> <span class="tlaGNC">          99 :     station_id: Uuid,</span></span>
+<span id="L221"><span class="lineNum">     221</span> <span class="tlaGNC">          99 : ) -&gt; Result&lt;Uuid, AppError&gt; {</span></span>
+<span id="L222"><span class="lineNum">     222</span> <span class="tlaGNC">          99 :     if candidates.is_empty() {</span></span>
 <span id="L223"><span class="lineNum">     223</span> <span class="tlaUNC tlaBgUNC">           0 :         return Err(AppError::BadRequest(&quot;No songs available for selection&quot;.into()));</span></span>
-<span id="L224"><span class="lineNum">     224</span> <span class="tlaGNC tlaBgGNC">          98 :     }</span></span>
-<span id="L225"><span class="lineNum">     225</span> <span class="tlaGNC">          98 :     let mut rng = rand::make_rng::&lt;rand::rngs::StdRng&gt;();</span></span>
-<span id="L226"><span class="lineNum">     226</span> <span class="tlaGNC">          98 :     let selected = match mode {</span></span>
+<span id="L224"><span class="lineNum">     224</span> <span class="tlaGNC tlaBgGNC">          99 :     }</span></span>
+<span id="L225"><span class="lineNum">     225</span> <span class="tlaGNC">          99 :     let mut rng = rand::make_rng::&lt;rand::rngs::StdRng&gt;();</span></span>
+<span id="L226"><span class="lineNum">     226</span> <span class="tlaGNC">          99 :     let selected = match mode {</span></span>
 <span id="L227"><span class="lineNum">     227</span>              :         AutoDjMode::Sequential =&gt; {</span>
 <span id="L228"><span class="lineNum">     228</span> <span class="tlaGNC">           4 :             sqlx::query_scalar::&lt;_, Option&lt;i32&gt;&gt;(</span></span>
 <span id="L229"><span class="lineNum">     229</span> <span class="tlaGNC">           4 :                 &quot;SELECT MAX(sq.position) FROM station_queue sq JOIN station_songs ss ON ss.song_id = sq.song_id WHERE sq.station_id = $1 AND sq.origin_playlist_id IS NOT NULL AND ss.song_id = ANY($2)&quot;,</span></span>
@@ -321,50 +321,50 @@
 <span id="L259"><span class="lineNum">     259</span> <span class="tlaUNC">           0 :                 None =&gt; candidates[candidates.len() - 1],</span></span>
 <span id="L260"><span class="lineNum">     260</span>              :             }</span>
 <span id="L261"><span class="lineNum">     261</span>              :         }</span>
-<span id="L262"><span class="lineNum">     262</span> <span class="tlaGNC tlaBgGNC">          94 :         AutoDjMode::Random =&gt; candidates[rng.random_range(0..candidates.len())],</span></span>
+<span id="L262"><span class="lineNum">     262</span> <span class="tlaGNC tlaBgGNC">          95 :         AutoDjMode::Random =&gt; candidates[rng.random_range(0..candidates.len())],</span></span>
 <span id="L263"><span class="lineNum">     263</span>              :     };</span>
-<span id="L264"><span class="lineNum">     264</span> <span class="tlaGNC">          98 :     Ok(selected)</span></span>
-<span id="L265"><span class="lineNum">     265</span> <span class="tlaGNC">          98 : }</span></span>
+<span id="L264"><span class="lineNum">     264</span> <span class="tlaGNC">          99 :     Ok(selected)</span></span>
+<span id="L265"><span class="lineNum">     265</span> <span class="tlaGNC">          99 : }</span></span>
 <span id="L266"><span class="lineNum">     266</span>              : </span>
-<span id="L267"><span class="lineNum">     267</span> <span class="tlaGNC">         238 : async fn pick_song_for_source(</span></span>
-<span id="L268"><span class="lineNum">     268</span> <span class="tlaGNC">         238 :     connection: &amp;mut PgConnection,</span></span>
-<span id="L269"><span class="lineNum">     269</span> <span class="tlaGNC">         238 :     station_id: Uuid,</span></span>
-<span id="L270"><span class="lineNum">     270</span> <span class="tlaGNC">         238 :     source_type: &amp;SourceType,</span></span>
-<span id="L271"><span class="lineNum">     271</span> <span class="tlaGNC">         238 :     source_playlist_id: Option&lt;Uuid&gt;,</span></span>
-<span id="L272"><span class="lineNum">     272</span> <span class="tlaGNC">         238 :     mode: &amp;AutoDjMode,</span></span>
-<span id="L273"><span class="lineNum">     273</span> <span class="tlaGNC">         238 :     avoid_repeat: bool,</span></span>
-<span id="L274"><span class="lineNum">     274</span> <span class="tlaGNC">         238 :     min_gap: i32,</span></span>
-<span id="L275"><span class="lineNum">     275</span> <span class="tlaGNC">         238 :     excluded: &amp;HashSet&lt;Uuid&gt;,</span></span>
-<span id="L276"><span class="lineNum">     276</span> <span class="tlaGNC">         238 : ) -&gt; Result&lt;Option&lt;Uuid&gt;, AppError&gt; {</span></span>
-<span id="L277"><span class="lineNum">     277</span> <span class="tlaGNC">         238 :     let song_ids = match source_type {</span></span>
+<span id="L267"><span class="lineNum">     267</span> <span class="tlaGNC">         239 : async fn pick_song_for_source(</span></span>
+<span id="L268"><span class="lineNum">     268</span> <span class="tlaGNC">         239 :     connection: &amp;mut PgConnection,</span></span>
+<span id="L269"><span class="lineNum">     269</span> <span class="tlaGNC">         239 :     station_id: Uuid,</span></span>
+<span id="L270"><span class="lineNum">     270</span> <span class="tlaGNC">         239 :     source_type: &amp;SourceType,</span></span>
+<span id="L271"><span class="lineNum">     271</span> <span class="tlaGNC">         239 :     source_playlist_id: Option&lt;Uuid&gt;,</span></span>
+<span id="L272"><span class="lineNum">     272</span> <span class="tlaGNC">         239 :     mode: &amp;AutoDjMode,</span></span>
+<span id="L273"><span class="lineNum">     273</span> <span class="tlaGNC">         239 :     avoid_repeat: bool,</span></span>
+<span id="L274"><span class="lineNum">     274</span> <span class="tlaGNC">         239 :     min_gap: i32,</span></span>
+<span id="L275"><span class="lineNum">     275</span> <span class="tlaGNC">         239 :     excluded: &amp;HashSet&lt;Uuid&gt;,</span></span>
+<span id="L276"><span class="lineNum">     276</span> <span class="tlaGNC">         239 : ) -&gt; Result&lt;Option&lt;Uuid&gt;, AppError&gt; {</span></span>
+<span id="L277"><span class="lineNum">     277</span> <span class="tlaGNC">         239 :     let song_ids = match source_type {</span></span>
 <span id="L278"><span class="lineNum">     278</span> <span class="tlaUNC tlaBgUNC">           0 :         SourceType::Playlist =&gt; match source_playlist_id {</span></span>
 <span id="L279"><span class="lineNum">     279</span> <span class="tlaUNC">           0 :             Some(pid) =&gt; pick_from_playlist(&amp;mut *connection, pid).await?,</span></span>
 <span id="L280"><span class="lineNum">     280</span> <span class="tlaUNC">           0 :             None =&gt; return Ok(None),</span></span>
 <span id="L281"><span class="lineNum">     281</span>              :         },</span>
-<span id="L282"><span class="lineNum">     282</span> <span class="tlaGNC tlaBgGNC">         234 :         SourceType::StationLibrary =&gt; pick_from_station_library(&amp;mut *connection, station_id).await?,</span></span>
+<span id="L282"><span class="lineNum">     282</span> <span class="tlaGNC tlaBgGNC">         235 :         SourceType::StationLibrary =&gt; pick_from_station_library(&amp;mut *connection, station_id).await?,</span></span>
 <span id="L283"><span class="lineNum">     283</span> <span class="tlaGNC">           4 :         SourceType::GlobalLibrary =&gt; pick_from_global_library(&amp;mut *connection).await?,</span></span>
 <span id="L284"><span class="lineNum">     284</span> <span class="tlaUNC tlaBgUNC">           0 :         SourceType::WeightedPlaylists =&gt; pick_weighted(&amp;mut *connection, station_id, excluded).await?,</span></span>
 <span id="L285"><span class="lineNum">     285</span>              :     };</span>
 <span id="L286"><span class="lineNum">     286</span>              : </span>
-<span id="L287"><span class="lineNum">     287</span> <span class="tlaGNC tlaBgGNC">         238 :     if song_ids.is_empty() {</span></span>
+<span id="L287"><span class="lineNum">     287</span> <span class="tlaGNC tlaBgGNC">         239 :     if song_ids.is_empty() {</span></span>
 <span id="L288"><span class="lineNum">     288</span> <span class="tlaGNC">         140 :         tracing::warn!(station_id = %station_id, %source_type, &quot;AutoDJ: no songs in source&quot;);</span></span>
 <span id="L289"><span class="lineNum">     289</span> <span class="tlaGNC">         140 :         return Ok(None);</span></span>
-<span id="L290"><span class="lineNum">     290</span> <span class="tlaGNC">          98 :     }</span></span>
-<span id="L291"><span class="lineNum">     291</span> <span class="tlaGNC">         467 :     let unique: Vec&lt;_&gt; = song_ids.iter().copied().filter(|song_id| !excluded.contains(song_id)).collect();</span></span>
-<span id="L292"><span class="lineNum">     292</span> <span class="tlaGNC">          98 :     let candidates = if unique.is_empty() { &amp;song_ids } else { &amp;unique };</span></span>
-<span id="L293"><span class="lineNum">     293</span> <span class="tlaGNC">          98 :     let selected = apply_mode_to_candidates(&amp;mut *connection, candidates, mode, station_id).await?;</span></span>
+<span id="L290"><span class="lineNum">     290</span> <span class="tlaGNC">          99 :     }</span></span>
+<span id="L291"><span class="lineNum">     291</span> <span class="tlaGNC">         470 :     let unique: Vec&lt;_&gt; = song_ids.iter().copied().filter(|song_id| !excluded.contains(song_id)).collect();</span></span>
+<span id="L292"><span class="lineNum">     292</span> <span class="tlaGNC">          99 :     let candidates = if unique.is_empty() { &amp;song_ids } else { &amp;unique };</span></span>
+<span id="L293"><span class="lineNum">     293</span> <span class="tlaGNC">          99 :     let selected = apply_mode_to_candidates(&amp;mut *connection, candidates, mode, station_id).await?;</span></span>
 <span id="L294"><span class="lineNum">     294</span>              : </span>
-<span id="L295"><span class="lineNum">     295</span> <span class="tlaGNC">          98 :     let unique_artist_count: i64 = if avoid_repeat {</span></span>
+<span id="L295"><span class="lineNum">     295</span> <span class="tlaGNC">          99 :     let unique_artist_count: i64 = if avoid_repeat {</span></span>
 <span id="L296"><span class="lineNum">     296</span> <span class="tlaGNC">          45 :         sqlx::query_scalar(&quot;SELECT COUNT(DISTINCT artist) FROM songs WHERE id = ANY($1) AND artist != ''&quot;)</span></span>
 <span id="L297"><span class="lineNum">     297</span> <span class="tlaGNC">          45 :             .bind(&amp;song_ids)</span></span>
 <span id="L298"><span class="lineNum">     298</span> <span class="tlaGNC">          45 :             .fetch_one(&amp;mut *connection)</span></span>
 <span id="L299"><span class="lineNum">     299</span> <span class="tlaGNC">          45 :             .await</span></span>
 <span id="L300"><span class="lineNum">     300</span> <span class="tlaGNC">          45 :             .db_error(&quot;failed to count unique artists&quot;)?</span></span>
 <span id="L301"><span class="lineNum">     301</span>              :     } else {</span>
-<span id="L302"><span class="lineNum">     302</span> <span class="tlaGNC">          53 :         0</span></span>
+<span id="L302"><span class="lineNum">     302</span> <span class="tlaGNC">          54 :         0</span></span>
 <span id="L303"><span class="lineNum">     303</span>              :     };</span>
 <span id="L304"><span class="lineNum">     304</span>              : </span>
-<span id="L305"><span class="lineNum">     305</span> <span class="tlaGNC">          98 :     if avoid_repeat &amp;&amp; min_gap &gt; 0 &amp;&amp; unique_artist_count &gt; 1 {</span></span>
+<span id="L305"><span class="lineNum">     305</span> <span class="tlaGNC">          99 :     if avoid_repeat &amp;&amp; min_gap &gt; 0 &amp;&amp; unique_artist_count &gt; 1 {</span></span>
 <span id="L306"><span class="lineNum">     306</span> <span class="tlaUNC tlaBgUNC">           0 :         let recent_artists: Vec&lt;String&gt; = sqlx::query_scalar(</span></span>
 <span id="L307"><span class="lineNum">     307</span> <span class="tlaUNC">           0 :             &quot;SELECT s.artist FROM station_queue sq JOIN songs s ON s.id = sq.song_id WHERE sq.station_id = $1 GROUP BY s.artist ORDER BY MAX(sq.position) DESC LIMIT $2&quot;,</span></span>
 <span id="L308"><span class="lineNum">     308</span> <span class="tlaUNC">           0 :         )</span></span>
@@ -415,84 +415,84 @@
 <span id="L353"><span class="lineNum">     353</span> <span class="tlaUNC">           0 :                 return Ok(Some(selected));</span></span>
 <span id="L354"><span class="lineNum">     354</span> <span class="tlaUNC">           0 :             }</span></span>
 <span id="L355"><span class="lineNum">     355</span> <span class="tlaUNC">           0 :         }</span></span>
-<span id="L356"><span class="lineNum">     356</span> <span class="tlaGNC tlaBgGNC">          98 :     }</span></span>
+<span id="L356"><span class="lineNum">     356</span> <span class="tlaGNC tlaBgGNC">          99 :     }</span></span>
 <span id="L357"><span class="lineNum">     357</span>              : </span>
-<span id="L358"><span class="lineNum">     358</span> <span class="tlaGNC">          98 :     Ok(Some(selected))</span></span>
-<span id="L359"><span class="lineNum">     359</span> <span class="tlaGNC">         238 : }</span></span>
+<span id="L358"><span class="lineNum">     358</span> <span class="tlaGNC">          99 :     Ok(Some(selected))</span></span>
+<span id="L359"><span class="lineNum">     359</span> <span class="tlaGNC">         239 : }</span></span>
 <span id="L360"><span class="lineNum">     360</span>              : </span>
-<span id="L361"><span class="lineNum">     361</span> <span class="tlaGNC">         238 : async fn pick_and_insert_song(</span></span>
-<span id="L362"><span class="lineNum">     362</span> <span class="tlaGNC">         238 :     connection: &amp;mut PgConnection,</span></span>
-<span id="L363"><span class="lineNum">     363</span> <span class="tlaGNC">         238 :     station_id: Uuid,</span></span>
-<span id="L364"><span class="lineNum">     364</span> <span class="tlaGNC">         238 :     config: &amp;AutoFillConfig,</span></span>
-<span id="L365"><span class="lineNum">     365</span> <span class="tlaGNC">         238 :     excluded: &amp;mut HashSet&lt;Uuid&gt;,</span></span>
-<span id="L366"><span class="lineNum">     366</span> <span class="tlaGNC">         238 :     analyze: &amp;mut Vec&lt;Uuid&gt;,</span></span>
-<span id="L367"><span class="lineNum">     367</span> <span class="tlaGNC">         238 : ) -&gt; Result&lt;bool, AppError&gt; {</span></span>
-<span id="L368"><span class="lineNum">     368</span> <span class="tlaGNC">         238 :     let song_id = match pick_song_for_source(</span></span>
-<span id="L369"><span class="lineNum">     369</span> <span class="tlaGNC">         238 :         &amp;mut *connection,</span></span>
-<span id="L370"><span class="lineNum">     370</span> <span class="tlaGNC">         238 :         station_id,</span></span>
-<span id="L371"><span class="lineNum">     371</span> <span class="tlaGNC">         238 :         &amp;config.source_type,</span></span>
-<span id="L372"><span class="lineNum">     372</span> <span class="tlaGNC">         238 :         config.source_playlist_id,</span></span>
-<span id="L373"><span class="lineNum">     373</span> <span class="tlaGNC">         238 :         &amp;config.mode,</span></span>
-<span id="L374"><span class="lineNum">     374</span> <span class="tlaGNC">         238 :         config.avoid_repeat,</span></span>
-<span id="L375"><span class="lineNum">     375</span> <span class="tlaGNC">         238 :         config.min_gap,</span></span>
-<span id="L376"><span class="lineNum">     376</span> <span class="tlaGNC">         238 :         excluded,</span></span>
+<span id="L361"><span class="lineNum">     361</span> <span class="tlaGNC">         239 : async fn pick_and_insert_song(</span></span>
+<span id="L362"><span class="lineNum">     362</span> <span class="tlaGNC">         239 :     connection: &amp;mut PgConnection,</span></span>
+<span id="L363"><span class="lineNum">     363</span> <span class="tlaGNC">         239 :     station_id: Uuid,</span></span>
+<span id="L364"><span class="lineNum">     364</span> <span class="tlaGNC">         239 :     config: &amp;AutoFillConfig,</span></span>
+<span id="L365"><span class="lineNum">     365</span> <span class="tlaGNC">         239 :     excluded: &amp;mut HashSet&lt;Uuid&gt;,</span></span>
+<span id="L366"><span class="lineNum">     366</span> <span class="tlaGNC">         239 :     analyze: &amp;mut Vec&lt;Uuid&gt;,</span></span>
+<span id="L367"><span class="lineNum">     367</span> <span class="tlaGNC">         239 : ) -&gt; Result&lt;bool, AppError&gt; {</span></span>
+<span id="L368"><span class="lineNum">     368</span> <span class="tlaGNC">         239 :     let song_id = match pick_song_for_source(</span></span>
+<span id="L369"><span class="lineNum">     369</span> <span class="tlaGNC">         239 :         &amp;mut *connection,</span></span>
+<span id="L370"><span class="lineNum">     370</span> <span class="tlaGNC">         239 :         station_id,</span></span>
+<span id="L371"><span class="lineNum">     371</span> <span class="tlaGNC">         239 :         &amp;config.source_type,</span></span>
+<span id="L372"><span class="lineNum">     372</span> <span class="tlaGNC">         239 :         config.source_playlist_id,</span></span>
+<span id="L373"><span class="lineNum">     373</span> <span class="tlaGNC">         239 :         &amp;config.mode,</span></span>
+<span id="L374"><span class="lineNum">     374</span> <span class="tlaGNC">         239 :         config.avoid_repeat,</span></span>
+<span id="L375"><span class="lineNum">     375</span> <span class="tlaGNC">         239 :         config.min_gap,</span></span>
+<span id="L376"><span class="lineNum">     376</span> <span class="tlaGNC">         239 :         excluded,</span></span>
 <span id="L377"><span class="lineNum">     377</span>              :     )</span>
-<span id="L378"><span class="lineNum">     378</span> <span class="tlaGNC">         238 :     .await</span></span>
+<span id="L378"><span class="lineNum">     378</span> <span class="tlaGNC">         239 :     .await</span></span>
 <span id="L379"><span class="lineNum">     379</span>              :     {</span>
-<span id="L380"><span class="lineNum">     380</span> <span class="tlaGNC">         238 :         Ok(sid) =&gt; sid,</span></span>
+<span id="L380"><span class="lineNum">     380</span> <span class="tlaGNC">         239 :         Ok(sid) =&gt; sid,</span></span>
 <span id="L381"><span class="lineNum">     381</span> <span class="tlaUNC tlaBgUNC">           0 :         Err(error) =&gt; {</span></span>
 <span id="L382"><span class="lineNum">     382</span> <span class="tlaUNC">           0 :             tracing::warn!(station_id = %station_id, ?error, &quot;AutoDJ: pick_song error&quot;);</span></span>
 <span id="L383"><span class="lineNum">     383</span> <span class="tlaUNC">           0 :             return Ok(false);</span></span>
 <span id="L384"><span class="lineNum">     384</span>              :         }</span>
 <span id="L385"><span class="lineNum">     385</span>              :     };</span>
 <span id="L386"><span class="lineNum">     386</span>              : </span>
-<span id="L387"><span class="lineNum">     387</span> <span class="tlaGNC tlaBgGNC">         238 :     if let Some(song_id) = song_id {</span></span>
-<span id="L388"><span class="lineNum">     388</span> <span class="tlaGNC">          98 :         let next_pos: i32 = sqlx::query_scalar(&quot;SELECT COALESCE(MAX(position), -1) + 1 FROM station_queue WHERE station_id = $1&quot;)</span></span>
-<span id="L389"><span class="lineNum">     389</span> <span class="tlaGNC">          98 :             .bind(station_id)</span></span>
-<span id="L390"><span class="lineNum">     390</span> <span class="tlaGNC">          98 :             .fetch_one(&amp;mut *connection)</span></span>
-<span id="L391"><span class="lineNum">     391</span> <span class="tlaGNC">          98 :             .await</span></span>
-<span id="L392"><span class="lineNum">     392</span> <span class="tlaGNC">          98 :             .db_error(&quot;failed to query next insert position&quot;)?;</span></span>
+<span id="L387"><span class="lineNum">     387</span> <span class="tlaGNC tlaBgGNC">         239 :     if let Some(song_id) = song_id {</span></span>
+<span id="L388"><span class="lineNum">     388</span> <span class="tlaGNC">          99 :         let next_pos: i32 = sqlx::query_scalar(&quot;SELECT COALESCE(MAX(position), -1) + 1 FROM station_queue WHERE station_id = $1&quot;)</span></span>
+<span id="L389"><span class="lineNum">     389</span> <span class="tlaGNC">          99 :             .bind(station_id)</span></span>
+<span id="L390"><span class="lineNum">     390</span> <span class="tlaGNC">          99 :             .fetch_one(&amp;mut *connection)</span></span>
+<span id="L391"><span class="lineNum">     391</span> <span class="tlaGNC">          99 :             .await</span></span>
+<span id="L392"><span class="lineNum">     392</span> <span class="tlaGNC">          99 :             .db_error(&quot;failed to query next insert position&quot;)?;</span></span>
 <span id="L393"><span class="lineNum">     393</span>              : </span>
-<span id="L394"><span class="lineNum">     394</span> <span class="tlaGNC">          98 :         sqlx::query(&quot;INSERT INTO station_queue (station_id, song_id, position, is_auto_dj) VALUES ($1, $2, $3, true)&quot;)</span></span>
-<span id="L395"><span class="lineNum">     395</span> <span class="tlaGNC">          98 :             .bind(station_id)</span></span>
-<span id="L396"><span class="lineNum">     396</span> <span class="tlaGNC">          98 :             .bind(song_id)</span></span>
-<span id="L397"><span class="lineNum">     397</span> <span class="tlaGNC">          98 :             .bind(next_pos)</span></span>
-<span id="L398"><span class="lineNum">     398</span> <span class="tlaGNC">          98 :             .execute(&amp;mut *connection)</span></span>
-<span id="L399"><span class="lineNum">     399</span> <span class="tlaGNC">          98 :             .await</span></span>
-<span id="L400"><span class="lineNum">     400</span> <span class="tlaGNC">          98 :             .db_error(&quot;failed to insert auto-DJ selection&quot;)?;</span></span>
+<span id="L394"><span class="lineNum">     394</span> <span class="tlaGNC">          99 :         sqlx::query(&quot;INSERT INTO station_queue (station_id, song_id, position, is_auto_dj) VALUES ($1, $2, $3, true)&quot;)</span></span>
+<span id="L395"><span class="lineNum">     395</span> <span class="tlaGNC">          99 :             .bind(station_id)</span></span>
+<span id="L396"><span class="lineNum">     396</span> <span class="tlaGNC">          99 :             .bind(song_id)</span></span>
+<span id="L397"><span class="lineNum">     397</span> <span class="tlaGNC">          99 :             .bind(next_pos)</span></span>
+<span id="L398"><span class="lineNum">     398</span> <span class="tlaGNC">          99 :             .execute(&amp;mut *connection)</span></span>
+<span id="L399"><span class="lineNum">     399</span> <span class="tlaGNC">          99 :             .await</span></span>
+<span id="L400"><span class="lineNum">     400</span> <span class="tlaGNC">          99 :             .db_error(&quot;failed to insert auto-DJ selection&quot;)?;</span></span>
 <span id="L401"><span class="lineNum">     401</span>              : </span>
-<span id="L402"><span class="lineNum">     402</span> <span class="tlaGNC">          98 :         analyze.push(song_id);</span></span>
-<span id="L403"><span class="lineNum">     403</span> <span class="tlaGNC">          98 :         excluded.insert(song_id);</span></span>
+<span id="L402"><span class="lineNum">     402</span> <span class="tlaGNC">          99 :         analyze.push(song_id);</span></span>
+<span id="L403"><span class="lineNum">     403</span> <span class="tlaGNC">          99 :         excluded.insert(song_id);</span></span>
 <span id="L404"><span class="lineNum">     404</span>              : </span>
-<span id="L405"><span class="lineNum">     405</span> <span class="tlaGNC">          98 :         Ok(true)</span></span>
+<span id="L405"><span class="lineNum">     405</span> <span class="tlaGNC">          99 :         Ok(true)</span></span>
 <span id="L406"><span class="lineNum">     406</span>              :     } else {</span>
 <span id="L407"><span class="lineNum">     407</span> <span class="tlaGNC">         140 :         Ok(false)</span></span>
 <span id="L408"><span class="lineNum">     408</span>              :     }</span>
-<span id="L409"><span class="lineNum">     409</span> <span class="tlaGNC">         238 : }</span></span>
+<span id="L409"><span class="lineNum">     409</span> <span class="tlaGNC">         239 : }</span></span>
 <span id="L410"><span class="lineNum">     410</span>              : </span>
-<span id="L411"><span class="lineNum">     411</span> <span class="tlaGNC">          67 : pub(crate) async fn fill_from_auto_dj_source_locked(</span></span>
-<span id="L412"><span class="lineNum">     412</span> <span class="tlaGNC">          67 :     connection: &amp;mut PgConnection,</span></span>
-<span id="L413"><span class="lineNum">     413</span> <span class="tlaGNC">          67 :     station_id: Uuid,</span></span>
-<span id="L414"><span class="lineNum">     414</span> <span class="tlaGNC">          67 :     config: &amp;AutoFillConfig,</span></span>
-<span id="L415"><span class="lineNum">     415</span> <span class="tlaGNC">          67 :     analyze: &amp;mut Vec&lt;Uuid&gt;,</span></span>
-<span id="L416"><span class="lineNum">     416</span> <span class="tlaGNC">          67 : ) -&gt; Result&lt;(), AppError&gt; {</span></span>
-<span id="L417"><span class="lineNum">     417</span> <span class="tlaGNC">          67 :     let need = fill_demand(&amp;mut *connection, station_id, i64::from(config.songs_ahead)).await?;</span></span>
-<span id="L418"><span class="lineNum">     418</span> <span class="tlaGNC">          66 :     if need == 0 {</span></span>
+<span id="L411"><span class="lineNum">     411</span> <span class="tlaGNC">          68 : pub(crate) async fn fill_from_auto_dj_source_locked(</span></span>
+<span id="L412"><span class="lineNum">     412</span> <span class="tlaGNC">          68 :     connection: &amp;mut PgConnection,</span></span>
+<span id="L413"><span class="lineNum">     413</span> <span class="tlaGNC">          68 :     station_id: Uuid,</span></span>
+<span id="L414"><span class="lineNum">     414</span> <span class="tlaGNC">          68 :     config: &amp;AutoFillConfig,</span></span>
+<span id="L415"><span class="lineNum">     415</span> <span class="tlaGNC">          68 :     analyze: &amp;mut Vec&lt;Uuid&gt;,</span></span>
+<span id="L416"><span class="lineNum">     416</span> <span class="tlaGNC">          68 : ) -&gt; Result&lt;(), AppError&gt; {</span></span>
+<span id="L417"><span class="lineNum">     417</span> <span class="tlaGNC">          68 :     let need = fill_demand(&amp;mut *connection, station_id, i64::from(config.songs_ahead)).await?;</span></span>
+<span id="L418"><span class="lineNum">     418</span> <span class="tlaGNC">          67 :     if need == 0 {</span></span>
 <span id="L419"><span class="lineNum">     419</span> <span class="tlaGNC">           7 :         return Ok(());</span></span>
-<span id="L420"><span class="lineNum">     420</span> <span class="tlaGNC">          59 :     }</span></span>
-<span id="L421"><span class="lineNum">     421</span> <span class="tlaGNC">          59 :     let mut excluded = active_song_ids(&amp;mut *connection, station_id).await?;</span></span>
-<span id="L422"><span class="lineNum">     422</span> <span class="tlaGNC">          59 :     let mut added = 0i32;</span></span>
-<span id="L423"><span class="lineNum">     423</span> <span class="tlaGNC">          59 :     let mut attempts = 0;</span></span>
+<span id="L420"><span class="lineNum">     420</span> <span class="tlaGNC">          60 :     }</span></span>
+<span id="L421"><span class="lineNum">     421</span> <span class="tlaGNC">          60 :     let mut excluded = active_song_ids(&amp;mut *connection, station_id).await?;</span></span>
+<span id="L422"><span class="lineNum">     422</span> <span class="tlaGNC">          60 :     let mut added = 0i32;</span></span>
+<span id="L423"><span class="lineNum">     423</span> <span class="tlaGNC">          60 :     let mut attempts = 0;</span></span>
 <span id="L424"><span class="lineNum">     424</span>              : </span>
-<span id="L425"><span class="lineNum">     425</span> <span class="tlaGNC">         297 :     while added &lt; need as i32 &amp;&amp; attempts &lt; need * 5 {</span></span>
-<span id="L426"><span class="lineNum">     426</span> <span class="tlaGNC">         238 :         attempts += 1;</span></span>
-<span id="L427"><span class="lineNum">     427</span> <span class="tlaGNC">         238 :         if pick_and_insert_song(&amp;mut *connection, station_id, config, &amp;mut excluded, analyze).await? {</span></span>
-<span id="L428"><span class="lineNum">     428</span> <span class="tlaGNC">          98 :             added += 1;</span></span>
+<span id="L425"><span class="lineNum">     425</span> <span class="tlaGNC">         299 :     while added &lt; need as i32 &amp;&amp; attempts &lt; need * 5 {</span></span>
+<span id="L426"><span class="lineNum">     426</span> <span class="tlaGNC">         239 :         attempts += 1;</span></span>
+<span id="L427"><span class="lineNum">     427</span> <span class="tlaGNC">         239 :         if pick_and_insert_song(&amp;mut *connection, station_id, config, &amp;mut excluded, analyze).await? {</span></span>
+<span id="L428"><span class="lineNum">     428</span> <span class="tlaGNC">          99 :             added += 1;</span></span>
 <span id="L429"><span class="lineNum">     429</span> <span class="tlaGNC">         140 :         }</span></span>
 <span id="L430"><span class="lineNum">     430</span>              :     }</span>
 <span id="L431"><span class="lineNum">     431</span>              : </span>
-<span id="L432"><span class="lineNum">     432</span> <span class="tlaGNC">          59 :     Ok(())</span></span>
-<span id="L433"><span class="lineNum">     433</span> <span class="tlaGNC">          66 : }</span></span>
+<span id="L432"><span class="lineNum">     432</span> <span class="tlaGNC">          60 :     Ok(())</span></span>
+<span id="L433"><span class="lineNum">     433</span> <span class="tlaGNC">          67 : }</span></span>
 <span id="L434"><span class="lineNum">     434</span>              : </span>
 <span id="L435"><span class="lineNum">     435</span> <span class="tlaGNC">         145 : pub(crate) async fn fill_from_auto_config_locked(</span></span>
 <span id="L436"><span class="lineNum">     436</span> <span class="tlaGNC">         145 :     connection: &amp;mut PgConnection,</span></span>
@@ -507,29 +507,29 @@
 <span id="L445"><span class="lineNum">     445</span> <span class="tlaGNC">         145 :     .await</span></span>
 <span id="L446"><span class="lineNum">     446</span> <span class="tlaGNC">         145 :     .db_error(&quot;failed to load auto-fill config&quot;)?;</span></span>
 <span id="L447"><span class="lineNum">     447</span>              : </span>
-<span id="L448"><span class="lineNum">     448</span> <span class="tlaGNC">         144 :     let (enabled, mode, source_type, source_playlist_id, avoid_repeat, min_gap, songs_ahead) = match config {</span></span>
-<span id="L449"><span class="lineNum">     449</span> <span class="tlaGNC">         115 :         Some(c) =&gt; c,</span></span>
+<span id="L448"><span class="lineNum">     448</span> <span class="tlaGNC">         145 :     let (enabled, mode, source_type, source_playlist_id, avoid_repeat, min_gap, songs_ahead) = match config {</span></span>
+<span id="L449"><span class="lineNum">     449</span> <span class="tlaGNC">         116 :         Some(c) =&gt; c,</span></span>
 <span id="L450"><span class="lineNum">     450</span>              :         None =&gt; {</span>
 <span id="L451"><span class="lineNum">     451</span> <span class="tlaGNC">          29 :             tracing::warn!(station_id = %station_id, &quot;AutoDJ: no config row found&quot;);</span></span>
 <span id="L452"><span class="lineNum">     452</span> <span class="tlaGNC">          29 :             return Ok(());</span></span>
 <span id="L453"><span class="lineNum">     453</span>              :         }</span>
 <span id="L454"><span class="lineNum">     454</span>              :     };</span>
 <span id="L455"><span class="lineNum">     455</span>              : </span>
-<span id="L456"><span class="lineNum">     456</span> <span class="tlaGNC">         115 :     if !enabled {</span></span>
+<span id="L456"><span class="lineNum">     456</span> <span class="tlaGNC">         116 :     if !enabled {</span></span>
 <span id="L457"><span class="lineNum">     457</span> <span class="tlaGNC">          54 :         tracing::warn!(station_id = %station_id, &quot;AutoDJ: disabled&quot;);</span></span>
 <span id="L458"><span class="lineNum">     458</span> <span class="tlaGNC">          54 :         return Ok(());</span></span>
-<span id="L459"><span class="lineNum">     459</span> <span class="tlaGNC">          61 :     }</span></span>
+<span id="L459"><span class="lineNum">     459</span> <span class="tlaGNC">          62 :     }</span></span>
 <span id="L460"><span class="lineNum">     460</span>              : </span>
-<span id="L461"><span class="lineNum">     461</span> <span class="tlaGNC">          61 :     let auto_config = AutoFillConfig {</span></span>
-<span id="L462"><span class="lineNum">     462</span> <span class="tlaGNC">          61 :         source_type,</span></span>
-<span id="L463"><span class="lineNum">     463</span> <span class="tlaGNC">          61 :         source_playlist_id,</span></span>
-<span id="L464"><span class="lineNum">     464</span> <span class="tlaGNC">          61 :         mode,</span></span>
-<span id="L465"><span class="lineNum">     465</span> <span class="tlaGNC">          61 :         avoid_repeat,</span></span>
-<span id="L466"><span class="lineNum">     466</span> <span class="tlaGNC">          61 :         min_gap,</span></span>
-<span id="L467"><span class="lineNum">     467</span> <span class="tlaGNC">          61 :         songs_ahead,</span></span>
-<span id="L468"><span class="lineNum">     468</span> <span class="tlaGNC">          61 :     };</span></span>
+<span id="L461"><span class="lineNum">     461</span> <span class="tlaGNC">          62 :     let auto_config = AutoFillConfig {</span></span>
+<span id="L462"><span class="lineNum">     462</span> <span class="tlaGNC">          62 :         source_type,</span></span>
+<span id="L463"><span class="lineNum">     463</span> <span class="tlaGNC">          62 :         source_playlist_id,</span></span>
+<span id="L464"><span class="lineNum">     464</span> <span class="tlaGNC">          62 :         mode,</span></span>
+<span id="L465"><span class="lineNum">     465</span> <span class="tlaGNC">          62 :         avoid_repeat,</span></span>
+<span id="L466"><span class="lineNum">     466</span> <span class="tlaGNC">          62 :         min_gap,</span></span>
+<span id="L467"><span class="lineNum">     467</span> <span class="tlaGNC">          62 :         songs_ahead,</span></span>
+<span id="L468"><span class="lineNum">     468</span> <span class="tlaGNC">          62 :     };</span></span>
 <span id="L469"><span class="lineNum">     469</span>              : </span>
-<span id="L470"><span class="lineNum">     470</span> <span class="tlaGNC">          61 :     fill_from_auto_dj_source_locked(&amp;mut *connection, station_id, &amp;auto_config, analyze).await</span></span>
+<span id="L470"><span class="lineNum">     470</span> <span class="tlaGNC">          62 :     fill_from_auto_dj_source_locked(&amp;mut *connection, station_id, &amp;auto_config, analyze).await</span></span>
 <span id="L471"><span class="lineNum">     471</span> <span class="tlaGNC">         145 : }</span></span>
         </pre>
               </td>

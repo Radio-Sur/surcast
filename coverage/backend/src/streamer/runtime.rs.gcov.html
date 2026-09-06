@@ -37,7 +37,7 @@
           </tr>
           <tr>
             <td class="headerItem">Test Date:</td>
-            <td class="headerValue">2026-09-06 18:16:30</td>
+            <td class="headerValue">2026-09-06 18:18:07</td>
             <td></td>
             <td class="headerItem">Functions:</td>
             <td class="headerCovTableEntryLo">68.4&nbsp;%</td>
@@ -260,7 +260,7 @@
 <span id="L198"><span class="lineNum">     198</span> <span class="tlaGNC">         285 :         tokio::select! {</span></span>
 <span id="L199"><span class="lineNum">     199</span>              :             biased;</span>
 <span id="L200"><span class="lineNum">     200</span> <span class="tlaGNC">         285 :             task = urgent.recv() =&gt; {</span></span>
-<span id="L201"><span class="lineNum">     201</span> <span class="tlaGNC">         159 :                 let Some(task) = task else {</span></span>
+<span id="L201"><span class="lineNum">     201</span> <span class="tlaGNC">         160 :                 let Some(task) = task else {</span></span>
 <span id="L202"><span class="lineNum">     202</span> <span class="tlaGNC">          16 :                     while let Some(task) = regular.recv().await {</span></span>
 <span id="L203"><span class="lineNum">     203</span> <span class="tlaGNC">           3 :                         if !run_task(task, &amp;driver, &amp;mut urgent, &amp;mut regular).await {</span></span>
 <span id="L204"><span class="lineNum">     204</span> <span class="tlaUNC tlaBgUNC">           0 :                             return;</span></span>
@@ -268,12 +268,12 @@
 <span id="L206"><span class="lineNum">     206</span>              :                     }</span>
 <span id="L207"><span class="lineNum">     207</span> <span class="tlaGNC">          13 :                     return;</span></span>
 <span id="L208"><span class="lineNum">     208</span>              :                 };</span>
-<span id="L209"><span class="lineNum">     209</span> <span class="tlaGNC">         146 :                 if !run_task(task, &amp;driver, &amp;mut urgent, &amp;mut regular).await {</span></span>
+<span id="L209"><span class="lineNum">     209</span> <span class="tlaGNC">         147 :                 if !run_task(task, &amp;driver, &amp;mut urgent, &amp;mut regular).await {</span></span>
 <span id="L210"><span class="lineNum">     210</span> <span class="tlaGNC">          82 :                     return;</span></span>
-<span id="L211"><span class="lineNum">     211</span> <span class="tlaGNC">          64 :                 }</span></span>
+<span id="L211"><span class="lineNum">     211</span> <span class="tlaGNC">          65 :                 }</span></span>
 <span id="L212"><span class="lineNum">     212</span>              :             }</span>
 <span id="L213"><span class="lineNum">     213</span> <span class="tlaGNC">         285 :             task = regular.recv() =&gt; {</span></span>
-<span id="L214"><span class="lineNum">     214</span> <span class="tlaGNC">         125 :                 let Some(task) = task else {</span></span>
+<span id="L214"><span class="lineNum">     214</span> <span class="tlaGNC">         124 :                 let Some(task) = task else {</span></span>
 <span id="L215"><span class="lineNum">     215</span> <span class="tlaUNC tlaBgUNC">           0 :                     while let Some(task) = urgent.recv().await {</span></span>
 <span id="L216"><span class="lineNum">     216</span> <span class="tlaUNC">           0 :                         if !run_task(task, &amp;driver, &amp;mut urgent, &amp;mut regular).await {</span></span>
 <span id="L217"><span class="lineNum">     217</span> <span class="tlaUNC">           0 :                             return;</span></span>
@@ -281,9 +281,9 @@
 <span id="L219"><span class="lineNum">     219</span>              :                     }</span>
 <span id="L220"><span class="lineNum">     220</span> <span class="tlaUNC">           0 :                     return;</span></span>
 <span id="L221"><span class="lineNum">     221</span>              :                 };</span>
-<span id="L222"><span class="lineNum">     222</span> <span class="tlaGNC tlaBgGNC">         125 :                 if !run_task(task, &amp;driver, &amp;mut urgent, &amp;mut regular).await {</span></span>
+<span id="L222"><span class="lineNum">     222</span> <span class="tlaGNC tlaBgGNC">         124 :                 if !run_task(task, &amp;driver, &amp;mut urgent, &amp;mut regular).await {</span></span>
 <span id="L223"><span class="lineNum">     223</span> <span class="tlaUNC tlaBgUNC">           0 :                     return;</span></span>
-<span id="L224"><span class="lineNum">     224</span> <span class="tlaGNC tlaBgGNC">         125 :                 }</span></span>
+<span id="L224"><span class="lineNum">     224</span> <span class="tlaGNC tlaBgGNC">         124 :                 }</span></span>
 <span id="L225"><span class="lineNum">     225</span>              :             }</span>
 <span id="L226"><span class="lineNum">     226</span>              :         }</span>
 <span id="L227"><span class="lineNum">     227</span>              :     }</span>
@@ -497,19 +497,19 @@
 <span id="L435"><span class="lineNum">     435</span> <span class="tlaGNC">          25 :         let loop_play_result_gate = play_result_gate.clone();</span></span>
 <span id="L436"><span class="lineNum">     436</span> <span class="tlaGNC">          82 :         tokio::spawn(async move {</span></span>
 <span id="L437"><span class="lineNum">     437</span>              :             loop {</span>
-<span id="L438"><span class="lineNum">     438</span> <span class="tlaGNC">        7776 :                 tokio::select! {</span></span>
-<span id="L439"><span class="lineNum">     439</span> <span class="tlaGNC">        7776 :                     command = receiver.recv() =&gt; {</span></span>
-<span id="L440"><span class="lineNum">     440</span> <span class="tlaGNC">        7705 :                         let Some(command) = command else { break };</span></span>
+<span id="L438"><span class="lineNum">     438</span> <span class="tlaGNC">        7871 :                 tokio::select! {</span></span>
+<span id="L439"><span class="lineNum">     439</span> <span class="tlaGNC">        7871 :                     command = receiver.recv() =&gt; {</span></span>
+<span id="L440"><span class="lineNum">     440</span> <span class="tlaGNC">        7799 :                         let Some(command) = command else { break };</span></span>
 <span id="L441"><span class="lineNum">     441</span>              :                         #[cfg(not(test))]</span>
-<span id="L442"><span class="lineNum">     442</span> <span class="tlaGNC">        7560 :                         if !command.run(&amp;mut controller, retries.clone(), &amp;operations_regular, &amp;operations_urgent).await {</span></span>
+<span id="L442"><span class="lineNum">     442</span> <span class="tlaGNC">        7654 :                         if !command.run(&amp;mut controller, retries.clone(), &amp;operations_regular, &amp;operations_urgent).await {</span></span>
 <span id="L443"><span class="lineNum">     443</span> <span class="tlaGNC">          57 :                             break;</span></span>
-<span id="L444"><span class="lineNum">     444</span> <span class="tlaGNC">        7503 :                         }</span></span>
+<span id="L444"><span class="lineNum">     444</span> <span class="tlaGNC">        7597 :                         }</span></span>
 <span id="L445"><span class="lineNum">     445</span>              :                         #[cfg(test)]</span>
 <span id="L446"><span class="lineNum">     446</span> <span class="tlaGNC">         145 :                         if !command.run(&amp;mut controller, retries.clone(), &amp;operations_regular, &amp;operations_urgent, loop_play_result_gate.clone()).await {</span></span>
 <span id="L447"><span class="lineNum">     447</span> <span class="tlaGNC">          23 :                             break;</span></span>
 <span id="L448"><span class="lineNum">     448</span> <span class="tlaGNC">         122 :                         }</span></span>
 <span id="L449"><span class="lineNum">     449</span>              :                     },</span>
-<span id="L450"><span class="lineNum">     450</span> <span class="tlaGNC">        7776 :                     event = events.recv() =&gt; match event {</span></span>
+<span id="L450"><span class="lineNum">     450</span> <span class="tlaGNC">        7871 :                     event = events.recv() =&gt; match event {</span></span>
 <span id="L451"><span class="lineNum">     451</span>              :                         #[cfg(test)]</span>
 <span id="L452"><span class="lineNum">     452</span> <span class="tlaGNC">           2 :                         Some(PipelineEvent::TestBarrier(notify)) =&gt; {</span></span>
 <span id="L453"><span class="lineNum">     453</span> <span class="tlaGNC">           2 :                             notify.notify_one();</span></span>
@@ -555,14 +555,14 @@
 <span id="L493"><span class="lineNum">     493</span>              :                         // are processed through the controller. When an event matches the target</span>
 <span id="L494"><span class="lineNum">     494</span>              :                         // generation of an in-flight two-phase skip, the failure is recorded on</span>
 <span id="L495"><span class="lineNum">     495</span>              :                         // the pending skip record (deferred) and applied at commit time.</span>
-<span id="L496"><span class="lineNum">     496</span> <span class="tlaGNC tlaBgGNC">          56 :                         Some(event) =&gt; match controller.handle_event(event).await {</span></span>
-<span id="L497"><span class="lineNum">     497</span> <span class="tlaGNC">          49 :                             Some(Ok(prepared)) =&gt; submit_prepared(prepared, &amp;operations_urgent, &amp;retries),</span></span>
+<span id="L496"><span class="lineNum">     496</span> <span class="tlaGNC tlaBgGNC">          57 :                         Some(event) =&gt; match controller.handle_event(event).await {</span></span>
+<span id="L497"><span class="lineNum">     497</span> <span class="tlaGNC">          50 :                             Some(Ok(prepared)) =&gt; submit_prepared(prepared, &amp;operations_urgent, &amp;retries),</span></span>
 <span id="L498"><span class="lineNum">     498</span> <span class="tlaUNC tlaBgUNC">           0 :                             Some(Err(error)) =&gt; tracing::error!(error = %error, &quot;failed to apply pipeline event&quot;),</span></span>
 <span id="L499"><span class="lineNum">     499</span> <span class="tlaGNC tlaBgGNC">           7 :                             None =&gt; {}</span></span>
 <span id="L500"><span class="lineNum">     500</span>              :                         },</span>
 <span id="L501"><span class="lineNum">     501</span> <span class="tlaGNC">           1 :                         None =&gt; break,</span></span>
 <span id="L502"><span class="lineNum">     502</span>              :                     },</span>
-<span id="L503"><span class="lineNum">     503</span> <span class="tlaGNC">        7776 :                     _ = idle_poll.tick(), if controller.idle() =&gt; {</span></span>
+<span id="L503"><span class="lineNum">     503</span> <span class="tlaGNC">        7871 :                     _ = idle_poll.tick(), if controller.idle() =&gt; {</span></span>
 <span id="L504"><span class="lineNum">     504</span> <span class="tlaGNC">          11 :                         if let Some((operation, attempt_id)) = controller.resume_from_idle().await {</span></span>
 <span id="L505"><span class="lineNum">     505</span> <span class="tlaUNC tlaBgUNC">           0 :                             let (completion, receiver) = tokio::sync::oneshot::channel();</span></span>
 <span id="L506"><span class="lineNum">     506</span> <span class="tlaUNC">           0 :                             ExecutorTask::Operation(PendingPipelineAction::operation(operation, Some(completion)))</span></span>
@@ -764,28 +764,28 @@
 <span id="L702"><span class="lineNum">     702</span> <span class="tlaGNC">          23 :             .map_err(|_| PipelineError::Pipeline(&quot;station runtime stopped&quot;.to_owned()))</span></span>
 <span id="L703"><span class="lineNum">     703</span> <span class="tlaGNC">          23 :     }</span></span>
 <span id="L704"><span class="lineNum">     704</span>              : </span>
-<span id="L705"><span class="lineNum">     705</span> <span class="tlaGNC">        7277 :     pub(crate) async fn status(&amp;self) -&gt; Result&lt;StatusEvent, PipelineError&gt; {</span></span>
-<span id="L706"><span class="lineNum">     706</span> <span class="tlaGNC">        7277 :         let (response, receiver) = oneshot::channel();</span></span>
-<span id="L707"><span class="lineNum">     707</span> <span class="tlaGNC">        7277 :         self.commands</span></span>
-<span id="L708"><span class="lineNum">     708</span> <span class="tlaGNC">        7277 :             .send(StationCommand::Status(response))</span></span>
-<span id="L709"><span class="lineNum">     709</span> <span class="tlaGNC">        7277 :             .await</span></span>
-<span id="L710"><span class="lineNum">     710</span> <span class="tlaGNC">        7277 :             .map_err(|_| PipelineError::Pipeline(&quot;station runtime stopped&quot;.to_owned()))?;</span></span>
-<span id="L711"><span class="lineNum">     711</span> <span class="tlaGNC">        7277 :         receiver</span></span>
-<span id="L712"><span class="lineNum">     712</span> <span class="tlaGNC">        7277 :             .await</span></span>
-<span id="L713"><span class="lineNum">     713</span> <span class="tlaGNC">        7277 :             .map_err(|_| PipelineError::Pipeline(&quot;station runtime stopped&quot;.to_owned()))?</span></span>
-<span id="L714"><span class="lineNum">     714</span> <span class="tlaGNC">        7277 :     }</span></span>
+<span id="L705"><span class="lineNum">     705</span> <span class="tlaGNC">        7371 :     pub(crate) async fn status(&amp;self) -&gt; Result&lt;StatusEvent, PipelineError&gt; {</span></span>
+<span id="L706"><span class="lineNum">     706</span> <span class="tlaGNC">        7371 :         let (response, receiver) = oneshot::channel();</span></span>
+<span id="L707"><span class="lineNum">     707</span> <span class="tlaGNC">        7371 :         self.commands</span></span>
+<span id="L708"><span class="lineNum">     708</span> <span class="tlaGNC">        7371 :             .send(StationCommand::Status(response))</span></span>
+<span id="L709"><span class="lineNum">     709</span> <span class="tlaGNC">        7371 :             .await</span></span>
+<span id="L710"><span class="lineNum">     710</span> <span class="tlaGNC">        7371 :             .map_err(|_| PipelineError::Pipeline(&quot;station runtime stopped&quot;.to_owned()))?;</span></span>
+<span id="L711"><span class="lineNum">     711</span> <span class="tlaGNC">        7371 :         receiver</span></span>
+<span id="L712"><span class="lineNum">     712</span> <span class="tlaGNC">        7371 :             .await</span></span>
+<span id="L713"><span class="lineNum">     713</span> <span class="tlaGNC">        7371 :             .map_err(|_| PipelineError::Pipeline(&quot;station runtime stopped&quot;.to_owned()))?</span></span>
+<span id="L714"><span class="lineNum">     714</span> <span class="tlaGNC">        7371 :     }</span></span>
 <span id="L715"><span class="lineNum">     715</span>              : }</span>
 <span id="L716"><span class="lineNum">     716</span>              : </span>
 <span id="L717"><span class="lineNum">     717</span>              : impl StationCommand {</span>
-<span id="L718"><span class="lineNum">     718</span> <span class="tlaGNC">        7705 :     async fn run(</span></span>
-<span id="L719"><span class="lineNum">     719</span> <span class="tlaGNC">        7705 :         self,</span></span>
-<span id="L720"><span class="lineNum">     720</span> <span class="tlaGNC">        7705 :         controller: &amp;mut StationController,</span></span>
-<span id="L721"><span class="lineNum">     721</span> <span class="tlaGNC">        7705 :         retries: mpsc::Sender&lt;StationCommand&gt;,</span></span>
-<span id="L722"><span class="lineNum">     722</span> <span class="tlaGNC">        7705 :         operations: &amp;mpsc::UnboundedSender&lt;ExecutorTask&gt;,</span></span>
-<span id="L723"><span class="lineNum">     723</span> <span class="tlaGNC">        7705 :         urgent: &amp;mpsc::UnboundedSender&lt;ExecutorTask&gt;,</span></span>
-<span id="L724"><span class="lineNum">     724</span> <span class="tlaGNC">        7705 :         #[cfg(test)] play_result_gate: std::sync::Arc&lt;std::sync::Mutex&lt;Option&lt;std::sync::Arc&lt;crate::streamer::testsupport::Gate&gt;&gt;&gt;&gt;,</span></span>
-<span id="L725"><span class="lineNum">     725</span> <span class="tlaGNC">        7705 :     ) -&gt; bool {</span></span>
-<span id="L726"><span class="lineNum">     726</span> <span class="tlaGNC">        7705 :         match self {</span></span>
+<span id="L718"><span class="lineNum">     718</span> <span class="tlaGNC">        7799 :     async fn run(</span></span>
+<span id="L719"><span class="lineNum">     719</span> <span class="tlaGNC">        7799 :         self,</span></span>
+<span id="L720"><span class="lineNum">     720</span> <span class="tlaGNC">        7799 :         controller: &amp;mut StationController,</span></span>
+<span id="L721"><span class="lineNum">     721</span> <span class="tlaGNC">        7799 :         retries: mpsc::Sender&lt;StationCommand&gt;,</span></span>
+<span id="L722"><span class="lineNum">     722</span> <span class="tlaGNC">        7799 :         operations: &amp;mpsc::UnboundedSender&lt;ExecutorTask&gt;,</span></span>
+<span id="L723"><span class="lineNum">     723</span> <span class="tlaGNC">        7799 :         urgent: &amp;mpsc::UnboundedSender&lt;ExecutorTask&gt;,</span></span>
+<span id="L724"><span class="lineNum">     724</span> <span class="tlaGNC">        7799 :         #[cfg(test)] play_result_gate: std::sync::Arc&lt;std::sync::Mutex&lt;Option&lt;std::sync::Arc&lt;crate::streamer::testsupport::Gate&gt;&gt;&gt;&gt;,</span></span>
+<span id="L725"><span class="lineNum">     725</span> <span class="tlaGNC">        7799 :     ) -&gt; bool {</span></span>
+<span id="L726"><span class="lineNum">     726</span> <span class="tlaGNC">        7799 :         match self {</span></span>
 <span id="L727"><span class="lineNum">     727</span> <span class="tlaGNC">          86 :             Self::Play(response) =&gt; match controller.play().await {</span></span>
 <span id="L728"><span class="lineNum">     728</span> <span class="tlaGNC">          83 :                 Ok(prepared) =&gt; {</span></span>
 <span id="L729"><span class="lineNum">     729</span> <span class="tlaGNC">          83 :                     match prepared.play_attempt_id {</span></span>
@@ -996,8 +996,8 @@
 <span id="L934"><span class="lineNum">     934</span> <span class="tlaGNC">          23 :                 controller.trim_played_items().await;</span></span>
 <span id="L935"><span class="lineNum">     935</span> <span class="tlaGNC">          23 :                 let _ = response.send(());</span></span>
 <span id="L936"><span class="lineNum">     936</span>              :             }</span>
-<span id="L937"><span class="lineNum">     937</span> <span class="tlaGNC">        7277 :             Self::Status(response) =&gt; {</span></span>
-<span id="L938"><span class="lineNum">     938</span> <span class="tlaGNC">        7277 :                 let _ = response.send(controller.status().await);</span></span>
+<span id="L937"><span class="lineNum">     937</span> <span class="tlaGNC">        7371 :             Self::Status(response) =&gt; {</span></span>
+<span id="L938"><span class="lineNum">     938</span> <span class="tlaGNC">        7371 :                 let _ = response.send(controller.status().await);</span></span>
 <span id="L939"><span class="lineNum">     939</span>              :             }</span>
 <span id="L940"><span class="lineNum">     940</span>              :             #[cfg(test)]</span>
 <span id="L941"><span class="lineNum">     941</span> <span class="tlaGNC">           7 :             Self::Barrier(response) =&gt; {</span></span>
@@ -1058,12 +1058,12 @@
 <span id="L996"><span class="lineNum">     996</span>              :                 // successor (a reload dirtied the alignment): submit the</span>
 <span id="L997"><span class="lineNum">     997</span>              :                 // follow-up realign with its own fresh correlation.</span>
 <span id="L998"><span class="lineNum">     998</span> <span class="tlaGNC">          46 :                 if let Some((next_id, prepared)) = controller.commit_realign(id, &amp;result) {</span></span>
-<span id="L999"><span class="lineNum">     999</span> <span class="tlaGNC">           4 :                     submit_realign_operation(prepared.operation, next_id, operations, &amp;retries);</span></span>
-<span id="L1000"><span class="lineNum">    1000</span> <span class="tlaGNC">          42 :                 }</span></span>
+<span id="L999"><span class="lineNum">     999</span> <span class="tlaGNC">           3 :                     submit_realign_operation(prepared.operation, next_id, operations, &amp;retries);</span></span>
+<span id="L1000"><span class="lineNum">    1000</span> <span class="tlaGNC">          43 :                 }</span></span>
 <span id="L1001"><span class="lineNum">    1001</span>              :             }</span>
 <span id="L1002"><span class="lineNum">    1002</span>              :         }</span>
-<span id="L1003"><span class="lineNum">    1003</span> <span class="tlaGNC">        7625 :         true</span></span>
-<span id="L1004"><span class="lineNum">    1004</span> <span class="tlaGNC">        7705 :     }</span></span>
+<span id="L1003"><span class="lineNum">    1003</span> <span class="tlaGNC">        7719 :         true</span></span>
+<span id="L1004"><span class="lineNum">    1004</span> <span class="tlaGNC">        7799 :     }</span></span>
 <span id="L1005"><span class="lineNum">    1005</span>              : }</span>
 <span id="L1006"><span class="lineNum">    1006</span>              : </span>
 <span id="L1007"><span class="lineNum">    1007</span> <span class="tlaGNC">         374 : fn send(response: oneshot::Sender&lt;Result&lt;(), PipelineError&gt;&gt;, result: Result&lt;(), PipelineError&gt;) {</span></span>
@@ -1175,14 +1175,14 @@
 <span id="L1113"><span class="lineNum">    1113</span>              : /// `planned_next` only advances after the roll physically succeeded), a</span>
 <span id="L1114"><span class="lineNum">    1114</span>              : /// skip attempt gets its own `SkipResult` completion, anything else is</span>
 <span id="L1115"><span class="lineNum">    1115</span>              : /// submitted plainly (fire-and-forget, exactly as before).</span>
-<span id="L1116"><span class="lineNum">    1116</span> <span class="tlaGNC">          59 : fn submit_prepared(</span></span>
-<span id="L1117"><span class="lineNum">    1117</span> <span class="tlaGNC">          59 :     prepared: super::controller::PreparedOperation,</span></span>
-<span id="L1118"><span class="lineNum">    1118</span> <span class="tlaGNC">          59 :     lane: &amp;mpsc::UnboundedSender&lt;ExecutorTask&gt;,</span></span>
-<span id="L1119"><span class="lineNum">    1119</span> <span class="tlaGNC">          59 :     commands: &amp;mpsc::Sender&lt;StationCommand&gt;,</span></span>
-<span id="L1120"><span class="lineNum">    1120</span> <span class="tlaGNC">          59 : ) {</span></span>
-<span id="L1121"><span class="lineNum">    1121</span> <span class="tlaGNC">          59 :     if let Some(realign_id) = prepared.realign_id {</span></span>
-<span id="L1122"><span class="lineNum">    1122</span> <span class="tlaGNC">          44 :         submit_realign_operation(prepared.operation, realign_id, lane, commands);</span></span>
-<span id="L1123"><span class="lineNum">    1123</span> <span class="tlaGNC">          44 :         return;</span></span>
+<span id="L1116"><span class="lineNum">    1116</span> <span class="tlaGNC">          60 : fn submit_prepared(</span></span>
+<span id="L1117"><span class="lineNum">    1117</span> <span class="tlaGNC">          60 :     prepared: super::controller::PreparedOperation,</span></span>
+<span id="L1118"><span class="lineNum">    1118</span> <span class="tlaGNC">          60 :     lane: &amp;mpsc::UnboundedSender&lt;ExecutorTask&gt;,</span></span>
+<span id="L1119"><span class="lineNum">    1119</span> <span class="tlaGNC">          60 :     commands: &amp;mpsc::Sender&lt;StationCommand&gt;,</span></span>
+<span id="L1120"><span class="lineNum">    1120</span> <span class="tlaGNC">          60 : ) {</span></span>
+<span id="L1121"><span class="lineNum">    1121</span> <span class="tlaGNC">          60 :     if let Some(realign_id) = prepared.realign_id {</span></span>
+<span id="L1122"><span class="lineNum">    1122</span> <span class="tlaGNC">          45 :         submit_realign_operation(prepared.operation, realign_id, lane, commands);</span></span>
+<span id="L1123"><span class="lineNum">    1123</span> <span class="tlaGNC">          45 :         return;</span></span>
 <span id="L1124"><span class="lineNum">    1124</span> <span class="tlaGNC">          15 :     }</span></span>
 <span id="L1125"><span class="lineNum">    1125</span> <span class="tlaGNC">          15 :     if let Some(play_attempt_id) = prepared.play_attempt_id {</span></span>
 <span id="L1126"><span class="lineNum">    1126</span>              :         #[cfg(test)]</span>
@@ -1195,7 +1195,7 @@
 <span id="L1133"><span class="lineNum">    1133</span> <span class="tlaGNC">           8 :         Some(attempt_id) =&gt; submit_skip_operation(prepared.operation, attempt_id, lane, commands),</span></span>
 <span id="L1134"><span class="lineNum">    1134</span> <span class="tlaGNC">           6 :         None =&gt; ExecutorTask::Operation(PendingPipelineAction::operation(prepared.operation, None)).submit(lane),</span></span>
 <span id="L1135"><span class="lineNum">    1135</span>              :     }</span>
-<span id="L1136"><span class="lineNum">    1136</span> <span class="tlaGNC">          59 : }</span></span>
+<span id="L1136"><span class="lineNum">    1136</span> <span class="tlaGNC">          60 : }</span></span>
 <span id="L1137"><span class="lineNum">    1137</span>              : #[cfg(test)]</span>
 <span id="L1138"><span class="lineNum">    1138</span>              : mod tests {</span>
 <span id="L1139"><span class="lineNum">    1139</span>              :     use std::sync::Arc;</span>

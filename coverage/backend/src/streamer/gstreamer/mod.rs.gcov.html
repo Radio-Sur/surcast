@@ -31,13 +31,13 @@
             <td class="headerValue">lcov.backend.info</td>
             <td></td>
             <td class="headerItem">Lines:</td>
-            <td class="headerCovTableEntryLo">39.7&nbsp;%</td>
+            <td class="headerCovTableEntryLo">39.6&nbsp;%</td>
             <td class="headerCovTableEntry">2878</td>
-            <td class="headerCovTableEntry">1143</td>
+            <td class="headerCovTableEntry">1140</td>
           </tr>
           <tr>
             <td class="headerItem">Test Date:</td>
-            <td class="headerValue">2026-09-06 18:16:30</td>
+            <td class="headerValue">2026-09-06 18:18:07</td>
             <td></td>
             <td class="headerItem">Functions:</td>
             <td class="headerCovTableEntryLo">31.8&nbsp;%</td>
@@ -218,10 +218,10 @@
 <span id="L156"><span class="lineNum">     156</span>              : }</span>
 <span id="L157"><span class="lineNum">     157</span>              : </span>
 <span id="L158"><span class="lineNum">     158</span>              : impl Drop for RetiringGuard {</span>
-<span id="L159"><span class="lineNum">     159</span> <span class="tlaGNC">         190 :     fn drop(&amp;mut self) {</span></span>
-<span id="L160"><span class="lineNum">     160</span> <span class="tlaGNC">         190 :         let mut reg = self.registry.lock().unwrap_or_else(|error| error.into_inner());</span></span>
-<span id="L161"><span class="lineNum">     161</span> <span class="tlaGNC">         190 :         reg.retiring.retain(|entry| entry.retirement_id != self.retirement_id);</span></span>
-<span id="L162"><span class="lineNum">     162</span> <span class="tlaGNC">         190 :     }</span></span>
+<span id="L159"><span class="lineNum">     159</span> <span class="tlaGNC">         189 :     fn drop(&amp;mut self) {</span></span>
+<span id="L160"><span class="lineNum">     160</span> <span class="tlaGNC">         189 :         let mut reg = self.registry.lock().unwrap_or_else(|error| error.into_inner());</span></span>
+<span id="L161"><span class="lineNum">     161</span> <span class="tlaGNC">         189 :         reg.retiring.retain(|entry| entry.retirement_id != self.retirement_id);</span></span>
+<span id="L162"><span class="lineNum">     162</span> <span class="tlaGNC">         189 :     }</span></span>
 <span id="L163"><span class="lineNum">     163</span>              : }</span>
 <span id="L164"><span class="lineNum">     164</span>              : #[cfg(test)]</span>
 <span id="L165"><span class="lineNum">     165</span>              : type PreCommitHook = Box&lt;dyn FnMut() -&gt; Result&lt;(), PipelineError&gt; + Send&gt;;</span>
@@ -318,34 +318,34 @@
 <span id="L256"><span class="lineNum">     256</span> <span class="tlaGNC">           1 :         )</span></span>
 <span id="L257"><span class="lineNum">     257</span> <span class="tlaGNC">           1 :     }</span></span>
 <span id="L258"><span class="lineNum">     258</span>              : </span>
-<span id="L259"><span class="lineNum">     259</span> <span class="tlaGNC">           5 :     fn retire_unattached_candidates(&amp;self, candidates: Vec&lt;Branch&gt;) -&gt; (RetiringGuard, Vec&lt;Branch&gt;) {</span></span>
-<span id="L260"><span class="lineNum">     260</span> <span class="tlaGNC">           5 :         let mut reg = self.registry.lock().unwrap_or_else(|error| error.into_inner());</span></span>
-<span id="L261"><span class="lineNum">     261</span> <span class="tlaGNC">           5 :         let retirement_id = reg.alloc_retirement_id();</span></span>
-<span id="L262"><span class="lineNum">     262</span> <span class="tlaGNC">           5 :         for b in &amp;candidates {</span></span>
-<span id="L263"><span class="lineNum">     263</span> <span class="tlaGNC">           5 :             reg.unregister_preparing(&amp;b.key);</span></span>
-<span id="L264"><span class="lineNum">     264</span> <span class="tlaGNC">           5 :             reg.retiring.push(branch::RetiringBranch {</span></span>
-<span id="L265"><span class="lineNum">     265</span> <span class="tlaGNC">           5 :                 retirement_id,</span></span>
-<span id="L266"><span class="lineNum">     266</span> <span class="tlaGNC">           5 :                 elements: b.elements.clone(),</span></span>
-<span id="L267"><span class="lineNum">     267</span> <span class="tlaGNC">           5 :             });</span></span>
-<span id="L268"><span class="lineNum">     268</span> <span class="tlaGNC">           5 :         }</span></span>
-<span id="L269"><span class="lineNum">     269</span> <span class="tlaGNC">           5 :         (</span></span>
-<span id="L270"><span class="lineNum">     270</span> <span class="tlaGNC">           5 :             RetiringGuard {</span></span>
-<span id="L271"><span class="lineNum">     271</span> <span class="tlaGNC">           5 :                 registry: self.registry.clone(),</span></span>
-<span id="L272"><span class="lineNum">     272</span> <span class="tlaGNC">           5 :                 retirement_id,</span></span>
-<span id="L273"><span class="lineNum">     273</span> <span class="tlaGNC">           5 :             },</span></span>
-<span id="L274"><span class="lineNum">     274</span> <span class="tlaGNC">           5 :             candidates,</span></span>
-<span id="L275"><span class="lineNum">     275</span> <span class="tlaGNC">           5 :         )</span></span>
-<span id="L276"><span class="lineNum">     276</span> <span class="tlaGNC">           5 :     }</span></span>
+<span id="L259"><span class="lineNum">     259</span> <span class="tlaGNC">           4 :     fn retire_unattached_candidates(&amp;self, candidates: Vec&lt;Branch&gt;) -&gt; (RetiringGuard, Vec&lt;Branch&gt;) {</span></span>
+<span id="L260"><span class="lineNum">     260</span> <span class="tlaGNC">           4 :         let mut reg = self.registry.lock().unwrap_or_else(|error| error.into_inner());</span></span>
+<span id="L261"><span class="lineNum">     261</span> <span class="tlaGNC">           4 :         let retirement_id = reg.alloc_retirement_id();</span></span>
+<span id="L262"><span class="lineNum">     262</span> <span class="tlaGNC">           4 :         for b in &amp;candidates {</span></span>
+<span id="L263"><span class="lineNum">     263</span> <span class="tlaGNC">           4 :             reg.unregister_preparing(&amp;b.key);</span></span>
+<span id="L264"><span class="lineNum">     264</span> <span class="tlaGNC">           4 :             reg.retiring.push(branch::RetiringBranch {</span></span>
+<span id="L265"><span class="lineNum">     265</span> <span class="tlaGNC">           4 :                 retirement_id,</span></span>
+<span id="L266"><span class="lineNum">     266</span> <span class="tlaGNC">           4 :                 elements: b.elements.clone(),</span></span>
+<span id="L267"><span class="lineNum">     267</span> <span class="tlaGNC">           4 :             });</span></span>
+<span id="L268"><span class="lineNum">     268</span> <span class="tlaGNC">           4 :         }</span></span>
+<span id="L269"><span class="lineNum">     269</span> <span class="tlaGNC">           4 :         (</span></span>
+<span id="L270"><span class="lineNum">     270</span> <span class="tlaGNC">           4 :             RetiringGuard {</span></span>
+<span id="L271"><span class="lineNum">     271</span> <span class="tlaGNC">           4 :                 registry: self.registry.clone(),</span></span>
+<span id="L272"><span class="lineNum">     272</span> <span class="tlaGNC">           4 :                 retirement_id,</span></span>
+<span id="L273"><span class="lineNum">     273</span> <span class="tlaGNC">           4 :             },</span></span>
+<span id="L274"><span class="lineNum">     274</span> <span class="tlaGNC">           4 :             candidates,</span></span>
+<span id="L275"><span class="lineNum">     275</span> <span class="tlaGNC">           4 :         )</span></span>
+<span id="L276"><span class="lineNum">     276</span> <span class="tlaGNC">           4 :     }</span></span>
 <span id="L277"><span class="lineNum">     277</span>              : </span>
-<span id="L278"><span class="lineNum">     278</span> <span class="tlaGNC">         190 :     fn discard_retired(&amp;self, branches: Vec&lt;Branch&gt;, _guard: RetiringGuard) {</span></span>
-<span id="L279"><span class="lineNum">     279</span> <span class="tlaGNC">         190 :         for branch in branches {</span></span>
+<span id="L278"><span class="lineNum">     278</span> <span class="tlaGNC">         189 :     fn discard_retired(&amp;self, branches: Vec&lt;Branch&gt;, _guard: RetiringGuard) {</span></span>
+<span id="L279"><span class="lineNum">     279</span> <span class="tlaGNC">         189 :         for branch in branches {</span></span>
 <span id="L280"><span class="lineNum">     280</span> <span class="tlaGNC">         122 :             #[cfg(test)]</span></span>
 <span id="L281"><span class="lineNum">     281</span> <span class="tlaGNC">         122 :             if let Some(hook) = &amp;mut *self.teardown_hook.lock().unwrap_or_else(|error| error.into_inner()) {</span></span>
 <span id="L282"><span class="lineNum">     282</span> <span class="tlaGNC">           1 :                 hook(&amp;branch);</span></span>
 <span id="L283"><span class="lineNum">     283</span> <span class="tlaGNC">          12 :             }</span></span>
 <span id="L284"><span class="lineNum">     284</span> <span class="tlaGNC">         135 :             branch::discard(&amp;self.pipeline, &amp;self.mixer, branch);</span></span>
 <span id="L285"><span class="lineNum">     285</span> <span class="tlaGNC">         122 :         }</span></span>
-<span id="L286"><span class="lineNum">     286</span> <span class="tlaGNC">         190 :     }</span></span>
+<span id="L286"><span class="lineNum">     286</span> <span class="tlaGNC">         189 :     }</span></span>
 <span id="L287"><span class="lineNum">     287</span>              :     #[cfg(test)]</span>
 <span id="L288"><span class="lineNum">     288</span> <span class="tlaGNC">           1 :     fn set_teardown_hook(&amp;self, hook: impl FnMut(&amp;Branch) + Send + 'static) {</span></span>
 <span id="L289"><span class="lineNum">     289</span> <span class="tlaGNC">           1 :         *self.teardown_hook.lock().unwrap_or_else(|error| error.into_inner()) = Some(Box::new(hook));</span></span>
@@ -408,7 +408,7 @@
 <span id="L346"><span class="lineNum">     346</span> <span class="tlaGNC tlaBgGNC">           9 :         }</span></span>
 <span id="L347"><span class="lineNum">     347</span> <span class="tlaGNC">          26 :         let is_failed = |candidates: &amp;[Branch]| {</span></span>
 <span id="L348"><span class="lineNum">     348</span> <span class="tlaGNC">          26 :             let reg = self.registry.lock().unwrap_or_else(|error| error.into_inner());</span></span>
-<span id="L349"><span class="lineNum">     349</span> <span class="tlaGNC">          45 :             candidates.iter().any(|c| reg.is_preparing_failed(&amp;c.key))</span></span>
+<span id="L349"><span class="lineNum">     349</span> <span class="tlaGNC">          47 :             candidates.iter().any(|c| reg.is_preparing_failed(&amp;c.key))</span></span>
 <span id="L350"><span class="lineNum">     350</span> <span class="tlaGNC">          26 :         };</span></span>
 <span id="L351"><span class="lineNum">     351</span> <span class="tlaGNC">           9 :         if cancellation.is_cancelled() || is_failed(&amp;candidates) {</span></span>
 <span id="L352"><span class="lineNum">     352</span> <span class="tlaUNC tlaBgUNC">           0 :             let (guard, candidates) = self.retire_unattached_candidates(candidates);</span></span>
@@ -435,17 +435,17 @@
 <span id="L373"><span class="lineNum">     373</span>              : </span>
 <span id="L374"><span class="lineNum">     374</span> <span class="tlaGNC">           9 :         let current_duration = branch::duration(&amp;candidates[0]);</span></span>
 <span id="L375"><span class="lineNum">     375</span> <span class="tlaGNC">           9 :         if current_duration.is_none() &amp;&amp; candidates.len() &gt; 1 {</span></span>
-<span id="L376"><span class="lineNum">     376</span> <span class="tlaGNC">           1 :             let excess = candidates.split_off(1);</span></span>
-<span id="L377"><span class="lineNum">     377</span> <span class="tlaGNC">           1 :             let (guard, excess) = self.retire_unattached_candidates(excess);</span></span>
-<span id="L378"><span class="lineNum">     378</span> <span class="tlaGNC">           1 :             self.discard_retired(excess, guard);</span></span>
-<span id="L379"><span class="lineNum">     379</span> <span class="tlaGNC">           8 :         }</span></span>
-<span id="L380"><span class="lineNum">     380</span> <span class="tlaGNC">          15 :         for candidate in &amp;mut candidates {</span></span>
-<span id="L381"><span class="lineNum">     381</span> <span class="tlaGNC">          15 :             if let Err(error) = branch::prepare(candidate) {</span></span>
+<span id="L376"><span class="lineNum">     376</span> <span class="tlaUNC tlaBgUNC">           0 :             let excess = candidates.split_off(1);</span></span>
+<span id="L377"><span class="lineNum">     377</span> <span class="tlaUNC">           0 :             let (guard, excess) = self.retire_unattached_candidates(excess);</span></span>
+<span id="L378"><span class="lineNum">     378</span> <span class="tlaUNC">           0 :             self.discard_retired(excess, guard);</span></span>
+<span id="L379"><span class="lineNum">     379</span> <span class="tlaGNC tlaBgGNC">           9 :         }</span></span>
+<span id="L380"><span class="lineNum">     380</span> <span class="tlaGNC">          16 :         for candidate in &amp;mut candidates {</span></span>
+<span id="L381"><span class="lineNum">     381</span> <span class="tlaGNC">          16 :             if let Err(error) = branch::prepare(candidate) {</span></span>
 <span id="L382"><span class="lineNum">     382</span> <span class="tlaUNC tlaBgUNC">           0 :                 let (guard, candidates) = self.retire_unattached_candidates(candidates);</span></span>
 <span id="L383"><span class="lineNum">     383</span> <span class="tlaUNC">           0 :                 self.discard_retired(candidates, guard);</span></span>
 <span id="L384"><span class="lineNum">     384</span> <span class="tlaUNC">           0 :                 self.restore_state(previous_state)?;</span></span>
 <span id="L385"><span class="lineNum">     385</span> <span class="tlaUNC">           0 :                 return Err(error);</span></span>
-<span id="L386"><span class="lineNum">     386</span> <span class="tlaGNC tlaBgGNC">          15 :             }</span></span>
+<span id="L386"><span class="lineNum">     386</span> <span class="tlaGNC tlaBgGNC">          16 :             }</span></span>
 <span id="L387"><span class="lineNum">     387</span>              :         }</span>
 <span id="L388"><span class="lineNum">     388</span> <span class="tlaGNC">           9 :         let scheduled_next = plan</span></span>
 <span id="L389"><span class="lineNum">     389</span> <span class="tlaGNC">           9 :             .next</span></span>
@@ -510,7 +510,7 @@
 <span id="L448"><span class="lineNum">     448</span> <span class="tlaUNC tlaBgUNC">           0 :                 _ =&gt; false,</span></span>
 <span id="L449"><span class="lineNum">     449</span>              :             };</span>
 <span id="L450"><span class="lineNum">     450</span> <span class="tlaGNC tlaBgGNC">           8 :             let mut reg = self.registry.lock().unwrap_or_else(|error| error.into_inner());</span></span>
-<span id="L451"><span class="lineNum">     451</span> <span class="tlaGNC">          14 :             let any_failed = candidates.iter().any(|c| reg.is_preparing_failed(&amp;c.key));</span></span>
+<span id="L451"><span class="lineNum">     451</span> <span class="tlaGNC">          15 :             let any_failed = candidates.iter().any(|c| reg.is_preparing_failed(&amp;c.key));</span></span>
 <span id="L452"><span class="lineNum">     452</span> <span class="tlaGNC">           8 :             if !matches || cancellation.is_cancelled() || any_failed {</span></span>
 <span id="L453"><span class="lineNum">     453</span> <span class="tlaUNC tlaBgUNC">           0 :                 drop(reg);</span></span>
 <span id="L454"><span class="lineNum">     454</span> <span class="tlaUNC">           0 :                 drop(active);</span></span>
@@ -519,19 +519,19 @@
 <span id="L457"><span class="lineNum">     457</span> <span class="tlaUNC">           0 :                 self.restore_state(previous_state)?;</span></span>
 <span id="L458"><span class="lineNum">     458</span> <span class="tlaUNC">           0 :                 return Err(PipelineError::StalePlan);</span></span>
 <span id="L459"><span class="lineNum">     459</span> <span class="tlaGNC tlaBgGNC">           8 :             }</span></span>
-<span id="L460"><span class="lineNum">     460</span> <span class="tlaGNC">          14 :             for candidate in &amp;candidates {</span></span>
-<span id="L461"><span class="lineNum">     461</span> <span class="tlaGNC">          14 :                 reg.unregister_preparing(&amp;candidate.key);</span></span>
-<span id="L462"><span class="lineNum">     462</span> <span class="tlaGNC">          14 :             }</span></span>
+<span id="L460"><span class="lineNum">     460</span> <span class="tlaGNC">          15 :             for candidate in &amp;candidates {</span></span>
+<span id="L461"><span class="lineNum">     461</span> <span class="tlaGNC">          15 :                 reg.unregister_preparing(&amp;candidate.key);</span></span>
+<span id="L462"><span class="lineNum">     462</span> <span class="tlaGNC">          15 :             }</span></span>
 <span id="L463"><span class="lineNum">     463</span> <span class="tlaGNC">           8 :             let release_actions: Vec&lt;_&gt; = candidates.iter_mut().filter_map(branch::take_paused_release).collect();</span></span>
 <span id="L464"><span class="lineNum">     464</span> <span class="tlaGNC">           8 :             let branches = std::mem::replace(&amp;mut reg.live, candidates);</span></span>
 <span id="L465"><span class="lineNum">     465</span>              : </span>
 <span id="L466"><span class="lineNum">     466</span> <span class="tlaGNC">           8 :             let retirement_id = reg.alloc_retirement_id();</span></span>
-<span id="L467"><span class="lineNum">     467</span> <span class="tlaGNC">          11 :             for b in &amp;branches {</span></span>
-<span id="L468"><span class="lineNum">     468</span> <span class="tlaGNC">          11 :                 reg.retiring.push(branch::RetiringBranch {</span></span>
-<span id="L469"><span class="lineNum">     469</span> <span class="tlaGNC">          11 :                     retirement_id,</span></span>
-<span id="L470"><span class="lineNum">     470</span> <span class="tlaGNC">          11 :                     elements: b.elements.clone(),</span></span>
-<span id="L471"><span class="lineNum">     471</span> <span class="tlaGNC">          11 :                 });</span></span>
-<span id="L472"><span class="lineNum">     472</span> <span class="tlaGNC">          11 :             }</span></span>
+<span id="L467"><span class="lineNum">     467</span> <span class="tlaGNC">          12 :             for b in &amp;branches {</span></span>
+<span id="L468"><span class="lineNum">     468</span> <span class="tlaGNC">          12 :                 reg.retiring.push(branch::RetiringBranch {</span></span>
+<span id="L469"><span class="lineNum">     469</span> <span class="tlaGNC">          12 :                     retirement_id,</span></span>
+<span id="L470"><span class="lineNum">     470</span> <span class="tlaGNC">          12 :                     elements: b.elements.clone(),</span></span>
+<span id="L471"><span class="lineNum">     471</span> <span class="tlaGNC">          12 :                 });</span></span>
+<span id="L472"><span class="lineNum">     472</span> <span class="tlaGNC">          12 :             }</span></span>
 <span id="L473"><span class="lineNum">     473</span>              : </span>
 <span id="L474"><span class="lineNum">     474</span> <span class="tlaGNC">           8 :             *active = Some(ActivePlan {</span></span>
 <span id="L475"><span class="lineNum">     475</span> <span class="tlaGNC">           8 :                 generation: plan.generation,</span></span>
@@ -554,9 +554,9 @@
 <span id="L492"><span class="lineNum">     492</span> <span class="tlaGNC">           8 :             (guard, branches, release_actions)</span></span>
 <span id="L493"><span class="lineNum">     493</span>              :         };</span>
 <span id="L494"><span class="lineNum">     494</span>              : </span>
-<span id="L495"><span class="lineNum">     495</span> <span class="tlaGNC">          14 :         for action in release_actions {</span></span>
-<span id="L496"><span class="lineNum">     496</span> <span class="tlaGNC">          14 :             branch::apply_paused_release(action);</span></span>
-<span id="L497"><span class="lineNum">     497</span> <span class="tlaGNC">          14 :         }</span></span>
+<span id="L495"><span class="lineNum">     495</span> <span class="tlaGNC">          15 :         for action in release_actions {</span></span>
+<span id="L496"><span class="lineNum">     496</span> <span class="tlaGNC">          15 :             branch::apply_paused_release(action);</span></span>
+<span id="L497"><span class="lineNum">     497</span> <span class="tlaGNC">          15 :         }</span></span>
 <span id="L498"><span class="lineNum">     498</span>              : </span>
 <span id="L499"><span class="lineNum">     499</span> <span class="tlaGNC">           8 :         self.discard_retired(obsolete, guard);</span></span>
 <span id="L500"><span class="lineNum">     500</span> <span class="tlaGNC">           8 :         self.publish_metadata(&amp;plan.current.metadata);</span></span>
@@ -898,10 +898,10 @@
 <span id="L836"><span class="lineNum">     836</span>              :             let current_index = reg</span>
 <span id="L837"><span class="lineNum">     837</span>              :                 .live</span>
 <span id="L838"><span class="lineNum">     838</span>              :                 .iter()</span>
-<span id="L839"><span class="lineNum">     839</span> <span class="tlaGNC tlaBgGNC">          72 :                 .position(|branch| branch.key == plan.current)</span></span>
+<span id="L839"><span class="lineNum">     839</span> <span class="tlaGNC tlaBgGNC">          73 :                 .position(|branch| branch.key == plan.current)</span></span>
 <span id="L840"><span class="lineNum">     840</span>              :                 .ok_or(PipelineError::StalePlan)?;</span>
 <span id="L841"><span class="lineNum">     841</span>              :             if let Some(expected) = expected_next.as_ref() {</span>
-<span id="L842"><span class="lineNum">     842</span> <span class="tlaGNC">          16 :                 if !reg.live.iter().any(|b| b.key == *expected) {</span></span>
+<span id="L842"><span class="lineNum">     842</span> <span class="tlaGNC">          14 :                 if !reg.live.iter().any(|b| b.key == *expected) {</span></span>
 <span id="L843"><span class="lineNum">     843</span>              :                     return Err(PipelineError::StalePlan);</span>
 <span id="L844"><span class="lineNum">     844</span>              :                 }</span>
 <span id="L845"><span class="lineNum">     845</span>              :             }</span>
@@ -1037,9 +1037,9 @@
 <span id="L975"><span class="lineNum">     975</span>              :             reg.unregister_preparing(&amp;candidate_key);</span>
 <span id="L976"><span class="lineNum">     976</span>              :             let release_action = branch::take_paused_release(&amp;mut candidate);</span>
 <span id="L977"><span class="lineNum">     977</span>              :             let obsolete_branch = if let Some(expected) = expected_next.as_ref() {</span>
-<span id="L978"><span class="lineNum">     978</span> <span class="tlaGNC tlaBgGNC">          14 :                 reg.live.iter().position(|b| b.key == *expected).map(|pos| reg.live.remove(pos))</span></span>
+<span id="L978"><span class="lineNum">     978</span> <span class="tlaGNC tlaBgGNC">          12 :                 reg.live.iter().position(|b| b.key == *expected).map(|pos| reg.live.remove(pos))</span></span>
 <span id="L979"><span class="lineNum">     979</span>              :             } else {</span>
-<span id="L980"><span class="lineNum">     980</span> <span class="tlaGNC">          30 :                 reg.live.iter().position(|b| b.key != plan.current).map(|pos| reg.live.remove(pos))</span></span>
+<span id="L980"><span class="lineNum">     980</span> <span class="tlaGNC">          31 :                 reg.live.iter().position(|b| b.key != plan.current).map(|pos| reg.live.remove(pos))</span></span>
 <span id="L981"><span class="lineNum">     981</span>              :             };</span>
 <span id="L982"><span class="lineNum">     982</span>              : </span>
 <span id="L983"><span class="lineNum">     983</span>              :             let retirement_id = reg.alloc_retirement_id();</span>
@@ -1192,7 +1192,7 @@
 <span id="L1130"><span class="lineNum">    1130</span>              :         Ok(())</span>
 <span id="L1131"><span class="lineNum">    1131</span> <span class="tlaGNC">           4 :     }</span></span>
 <span id="L1132"><span class="lineNum">    1132</span>              : </span>
-<span id="L1133"><span class="lineNum">    1133</span> <span class="tlaGNC">        7270 :     async fn snapshot(&amp;self) -&gt; Result&lt;PipelineSnapshot, PipelineError&gt; {</span></span>
+<span id="L1133"><span class="lineNum">    1133</span> <span class="tlaGNC">        7364 :     async fn snapshot(&amp;self) -&gt; Result&lt;PipelineSnapshot, PipelineError&gt; {</span></span>
 <span id="L1134"><span class="lineNum">    1134</span> <span class="tlaUNC tlaBgUNC">           0 :         let mut snapshot = self.snapshot.lock().unwrap_or_else(|error| error.into_inner());</span></span>
 <span id="L1135"><span class="lineNum">    1135</span>              :         if snapshot.state != PipelineState::Stopped {</span>
 <span id="L1136"><span class="lineNum">    1136</span> <span class="tlaUNC">           0 :             if let Some(active) = self.active.lock().unwrap_or_else(|error| error.into_inner()).as_ref() {</span></span>
@@ -1200,7 +1200,7 @@
 <span id="L1138"><span class="lineNum">    1138</span>              :             }</span>
 <span id="L1139"><span class="lineNum">    1139</span>              :         }</span>
 <span id="L1140"><span class="lineNum">    1140</span>              :         Ok(snapshot.clone())</span>
-<span id="L1141"><span class="lineNum">    1141</span> <span class="tlaGNC tlaBgGNC">        7270 :     }</span></span>
+<span id="L1141"><span class="lineNum">    1141</span> <span class="tlaGNC tlaBgGNC">        7364 :     }</span></span>
 <span id="L1142"><span class="lineNum">    1142</span>              : </span>
 <span id="L1143"><span class="lineNum">    1143</span> <span class="tlaGNC">          71 :     async fn stop(&amp;self) -&gt; Result&lt;(), PipelineError&gt; {</span></span>
 <span id="L1144"><span class="lineNum">    1144</span> <span class="tlaUNC tlaBgUNC">           0 :         *self.replacing.lock().unwrap_or_else(|error| error.into_inner()) = None;</span></span>

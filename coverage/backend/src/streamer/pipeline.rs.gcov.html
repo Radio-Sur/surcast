@@ -37,7 +37,7 @@
           </tr>
           <tr>
             <td class="headerItem">Test Date:</td>
-            <td class="headerValue">2026-09-06 18:16:30</td>
+            <td class="headerValue">2026-09-06 18:18:07</td>
             <td></td>
             <td class="headerItem">Functions:</td>
             <td class="headerCovTableEntryHi">90.2&nbsp;%</td>
@@ -389,10 +389,10 @@
 <span id="L327"><span class="lineNum">     327</span>              :         };</span>
 <span id="L328"><span class="lineNum">     328</span>              : </span>
 <span id="L329"><span class="lineNum">     329</span> <span class="tlaGNC">         181 :         if config.mode == TransitionMode::Off {</span></span>
-<span id="L330"><span class="lineNum">     330</span> <span class="tlaGNC">         126 :             return TransitionPlan::Cut;</span></span>
-<span id="L331"><span class="lineNum">     331</span> <span class="tlaGNC">          55 :         }</span></span>
+<span id="L330"><span class="lineNum">     330</span> <span class="tlaGNC">         127 :             return TransitionPlan::Cut;</span></span>
+<span id="L331"><span class="lineNum">     331</span> <span class="tlaGNC">          54 :         }</span></span>
 <span id="L332"><span class="lineNum">     332</span>              : </span>
-<span id="L333"><span class="lineNum">     333</span> <span class="tlaGNC">          55 :         if config.mode == TransitionMode::AutoCue &amp;&amp; current.analyzed &amp;&amp; next.analyzed {</span></span>
+<span id="L333"><span class="lineNum">     333</span> <span class="tlaGNC">          54 :         if config.mode == TransitionMode::AutoCue &amp;&amp; current.analyzed &amp;&amp; next.analyzed {</span></span>
 <span id="L334"><span class="lineNum">     334</span> <span class="tlaGNC">          18 :             let tail = current.cue_out.checked_sub(current.cross_start_next);</span></span>
 <span id="L335"><span class="lineNum">     335</span> <span class="tlaGNC">          18 :             if current.cross_start_next &gt;= current.cue_in {</span></span>
 <span id="L336"><span class="lineNum">     336</span> <span class="tlaGNC">          17 :                 if let Some(tail) = tail {</span></span>
@@ -409,14 +409,14 @@
 <span id="L347"><span class="lineNum">     347</span> <span class="tlaGNC">           1 :                     }</span></span>
 <span id="L348"><span class="lineNum">     348</span> <span class="tlaUNC tlaBgUNC">           0 :                 }</span></span>
 <span id="L349"><span class="lineNum">     349</span> <span class="tlaGNC tlaBgGNC">           1 :             }</span></span>
-<span id="L350"><span class="lineNum">     350</span> <span class="tlaGNC">          37 :         }</span></span>
+<span id="L350"><span class="lineNum">     350</span> <span class="tlaGNC">          36 :         }</span></span>
 <span id="L351"><span class="lineNum">     351</span>              : </span>
-<span id="L352"><span class="lineNum">     352</span> <span class="tlaGNC">          39 :         if config.requested_fade.is_zero() {</span></span>
+<span id="L352"><span class="lineNum">     352</span> <span class="tlaGNC">          38 :         if config.requested_fade.is_zero() {</span></span>
 <span id="L353"><span class="lineNum">     353</span> <span class="tlaGNC">           1 :             TransitionPlan::Cut</span></span>
 <span id="L354"><span class="lineNum">     354</span>              :         } else {</span>
-<span id="L355"><span class="lineNum">     355</span> <span class="tlaGNC">          38 :             TransitionPlan::NaiveCrossfade {</span></span>
-<span id="L356"><span class="lineNum">     356</span> <span class="tlaGNC">          38 :                 requested_fade: config.requested_fade,</span></span>
-<span id="L357"><span class="lineNum">     357</span> <span class="tlaGNC">          38 :             }</span></span>
+<span id="L355"><span class="lineNum">     355</span> <span class="tlaGNC">          37 :             TransitionPlan::NaiveCrossfade {</span></span>
+<span id="L356"><span class="lineNum">     356</span> <span class="tlaGNC">          37 :                 requested_fade: config.requested_fade,</span></span>
+<span id="L357"><span class="lineNum">     357</span> <span class="tlaGNC">          37 :             }</span></span>
 <span id="L358"><span class="lineNum">     358</span>              :         }</span>
 <span id="L359"><span class="lineNum">     359</span> <span class="tlaGNC">         182 :     }</span></span>
 <span id="L360"><span class="lineNum">     360</span>              : }</span>

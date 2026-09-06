@@ -37,7 +37,7 @@
           </tr>
           <tr>
             <td class="headerItem">Test Date:</td>
-            <td class="headerValue">2026-09-06 18:16:30</td>
+            <td class="headerValue">2026-09-06 18:18:07</td>
             <td></td>
             <td class="headerItem">Functions:</td>
             <td class="headerCovTableEntryHi">93.8&nbsp;%</td>
@@ -112,15 +112,15 @@
 <span id="L50"><span class="lineNum">      50</span> <span class="tlaGNC">          39 :     let logical_base = physical_base.saturating_sub(timeline_origin);</span></span>
 <span id="L51"><span class="lineNum">      51</span> <span class="tlaGNC">          39 :     let current_media_start = branch::media_start(current);</span></span>
 <span id="L52"><span class="lineNum">      52</span> <span class="tlaGNC">          39 :     let transition = match (transition, current_duration) {</span></span>
-<span id="L53"><span class="lineNum">      53</span> <span class="tlaGNC">          25 :         (TransitionPlan::NaiveCrossfade { requested_fade }, Some(duration)) =&gt; {</span></span>
-<span id="L54"><span class="lineNum">      54</span> <span class="tlaGNC">          25 :             let requested_fade = requested_fade.min(duration.saturating_sub(current_media_start));</span></span>
-<span id="L55"><span class="lineNum">      55</span> <span class="tlaGNC">          25 :             if requested_fade.is_zero() {</span></span>
+<span id="L53"><span class="lineNum">      53</span> <span class="tlaGNC">          24 :         (TransitionPlan::NaiveCrossfade { requested_fade }, Some(duration)) =&gt; {</span></span>
+<span id="L54"><span class="lineNum">      54</span> <span class="tlaGNC">          24 :             let requested_fade = requested_fade.min(duration.saturating_sub(current_media_start));</span></span>
+<span id="L55"><span class="lineNum">      55</span> <span class="tlaGNC">          24 :             if requested_fade.is_zero() {</span></span>
 <span id="L56"><span class="lineNum">      56</span> <span class="tlaUNC tlaBgUNC">           0 :                 TransitionPlan::Cut</span></span>
 <span id="L57"><span class="lineNum">      57</span>              :             } else {</span>
-<span id="L58"><span class="lineNum">      58</span> <span class="tlaGNC tlaBgGNC">          25 :                 TransitionPlan::NaiveCrossfade { requested_fade }</span></span>
+<span id="L58"><span class="lineNum">      58</span> <span class="tlaGNC tlaBgGNC">          24 :                 TransitionPlan::NaiveCrossfade { requested_fade }</span></span>
 <span id="L59"><span class="lineNum">      59</span>              :             }</span>
 <span id="L60"><span class="lineNum">      60</span>              :         }</span>
-<span id="L61"><span class="lineNum">      61</span> <span class="tlaGNC">          14 :         (transition, _) =&gt; transition,</span></span>
+<span id="L61"><span class="lineNum">      61</span> <span class="tlaGNC">          15 :         (transition, _) =&gt; transition,</span></span>
 <span id="L62"><span class="lineNum">      62</span>              :     };</span>
 <span id="L63"><span class="lineNum">      63</span> <span class="tlaGNC">          39 :     let transition = select_rolling_transition(transition, current_duration, current_media_start, logical_base, current_elapsed)?;</span></span>
 <span id="L64"><span class="lineNum">      64</span> <span class="tlaGNC">          37 :     rebase(</span></span>
@@ -155,12 +155,12 @@
 <span id="L93"><span class="lineNum">      93</span> <span class="tlaGNC">          45 :     timeline_base: Duration,</span></span>
 <span id="L94"><span class="lineNum">      94</span> <span class="tlaGNC">          45 : ) -&gt; Option&lt;Duration&gt; {</span></span>
 <span id="L95"><span class="lineNum">      95</span> <span class="tlaGNC">          45 :     match transition {</span></span>
-<span id="L96"><span class="lineNum">      96</span> <span class="tlaGNC">          18 :         TransitionPlan::Cut =&gt; current_duration.map(|duration| timeline_base.saturating_add(duration.saturating_sub(current_media_start))),</span></span>
-<span id="L97"><span class="lineNum">      97</span> <span class="tlaGNC">          27 :         TransitionPlan::NaiveCrossfade { requested_fade } =&gt; current_duration.map(|duration| {</span></span>
-<span id="L98"><span class="lineNum">      98</span> <span class="tlaGNC">          27 :             timeline_base</span></span>
-<span id="L99"><span class="lineNum">      99</span> <span class="tlaGNC">          27 :                 .saturating_add(duration.saturating_sub(current_media_start).saturating_sub(requested_fade))</span></span>
-<span id="L100"><span class="lineNum">     100</span> <span class="tlaGNC">          27 :                 .saturating_add(requested_fade / 2)</span></span>
-<span id="L101"><span class="lineNum">     101</span> <span class="tlaGNC">          27 :         }),</span></span>
+<span id="L96"><span class="lineNum">      96</span> <span class="tlaGNC">          19 :         TransitionPlan::Cut =&gt; current_duration.map(|duration| timeline_base.saturating_add(duration.saturating_sub(current_media_start))),</span></span>
+<span id="L97"><span class="lineNum">      97</span> <span class="tlaGNC">          26 :         TransitionPlan::NaiveCrossfade { requested_fade } =&gt; current_duration.map(|duration| {</span></span>
+<span id="L98"><span class="lineNum">      98</span> <span class="tlaGNC">          26 :             timeline_base</span></span>
+<span id="L99"><span class="lineNum">      99</span> <span class="tlaGNC">          26 :                 .saturating_add(duration.saturating_sub(current_media_start).saturating_sub(requested_fade))</span></span>
+<span id="L100"><span class="lineNum">     100</span> <span class="tlaGNC">          26 :                 .saturating_add(requested_fade / 2)</span></span>
+<span id="L101"><span class="lineNum">     101</span> <span class="tlaGNC">          26 :         }),</span></span>
 <span id="L102"><span class="lineNum">     102</span> <span class="tlaUNC tlaBgUNC">           0 :         TransitionPlan::AutoCueCrossfade { fade_start, duration, .. } =&gt; Some(</span></span>
 <span id="L103"><span class="lineNum">     103</span> <span class="tlaUNC">           0 :             timeline_base</span></span>
 <span id="L104"><span class="lineNum">     104</span> <span class="tlaUNC">           0 :                 .saturating_add(fade_start.saturating_sub(current_media_start))</span></span>
@@ -185,13 +185,13 @@
 <span id="L123"><span class="lineNum">     123</span> <span class="tlaGNC">         113 :     seek_current: bool,</span></span>
 <span id="L124"><span class="lineNum">     124</span> <span class="tlaGNC">         113 : ) -&gt; Result&lt;TransitionSchedule, PipelineError&gt; {</span></span>
 <span id="L125"><span class="lineNum">     125</span> <span class="tlaGNC">         113 :     match (transition, next, current_duration) {</span></span>
-<span id="L126"><span class="lineNum">     126</span> <span class="tlaGNC">          27 :         (TransitionPlan::Cut, Some(next), Some(current_duration)) =&gt; {</span></span>
-<span id="L127"><span class="lineNum">     127</span> <span class="tlaGNC">          27 :             let handover = timeline_base.saturating_add(current_duration.saturating_sub(branch::media_start(current)));</span></span>
-<span id="L128"><span class="lineNum">     128</span> <span class="tlaGNC">          27 :             branch::set_offset(next, handover);</span></span>
-<span id="L129"><span class="lineNum">     129</span> <span class="tlaGNC">          27 :             next.volume.set_property(&quot;volume&quot;, 1.0f64);</span></span>
-<span id="L130"><span class="lineNum">     130</span> <span class="tlaGNC">          27 :             Ok(TransitionSchedule {</span></span>
-<span id="L131"><span class="lineNum">     131</span> <span class="tlaGNC">          27 :                 handover: Some(clock_time(handover)),</span></span>
-<span id="L132"><span class="lineNum">     132</span> <span class="tlaGNC">          27 :             })</span></span>
+<span id="L126"><span class="lineNum">     126</span> <span class="tlaGNC">          28 :         (TransitionPlan::Cut, Some(next), Some(current_duration)) =&gt; {</span></span>
+<span id="L127"><span class="lineNum">     127</span> <span class="tlaGNC">          28 :             let handover = timeline_base.saturating_add(current_duration.saturating_sub(branch::media_start(current)));</span></span>
+<span id="L128"><span class="lineNum">     128</span> <span class="tlaGNC">          28 :             branch::set_offset(next, handover);</span></span>
+<span id="L129"><span class="lineNum">     129</span> <span class="tlaGNC">          28 :             next.volume.set_property(&quot;volume&quot;, 1.0f64);</span></span>
+<span id="L130"><span class="lineNum">     130</span> <span class="tlaGNC">          28 :             Ok(TransitionSchedule {</span></span>
+<span id="L131"><span class="lineNum">     131</span> <span class="tlaGNC">          28 :                 handover: Some(clock_time(handover)),</span></span>
+<span id="L132"><span class="lineNum">     132</span> <span class="tlaGNC">          28 :             })</span></span>
 <span id="L133"><span class="lineNum">     133</span>              :         }</span>
 <span id="L134"><span class="lineNum">     134</span> <span class="tlaGNC">          34 :         (TransitionPlan::NaiveCrossfade { requested_fade }, Some(next), Some(current_duration)) =&gt; {</span></span>
 <span id="L135"><span class="lineNum">     135</span> <span class="tlaGNC">          34 :             let fade_start = current_duration.saturating_sub(requested_fade);</span></span>
@@ -231,13 +231,13 @@
 <span id="L169"><span class="lineNum">     169</span> <span class="tlaUNC">           0 :                 )),</span></span>
 <span id="L170"><span class="lineNum">     170</span> <span class="tlaUNC">           0 :             })</span></span>
 <span id="L171"><span class="lineNum">     171</span>              :         }</span>
-<span id="L172"><span class="lineNum">     172</span> <span class="tlaGNC tlaBgGNC">          52 :         _ =&gt; Ok(TransitionSchedule { handover: None }),</span></span>
+<span id="L172"><span class="lineNum">     172</span> <span class="tlaGNC tlaBgGNC">          51 :         _ =&gt; Ok(TransitionSchedule { handover: None }),</span></span>
 <span id="L173"><span class="lineNum">     173</span>              :     }</span>
 <span id="L174"><span class="lineNum">     174</span> <span class="tlaGNC">         113 : }</span></span>
 <span id="L175"><span class="lineNum">     175</span>              : </span>
-<span id="L176"><span class="lineNum">     176</span> <span class="tlaGNC">         107 : fn clock_time(duration: Duration) -&gt; gst::ClockTime {</span></span>
-<span id="L177"><span class="lineNum">     177</span> <span class="tlaGNC">         107 :     gst::ClockTime::from_nseconds(duration.as_nanos().min(u64::MAX as u128) as u64)</span></span>
-<span id="L178"><span class="lineNum">     178</span> <span class="tlaGNC">         107 : }</span></span>
+<span id="L176"><span class="lineNum">     176</span> <span class="tlaGNC">         108 : fn clock_time(duration: Duration) -&gt; gst::ClockTime {</span></span>
+<span id="L177"><span class="lineNum">     177</span> <span class="tlaGNC">         108 :     gst::ClockTime::from_nseconds(duration.as_nanos().min(u64::MAX as u128) as u64)</span></span>
+<span id="L178"><span class="lineNum">     178</span> <span class="tlaGNC">         108 : }</span></span>
 <span id="L179"><span class="lineNum">     179</span>              : </span>
 <span id="L180"><span class="lineNum">     180</span> <span class="tlaGNC">          68 : fn fade(volume: &amp;gst::Element, start: (Duration, f64), end: (Duration, f64)) -&gt; Result&lt;(), PipelineError&gt; {</span></span>
 <span id="L181"><span class="lineNum">     181</span> <span class="tlaGNC">          68 :     let source = gst_controller::InterpolationControlSource::new();</span></span>

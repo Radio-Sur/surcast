@@ -37,7 +37,7 @@
           </tr>
           <tr>
             <td class="headerItem">Test Date:</td>
-            <td class="headerValue">2026-09-06 18:16:31</td>
+            <td class="headerValue">2026-09-06 18:18:08</td>
             <td></td>
             <td class="headerItem">Functions:</td>
             <td class="headerCovTableEntryMed">88.2&nbsp;%</td>
@@ -81,9 +81,9 @@
 <span id="L19"><span class="lineNum">      19</span>              : </span>
 <span id="L20"><span class="lineNum">      20</span> <span class="tlaGNC">          61 : api.interceptors.response.use(</span></span>
 <span id="L21"><span class="lineNum">      21</span> <span class="tlaGNC">         450 :   (response) =&gt; response,</span></span>
-<span id="L22"><span class="lineNum">      22</span> <span class="tlaGNC">          15 :   async (error) =&gt; {</span></span>
-<span id="L23"><span class="lineNum">      23</span> <span class="tlaGNC">          15 :     const originalRequest = error.config;</span></span>
-<span id="L24"><span class="lineNum">      24</span> <span class="tlaGNC">          15 :     if (error.response?.status === 401 &amp;&amp; !originalRequest._retry) {</span></span>
+<span id="L22"><span class="lineNum">      22</span> <span class="tlaGNC">          16 :   async (error) =&gt; {</span></span>
+<span id="L23"><span class="lineNum">      23</span> <span class="tlaGNC">          16 :     const originalRequest = error.config;</span></span>
+<span id="L24"><span class="lineNum">      24</span> <span class="tlaGNC">          16 :     if (error.response?.status === 401 &amp;&amp; !originalRequest._retry) {</span></span>
 <span id="L25"><span class="lineNum">      25</span> <span class="tlaGNC">           4 :       if (isRefreshing) {</span></span>
 <span id="L26"><span class="lineNum">      26</span> <span class="tlaUNC tlaBgUNC">           0 :         return new Promise&lt;string&gt;((resolve, reject) =&gt; {</span></span>
 <span id="L27"><span class="lineNum">      27</span> <span class="tlaUNC">           0 :           failedQueue.push({ resolve, reject });</span></span>
@@ -123,7 +123,7 @@
 <span id="L61"><span class="lineNum">      61</span>              :         }</span>
 <span id="L62"><span class="lineNum">      62</span>              :       }</span>
 <span id="L63"><span class="lineNum">      63</span>              :     }</span>
-<span id="L64"><span class="lineNum">      64</span> <span class="tlaGNC">          14 :     return Promise.reject(error);</span></span>
+<span id="L64"><span class="lineNum">      64</span> <span class="tlaGNC">          15 :     return Promise.reject(error);</span></span>
 <span id="L65"><span class="lineNum">      65</span>              :   },</span>
 <span id="L66"><span class="lineNum">      66</span>              : );</span>
 <span id="L67"><span class="lineNum">      67</span>              : </span>
