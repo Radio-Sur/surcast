@@ -1,0 +1,132 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN">
+
+<html lang="en">
+
+<head>
+  <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+  <title>LCOV - lcov.info - src/components/queue/src/components/queue/now-playing-song.tsx</title>
+  <link rel="stylesheet" type="text/css" href="../../../../../../gcov.css">
+</head>
+
+<body>
+
+          <table width="100%" border=0 cellspacing=0 cellpadding=0>
+            <tr><td class="title">LCOV - code coverage report</td></tr>
+            <tr><td class="ruler"><img src="../../../../../../glass.png" width=3 height=3 alt=""></td></tr>
+
+            <tr>
+              <td width="100%">
+                <table cellpadding=1 border=0 width="100%">
+          <tr>
+            <td width="10%" class="headerItem">Current view:</td>
+            <td width="10%" class="headerValue"><a href="../../../../../../index.html">top level</a> - <a href="index.html">src/components/queue/src/components/queue</a> - now-playing-song.tsx<span style="font-size: 80%;"> (source / <a href="now-playing-song.tsx.func-c.html">functions</a>)</span></td>
+            <td width="5%"></td>
+            <td width="5%"></td>
+            <td width="5%" class="headerCovTableHead">Coverage</td>
+            <td width="5%" class="headerCovTableHead" title="Covered + Uncovered code">Total</td>
+            <td width="5%" class="headerCovTableHead" title="Exercised code only">Hit</td>
+          </tr>
+          <tr>
+            <td class="headerItem">Test:</td>
+            <td class="headerValue">lcov.info</td>
+            <td></td>
+            <td class="headerItem">Lines:</td>
+            <td class="headerCovTableEntryLo">66.7&nbsp;%</td>
+            <td class="headerCovTableEntry">3</td>
+            <td class="headerCovTableEntry">2</td>
+          </tr>
+          <tr>
+            <td class="headerItem">Test Date:</td>
+            <td class="headerValue">2026-09-06 00:49:56</td>
+            <td></td>
+            <td class="headerItem">Functions:</td>
+            <td class="headerCovTableEntryLo">50.0&nbsp;%</td>
+            <td class="headerCovTableEntry">2</td>
+            <td class="headerCovTableEntry">1</td>
+          </tr>
+                  <tr><td><img src="../../../../../../glass.png" width=3 height=3 alt=""></td></tr>
+                </table>
+              </td>
+            </tr>
+
+            <tr><td class="ruler"><img src="../../../../../../glass.png" width=3 height=3 alt=""></td></tr>
+          </table>
+
+          <table cellpadding=0 cellspacing=0 border=0>
+            <tr>
+              <td><br></td>
+            </tr>
+            <tr>
+              <td>
+<pre class="sourceHeading">            Line data    Source code</pre>
+<pre class="source">
+<span id="L1"><span class="lineNum">       1</span>              : import SkipNext from &quot;@mui/icons-material/SkipNext&quot;;</span>
+<span id="L2"><span class="lineNum">       2</span>              : import Box from &quot;@mui/material/Box&quot;;</span>
+<span id="L3"><span class="lineNum">       3</span>              : import CircularProgress from &quot;@mui/material/CircularProgress&quot;;</span>
+<span id="L4"><span class="lineNum">       4</span>              : import IconButton from &quot;@mui/material/IconButton&quot;;</span>
+<span id="L5"><span class="lineNum">       5</span>              : import Typography from &quot;@mui/material/Typography&quot;;</span>
+<span id="L6"><span class="lineNum">       6</span>              : import { useTranslation } from &quot;react-i18next&quot;;</span>
+<span id="L7"><span class="lineNum">       7</span>              : import type { QueueItem } from &quot;@/types&quot;;</span>
+<span id="L8"><span class="lineNum">       8</span>              : </span>
+<span id="L9"><span class="lineNum">       9</span> <span class="tlaGNC tlaBgGNC">           6 : export function NowPlayingSong({</span></span>
+<span id="L10"><span class="lineNum">      10</span>              :   song,</span>
+<span id="L11"><span class="lineNum">      11</span>              :   connected,</span>
+<span id="L12"><span class="lineNum">      12</span>              :   onSkip,</span>
+<span id="L13"><span class="lineNum">      13</span>              :   isSkipping,</span>
+<span id="L14"><span class="lineNum">      14</span>              : }: {</span>
+<span id="L15"><span class="lineNum">      15</span>              :   song: QueueItem;</span>
+<span id="L16"><span class="lineNum">      16</span>              :   connected: boolean;</span>
+<span id="L17"><span class="lineNum">      17</span>              :   onSkip?: () =&gt; void;</span>
+<span id="L18"><span class="lineNum">      18</span>              :   isSkipping?: boolean;</span>
+<span id="L19"><span class="lineNum">      19</span>              : }) {</span>
+<span id="L20"><span class="lineNum">      20</span> <span class="tlaGNC">           6 :   const { t } = useTranslation();</span></span>
+<span id="L21"><span class="lineNum">      21</span>              : </span>
+<span id="L22"><span class="lineNum">      22</span> <span class="tlaGNC">           6 :   return (</span></span>
+<span id="L23"><span class="lineNum">      23</span>              :     &lt;Box sx={{ mt: 1.5 }}&gt;</span>
+<span id="L24"><span class="lineNum">      24</span>              :       &lt;Box</span>
+<span id="L25"><span class="lineNum">      25</span>              :         sx={{</span>
+<span id="L26"><span class="lineNum">      26</span>              :           display: &quot;flex&quot;,</span>
+<span id="L27"><span class="lineNum">      27</span>              :           alignItems: &quot;center&quot;,</span>
+<span id="L28"><span class="lineNum">      28</span>              :           justifyContent: &quot;space-between&quot;,</span>
+<span id="L29"><span class="lineNum">      29</span>              :         }}</span>
+<span id="L30"><span class="lineNum">      30</span>              :       &gt;</span>
+<span id="L31"><span class="lineNum">      31</span>              :         &lt;Box sx={{ flex: 1, minWidth: 0 }}&gt;</span>
+<span id="L32"><span class="lineNum">      32</span>              :           &lt;Typography variant=&quot;body1&quot; sx={{ fontWeight: 600 }}&gt;</span>
+<span id="L33"><span class="lineNum">      33</span>              :             {song.title}</span>
+<span id="L34"><span class="lineNum">      34</span>              :           &lt;/Typography&gt;</span>
+<span id="L35"><span class="lineNum">      35</span>              :           &lt;Typography variant=&quot;body2&quot; sx={{ opacity: 0.8 }}&gt;</span>
+<span id="L36"><span class="lineNum">      36</span>              :             {song.artist || t(&quot;common:unknown_artist&quot;)}</span>
+<span id="L37"><span class="lineNum">      37</span>              :             {song.album ? ` · ${song.album}` : &quot;&quot;}</span>
+<span id="L38"><span class="lineNum">      38</span>              :           &lt;/Typography&gt;</span>
+<span id="L39"><span class="lineNum">      39</span>              :         &lt;/Box&gt;</span>
+<span id="L40"><span class="lineNum">      40</span>              :         &lt;Box sx={{ display: &quot;flex&quot;, alignItems: &quot;center&quot;, gap: 1, ml: 1 }}&gt;</span>
+<span id="L41"><span class="lineNum">      41</span>              :           &lt;Box</span>
+<span id="L42"><span class="lineNum">      42</span>              :             sx={{</span>
+<span id="L43"><span class="lineNum">      43</span>              :               width: 8,</span>
+<span id="L44"><span class="lineNum">      44</span>              :               height: 8,</span>
+<span id="L45"><span class="lineNum">      45</span>              :               borderRadius: &quot;50%&quot;,</span>
+<span id="L46"><span class="lineNum">      46</span>              :               bgcolor: connected ? &quot;success.light&quot; : &quot;error.light&quot;,</span>
+<span id="L47"><span class="lineNum">      47</span>              :             }}</span>
+<span id="L48"><span class="lineNum">      48</span>              :           /&gt;</span>
+<span id="L49"><span class="lineNum">      49</span> <span class="tlaUNC tlaBgUNC">           0 :           &lt;IconButton size=&quot;small&quot; onClick={() =&gt; onSkip?.()} disabled={isSkipping} sx={{ color: &quot;inherit&quot; }}&gt;</span></span>
+<span id="L50"><span class="lineNum">      50</span>              :             {isSkipping ? &lt;CircularProgress size={16} sx={{ color: &quot;inherit&quot; }} /&gt; : &lt;SkipNext /&gt;}</span>
+<span id="L51"><span class="lineNum">      51</span>              :           &lt;/IconButton&gt;</span>
+<span id="L52"><span class="lineNum">      52</span>              :         &lt;/Box&gt;</span>
+<span id="L53"><span class="lineNum">      53</span>              :       &lt;/Box&gt;</span>
+<span id="L54"><span class="lineNum">      54</span>              :     &lt;/Box&gt;</span>
+<span id="L55"><span class="lineNum">      55</span>              :   );</span>
+<span id="L56"><span class="lineNum">      56</span>              : }</span>
+        </pre>
+              </td>
+            </tr>
+          </table>
+          <br>
+
+          <table width="100%" border=0 cellspacing=0 cellpadding=0>
+            <tr><td class="ruler"><img src="../../../../../../glass.png" width=3 height=3 alt=""></td></tr>
+            <tr><td class="versionInfo">Generated by: <a href="https://github.com//linux-test-project/lcov" target="_parent">LCOV version 2.0-1</a></td></tr>
+          </table>
+          <br>
+
+</body>
+</html>

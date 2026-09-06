@@ -1,0 +1,133 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN">
+
+<html lang="en">
+
+<head>
+  <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+  <title>LCOV - lcov.info - src/pages/playlists/src/pages/playlists/playlist-edit-dialog.tsx</title>
+  <link rel="stylesheet" type="text/css" href="../../../../../../gcov.css">
+</head>
+
+<body>
+
+          <table width="100%" border=0 cellspacing=0 cellpadding=0>
+            <tr><td class="title">LCOV - code coverage report</td></tr>
+            <tr><td class="ruler"><img src="../../../../../../glass.png" width=3 height=3 alt=""></td></tr>
+
+            <tr>
+              <td width="100%">
+                <table cellpadding=1 border=0 width="100%">
+          <tr>
+            <td width="10%" class="headerItem">Current view:</td>
+            <td width="10%" class="headerValue"><a href="../../../../../../index.html">top level</a> - <a href="index.html">src/pages/playlists/src/pages/playlists</a> - playlist-edit-dialog.tsx<span style="font-size: 80%;"> (source / <a href="playlist-edit-dialog.tsx.func-c.html">functions</a>)</span></td>
+            <td width="5%"></td>
+            <td width="5%"></td>
+            <td width="5%" class="headerCovTableHead">Coverage</td>
+            <td width="5%" class="headerCovTableHead" title="Covered + Uncovered code">Total</td>
+            <td width="5%" class="headerCovTableHead" title="Exercised code only">Hit</td>
+          </tr>
+          <tr>
+            <td class="headerItem">Test:</td>
+            <td class="headerValue">lcov.info</td>
+            <td></td>
+            <td class="headerItem">Lines:</td>
+            <td class="headerCovTableEntryMed">85.7&nbsp;%</td>
+            <td class="headerCovTableEntry">7</td>
+            <td class="headerCovTableEntry">6</td>
+          </tr>
+          <tr>
+            <td class="headerItem">Test Date:</td>
+            <td class="headerValue">2026-09-06 00:49:56</td>
+            <td></td>
+            <td class="headerItem">Functions:</td>
+            <td class="headerCovTableEntryMed">75.0&nbsp;%</td>
+            <td class="headerCovTableEntry">4</td>
+            <td class="headerCovTableEntry">3</td>
+          </tr>
+                  <tr><td><img src="../../../../../../glass.png" width=3 height=3 alt=""></td></tr>
+                </table>
+              </td>
+            </tr>
+
+            <tr><td class="ruler"><img src="../../../../../../glass.png" width=3 height=3 alt=""></td></tr>
+          </table>
+
+          <table cellpadding=0 cellspacing=0 border=0>
+            <tr>
+              <td><br></td>
+            </tr>
+            <tr>
+              <td>
+<pre class="sourceHeading">            Line data    Source code</pre>
+<pre class="source">
+<span id="L1"><span class="lineNum">       1</span>              : import Button from &quot;@mui/material/Button&quot;;</span>
+<span id="L2"><span class="lineNum">       2</span>              : import Dialog from &quot;@mui/material/Dialog&quot;;</span>
+<span id="L3"><span class="lineNum">       3</span>              : import DialogActions from &quot;@mui/material/DialogActions&quot;;</span>
+<span id="L4"><span class="lineNum">       4</span>              : import DialogContent from &quot;@mui/material/DialogContent&quot;;</span>
+<span id="L5"><span class="lineNum">       5</span>              : import DialogTitle from &quot;@mui/material/DialogTitle&quot;;</span>
+<span id="L6"><span class="lineNum">       6</span>              : import TextField from &quot;@mui/material/TextField&quot;;</span>
+<span id="L7"><span class="lineNum">       7</span>              : import { useState } from &quot;react&quot;;</span>
+<span id="L8"><span class="lineNum">       8</span>              : import { useTranslation } from &quot;react-i18next&quot;;</span>
+<span id="L9"><span class="lineNum">       9</span>              : </span>
+<span id="L10"><span class="lineNum">      10</span> <span class="tlaGNC tlaBgGNC">          21 : export function PlaylistEditDialog({</span></span>
+<span id="L11"><span class="lineNum">      11</span>              :   open,</span>
+<span id="L12"><span class="lineNum">      12</span>              :   initialName,</span>
+<span id="L13"><span class="lineNum">      13</span>              :   initialDescription,</span>
+<span id="L14"><span class="lineNum">      14</span>              :   isPending,</span>
+<span id="L15"><span class="lineNum">      15</span>              :   onSave,</span>
+<span id="L16"><span class="lineNum">      16</span>              :   onClose,</span>
+<span id="L17"><span class="lineNum">      17</span>              : }: {</span>
+<span id="L18"><span class="lineNum">      18</span>              :   open: boolean;</span>
+<span id="L19"><span class="lineNum">      19</span>              :   initialName: string;</span>
+<span id="L20"><span class="lineNum">      20</span>              :   initialDescription: string;</span>
+<span id="L21"><span class="lineNum">      21</span>              :   isPending: boolean;</span>
+<span id="L22"><span class="lineNum">      22</span>              :   onSave: (name: string, description: string) =&gt; void;</span>
+<span id="L23"><span class="lineNum">      23</span>              :   onClose: () =&gt; void;</span>
+<span id="L24"><span class="lineNum">      24</span>              : }) {</span>
+<span id="L25"><span class="lineNum">      25</span> <span class="tlaGNC">          21 :   const { t } = useTranslation();</span></span>
+<span id="L26"><span class="lineNum">      26</span> <span class="tlaGNC">          21 :   const [name, setName] = useState(initialName);</span></span>
+<span id="L27"><span class="lineNum">      27</span> <span class="tlaGNC">          21 :   const [desc, setDesc] = useState(initialDescription);</span></span>
+<span id="L28"><span class="lineNum">      28</span>              : </span>
+<span id="L29"><span class="lineNum">      29</span> <span class="tlaGNC">          21 :   return (</span></span>
+<span id="L30"><span class="lineNum">      30</span>              :     &lt;Dialog open={open} onClose={onClose} maxWidth=&quot;sm&quot; fullWidth&gt;</span>
+<span id="L31"><span class="lineNum">      31</span>              :       &lt;DialogTitle&gt;{t(&quot;playlists:edit_title&quot;)}&lt;/DialogTitle&gt;</span>
+<span id="L32"><span class="lineNum">      32</span>              :       &lt;DialogContent sx={{ display: &quot;flex&quot;, flexDirection: &quot;column&quot;, gap: 2, pt: &quot;16px !important&quot; }}&gt;</span>
+<span id="L33"><span class="lineNum">      33</span>              :         &lt;TextField</span>
+<span id="L34"><span class="lineNum">      34</span>              :           label={t(&quot;playlists:edit_name&quot;)}</span>
+<span id="L35"><span class="lineNum">      35</span>              :           value={name}</span>
+<span id="L36"><span class="lineNum">      36</span> <span class="tlaGNC">          13 :           onChange={(e) =&gt; setName(e.target.value)}</span></span>
+<span id="L37"><span class="lineNum">      37</span>              :           fullWidth</span>
+<span id="L38"><span class="lineNum">      38</span>              :           autoFocus</span>
+<span id="L39"><span class="lineNum">      39</span>              :         /&gt;</span>
+<span id="L40"><span class="lineNum">      40</span>              :         &lt;TextField</span>
+<span id="L41"><span class="lineNum">      41</span>              :           label={t(&quot;playlists:edit_description&quot;)}</span>
+<span id="L42"><span class="lineNum">      42</span>              :           value={desc}</span>
+<span id="L43"><span class="lineNum">      43</span> <span class="tlaUNC tlaBgUNC">           0 :           onChange={(e) =&gt; setDesc(e.target.value)}</span></span>
+<span id="L44"><span class="lineNum">      44</span>              :           fullWidth</span>
+<span id="L45"><span class="lineNum">      45</span>              :           multiline</span>
+<span id="L46"><span class="lineNum">      46</span>              :           rows={2}</span>
+<span id="L47"><span class="lineNum">      47</span>              :         /&gt;</span>
+<span id="L48"><span class="lineNum">      48</span>              :       &lt;/DialogContent&gt;</span>
+<span id="L49"><span class="lineNum">      49</span>              :       &lt;DialogActions&gt;</span>
+<span id="L50"><span class="lineNum">      50</span>              :         &lt;Button onClick={onClose}&gt;{t(&quot;common:cancel&quot;)}&lt;/Button&gt;</span>
+<span id="L51"><span class="lineNum">      51</span> <span class="tlaGNC tlaBgGNC">           1 :         &lt;Button variant=&quot;contained&quot; onClick={() =&gt; onSave(name, desc)} disabled={!name.trim() || isPending}&gt;</span></span>
+<span id="L52"><span class="lineNum">      52</span>              :           {isPending ? t(&quot;common:saving&quot;) : t(&quot;common:save&quot;)}</span>
+<span id="L53"><span class="lineNum">      53</span>              :         &lt;/Button&gt;</span>
+<span id="L54"><span class="lineNum">      54</span>              :       &lt;/DialogActions&gt;</span>
+<span id="L55"><span class="lineNum">      55</span>              :     &lt;/Dialog&gt;</span>
+<span id="L56"><span class="lineNum">      56</span>              :   );</span>
+<span id="L57"><span class="lineNum">      57</span>              : }</span>
+        </pre>
+              </td>
+            </tr>
+          </table>
+          <br>
+
+          <table width="100%" border=0 cellspacing=0 cellpadding=0>
+            <tr><td class="ruler"><img src="../../../../../../glass.png" width=3 height=3 alt=""></td></tr>
+            <tr><td class="versionInfo">Generated by: <a href="https://github.com//linux-test-project/lcov" target="_parent">LCOV version 2.0-1</a></td></tr>
+          </table>
+          <br>
+
+</body>
+</html>

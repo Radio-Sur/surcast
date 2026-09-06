@@ -1,0 +1,123 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN">
+
+<html lang="en">
+
+<head>
+  <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+  <title>LCOV - lcov.info - src/pages/stations/src/pages/stations/station-header.tsx</title>
+  <link rel="stylesheet" type="text/css" href="../../../../../../gcov.css">
+</head>
+
+<body>
+
+          <table width="100%" border=0 cellspacing=0 cellpadding=0>
+            <tr><td class="title">LCOV - code coverage report</td></tr>
+            <tr><td class="ruler"><img src="../../../../../../glass.png" width=3 height=3 alt=""></td></tr>
+
+            <tr>
+              <td width="100%">
+                <table cellpadding=1 border=0 width="100%">
+          <tr>
+            <td width="10%" class="headerItem">Current view:</td>
+            <td width="10%" class="headerValue"><a href="../../../../../../index.html">top level</a> - <a href="index.html">src/pages/stations/src/pages/stations</a> - station-header.tsx<span style="font-size: 80%;"> (source / <a href="station-header.tsx.func-c.html">functions</a>)</span></td>
+            <td width="5%"></td>
+            <td width="5%"></td>
+            <td width="5%" class="headerCovTableHead">Coverage</td>
+            <td width="5%" class="headerCovTableHead" title="Covered + Uncovered code">Total</td>
+            <td width="5%" class="headerCovTableHead" title="Exercised code only">Hit</td>
+          </tr>
+          <tr>
+            <td class="headerItem">Test:</td>
+            <td class="headerValue">lcov.info</td>
+            <td></td>
+            <td class="headerItem">Lines:</td>
+            <td class="headerCovTableEntryHi">100.0&nbsp;%</td>
+            <td class="headerCovTableEntry">2</td>
+            <td class="headerCovTableEntry">2</td>
+          </tr>
+          <tr>
+            <td class="headerItem">Test Date:</td>
+            <td class="headerValue">2026-09-06 00:49:56</td>
+            <td></td>
+            <td class="headerItem">Functions:</td>
+            <td class="headerCovTableEntryHi">100.0&nbsp;%</td>
+            <td class="headerCovTableEntry">1</td>
+            <td class="headerCovTableEntry">1</td>
+          </tr>
+                  <tr><td><img src="../../../../../../glass.png" width=3 height=3 alt=""></td></tr>
+                </table>
+              </td>
+            </tr>
+
+            <tr><td class="ruler"><img src="../../../../../../glass.png" width=3 height=3 alt=""></td></tr>
+          </table>
+
+          <table cellpadding=0 cellspacing=0 border=0>
+            <tr>
+              <td><br></td>
+            </tr>
+            <tr>
+              <td>
+<pre class="sourceHeading">            Line data    Source code</pre>
+<pre class="source">
+<span id="L1"><span class="lineNum">       1</span>              : import ArrowBack from &quot;@mui/icons-material/ArrowBack&quot;;</span>
+<span id="L2"><span class="lineNum">       2</span>              : import Box from &quot;@mui/material/Box&quot;;</span>
+<span id="L3"><span class="lineNum">       3</span>              : import Button from &quot;@mui/material/Button&quot;;</span>
+<span id="L4"><span class="lineNum">       4</span>              : import Typography from &quot;@mui/material/Typography&quot;;</span>
+<span id="L5"><span class="lineNum">       5</span>              : import { useTranslation } from &quot;react-i18next&quot;;</span>
+<span id="L6"><span class="lineNum">       6</span>              : import type { Station } from &quot;@/types&quot;;</span>
+<span id="L7"><span class="lineNum">       7</span>              : </span>
+<span id="L8"><span class="lineNum">       8</span> <span class="tlaGNC tlaBgGNC">           2 : export function StationHeader({</span></span>
+<span id="L9"><span class="lineNum">       9</span>              :   station,</span>
+<span id="L10"><span class="lineNum">      10</span>              :   playing,</span>
+<span id="L11"><span class="lineNum">      11</span>              :   onBack,</span>
+<span id="L12"><span class="lineNum">      12</span>              :   onToggle,</span>
+<span id="L13"><span class="lineNum">      13</span>              :   onRestart,</span>
+<span id="L14"><span class="lineNum">      14</span>              :   onEdit,</span>
+<span id="L15"><span class="lineNum">      15</span>              : }: {</span>
+<span id="L16"><span class="lineNum">      16</span>              :   station: Station;</span>
+<span id="L17"><span class="lineNum">      17</span>              :   playing: boolean;</span>
+<span id="L18"><span class="lineNum">      18</span>              :   onBack: () =&gt; void;</span>
+<span id="L19"><span class="lineNum">      19</span>              :   onToggle: () =&gt; void;</span>
+<span id="L20"><span class="lineNum">      20</span>              :   onRestart: () =&gt; void;</span>
+<span id="L21"><span class="lineNum">      21</span>              :   onEdit: () =&gt; void;</span>
+<span id="L22"><span class="lineNum">      22</span>              : }) {</span>
+<span id="L23"><span class="lineNum">      23</span> <span class="tlaGNC">           2 :   const { t } = useTranslation();</span></span>
+<span id="L24"><span class="lineNum">      24</span>              : </span>
+<span id="L25"><span class="lineNum">      25</span> <span class="tlaGNC">           2 :   return (</span></span>
+<span id="L26"><span class="lineNum">      26</span>              :     &lt;Box sx={{ display: &quot;flex&quot;, alignItems: &quot;center&quot;, gap: 2 }}&gt;</span>
+<span id="L27"><span class="lineNum">      27</span>              :       &lt;Button onClick={onBack} sx={{ minWidth: 40, p: 1 }}&gt;</span>
+<span id="L28"><span class="lineNum">      28</span>              :         &lt;ArrowBack /&gt;</span>
+<span id="L29"><span class="lineNum">      29</span>              :       &lt;/Button&gt;</span>
+<span id="L30"><span class="lineNum">      30</span>              :       &lt;Box sx={{ flex: 1 }}&gt;</span>
+<span id="L31"><span class="lineNum">      31</span>              :         &lt;Typography variant=&quot;h4&quot;&gt;{station.name}&lt;/Typography&gt;</span>
+<span id="L32"><span class="lineNum">      32</span>              :         &lt;Typography variant=&quot;body2&quot; color=&quot;text.secondary&quot; sx={{ mt: 0.25 }}&gt;</span>
+<span id="L33"><span class="lineNum">      33</span>              :           {station.description || t(&quot;common:no_description&quot;)}</span>
+<span id="L34"><span class="lineNum">      34</span>              :         &lt;/Typography&gt;</span>
+<span id="L35"><span class="lineNum">      35</span>              :       &lt;/Box&gt;</span>
+<span id="L36"><span class="lineNum">      36</span>              :       &lt;Button variant=&quot;outlined&quot; size=&quot;small&quot; color={playing ? &quot;error&quot; : &quot;success&quot;} onClick={onToggle}&gt;</span>
+<span id="L37"><span class="lineNum">      37</span>              :         {playing ? t(&quot;common:stop&quot;) : t(&quot;common:start&quot;)}</span>
+<span id="L38"><span class="lineNum">      38</span>              :       &lt;/Button&gt;</span>
+<span id="L39"><span class="lineNum">      39</span>              :       &lt;Button variant=&quot;outlined&quot; size=&quot;small&quot; onClick={onRestart}&gt;</span>
+<span id="L40"><span class="lineNum">      40</span>              :         {t(&quot;common:restart&quot;)}</span>
+<span id="L41"><span class="lineNum">      41</span>              :       &lt;/Button&gt;</span>
+<span id="L42"><span class="lineNum">      42</span>              :       &lt;Button variant=&quot;outlined&quot; size=&quot;small&quot; onClick={onEdit}&gt;</span>
+<span id="L43"><span class="lineNum">      43</span>              :         {t(&quot;common:edit&quot;)}</span>
+<span id="L44"><span class="lineNum">      44</span>              :       &lt;/Button&gt;</span>
+<span id="L45"><span class="lineNum">      45</span>              :     &lt;/Box&gt;</span>
+<span id="L46"><span class="lineNum">      46</span>              :   );</span>
+<span id="L47"><span class="lineNum">      47</span>              : }</span>
+        </pre>
+              </td>
+            </tr>
+          </table>
+          <br>
+
+          <table width="100%" border=0 cellspacing=0 cellpadding=0>
+            <tr><td class="ruler"><img src="../../../../../../glass.png" width=3 height=3 alt=""></td></tr>
+            <tr><td class="versionInfo">Generated by: <a href="https://github.com//linux-test-project/lcov" target="_parent">LCOV version 2.0-1</a></td></tr>
+          </table>
+          <br>
+
+</body>
+</html>

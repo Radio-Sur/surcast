@@ -1,0 +1,114 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN">
+
+<html lang="en">
+
+<head>
+  <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+  <title>LCOV - lcov.info - src/lib/services/src/lib/services/playlists.ts</title>
+  <link rel="stylesheet" type="text/css" href="../../../../../../gcov.css">
+</head>
+
+<body>
+
+          <table width="100%" border=0 cellspacing=0 cellpadding=0>
+            <tr><td class="title">LCOV - code coverage report</td></tr>
+            <tr><td class="ruler"><img src="../../../../../../glass.png" width=3 height=3 alt=""></td></tr>
+
+            <tr>
+              <td width="100%">
+                <table cellpadding=1 border=0 width="100%">
+          <tr>
+            <td width="10%" class="headerItem">Current view:</td>
+            <td width="10%" class="headerValue"><a href="../../../../../../index.html">top level</a> - <a href="index.html">src/lib/services/src/lib/services</a> - playlists.ts<span style="font-size: 80%;"> (source / <a href="playlists.ts.func-c.html">functions</a>)</span></td>
+            <td width="5%"></td>
+            <td width="5%"></td>
+            <td width="5%" class="headerCovTableHead">Coverage</td>
+            <td width="5%" class="headerCovTableHead" title="Covered + Uncovered code">Total</td>
+            <td width="5%" class="headerCovTableHead" title="Exercised code only">Hit</td>
+          </tr>
+          <tr>
+            <td class="headerItem">Test:</td>
+            <td class="headerValue">lcov.info</td>
+            <td></td>
+            <td class="headerItem">Lines:</td>
+            <td class="headerCovTableEntryLo">62.5&nbsp;%</td>
+            <td class="headerCovTableEntry">16</td>
+            <td class="headerCovTableEntry">10</td>
+          </tr>
+          <tr>
+            <td class="headerItem">Test Date:</td>
+            <td class="headerValue">2026-09-06 00:49:56</td>
+            <td></td>
+            <td class="headerItem">Functions:</td>
+            <td class="headerCovTableEntryLo">57.1&nbsp;%</td>
+            <td class="headerCovTableEntry">14</td>
+            <td class="headerCovTableEntry">8</td>
+          </tr>
+                  <tr><td><img src="../../../../../../glass.png" width=3 height=3 alt=""></td></tr>
+                </table>
+              </td>
+            </tr>
+
+            <tr><td class="ruler"><img src="../../../../../../glass.png" width=3 height=3 alt=""></td></tr>
+          </table>
+
+          <table cellpadding=0 cellspacing=0 border=0>
+            <tr>
+              <td><br></td>
+            </tr>
+            <tr>
+              <td>
+<pre class="sourceHeading">            Line data    Source code</pre>
+<pre class="source">
+<span id="L1"><span class="lineNum">       1</span>              : import { httpClient } from &quot;@/lib/api&quot;;</span>
+<span id="L2"><span class="lineNum">       2</span>              : import type { HttpClient } from &quot;@/lib/http-client&quot;;</span>
+<span id="L3"><span class="lineNum">       3</span>              : import type { PaginatedPlaylistSongs, Playlist, PlaylistSong, SongSelections } from &quot;@/types&quot;;</span>
+<span id="L4"><span class="lineNum">       4</span>              : </span>
+<span id="L5"><span class="lineNum">       5</span> <span class="tlaGNC tlaBgGNC">           4 : export function createPlaylistsService(client: HttpClient) {</span></span>
+<span id="L6"><span class="lineNum">       6</span> <span class="tlaGNC">           4 :   return {</span></span>
+<span id="L7"><span class="lineNum">       7</span> <span class="tlaGNC">           6 :     list: () =&gt; client.get&lt;Playlist[]&gt;(&quot;/playlists&quot;),</span></span>
+<span id="L8"><span class="lineNum">       8</span> <span class="tlaGNC">           7 :     get: (id: string) =&gt; client.get&lt;Playlist&gt;(`/playlists/${id}`),</span></span>
+<span id="L9"><span class="lineNum">       9</span> <span class="tlaUNC tlaBgUNC">           0 :     create: (data: { name: string; description?: string }) =&gt; client.post&lt;Playlist&gt;(&quot;/playlists&quot;, data),</span></span>
+<span id="L10"><span class="lineNum">      10</span> <span class="tlaGNC tlaBgGNC">           1 :     update: (id: string, data: { name?: string; description?: string }) =&gt;</span></span>
+<span id="L11"><span class="lineNum">      11</span> <span class="tlaGNC">           1 :       client.put&lt;Playlist&gt;(`/playlists/${id}`, data),</span></span>
+<span id="L12"><span class="lineNum">      12</span> <span class="tlaUNC tlaBgUNC">           0 :     delete: (id: string) =&gt; client.delete(`/playlists/${id}`),</span></span>
+<span id="L13"><span class="lineNum">      13</span> <span class="tlaGNC tlaBgGNC">          15 :     getSongs: (id: string, params?: { page?: number; per_page?: number }) =&gt; {</span></span>
+<span id="L14"><span class="lineNum">      14</span> <span class="tlaGNC">          15 :       const q = params</span></span>
+<span id="L15"><span class="lineNum">      15</span>              :         ? &quot;?&quot; +</span>
+<span id="L16"><span class="lineNum">      16</span>              :           Object.entries(params)</span>
+<span id="L17"><span class="lineNum">      17</span> <span class="tlaGNC">          23 :             .filter(([_, v]) =&gt; v !== undefined)</span></span>
+<span id="L18"><span class="lineNum">      18</span> <span class="tlaGNC">          23 :             .map(([k, v]) =&gt; `${k}=${v}`)</span></span>
+<span id="L19"><span class="lineNum">      19</span>              :             .join(&quot;&amp;&quot;)</span>
+<span id="L20"><span class="lineNum">      20</span>              :         : &quot;&quot;;</span>
+<span id="L21"><span class="lineNum">      21</span> <span class="tlaGNC">          15 :       return client.get&lt;PaginatedPlaylistSongs&gt;(`/playlists/${id}/songs${q}`);</span></span>
+<span id="L22"><span class="lineNum">      22</span>              :     },</span>
+<span id="L23"><span class="lineNum">      23</span> <span class="tlaUNC tlaBgUNC">           0 :     addSongs: (id: string, data: SongSelections) =&gt;</span></span>
+<span id="L24"><span class="lineNum">      24</span> <span class="tlaUNC">           0 :       client.post&lt;PlaylistSong[]&gt;(`/playlists/${id}/songs`, {</span></span>
+<span id="L25"><span class="lineNum">      25</span>              :         song_ids: data.songIds,</span>
+<span id="L26"><span class="lineNum">      26</span>              :         artist_names: data.artistNames,</span>
+<span id="L27"><span class="lineNum">      27</span>              :         album_selectors: data.albumSelectors,</span>
+<span id="L28"><span class="lineNum">      28</span>              :       }),</span>
+<span id="L29"><span class="lineNum">      29</span> <span class="tlaGNC tlaBgGNC">           1 :     removeSong: (id: string, song_id: string) =&gt; client.delete(`/playlists/${id}/songs/${song_id}`),</span></span>
+<span id="L30"><span class="lineNum">      30</span> <span class="tlaUNC tlaBgUNC">           0 :     removeSongsBatch: (id: string, song_ids: string[]) =&gt; client.delete(`/playlists/${id}/songs/batch`, { song_ids }),</span></span>
+<span id="L31"><span class="lineNum">      31</span> <span class="tlaUNC">           0 :     reorderSongs: (id: string, song_ids: string[]) =&gt;</span></span>
+<span id="L32"><span class="lineNum">      32</span> <span class="tlaUNC">           0 :       client.put&lt;PlaylistSong[]&gt;(`/playlists/${id}/songs/reorder`, { song_ids }),</span></span>
+<span id="L33"><span class="lineNum">      33</span> <span class="tlaUNC">           0 :     addToQueue: (playlist_id: string, station_id: string) =&gt;</span></span>
+<span id="L34"><span class="lineNum">      34</span> <span class="tlaUNC">           0 :       client.post(`/playlists/${playlist_id}/add-to-queue/${station_id}`),</span></span>
+<span id="L35"><span class="lineNum">      35</span>              :   };</span>
+<span id="L36"><span class="lineNum">      36</span>              : }</span>
+<span id="L37"><span class="lineNum">      37</span>              : </span>
+<span id="L38"><span class="lineNum">      38</span> <span class="tlaGNC tlaBgGNC">           4 : export const playlistsService = createPlaylistsService(httpClient);</span></span>
+        </pre>
+              </td>
+            </tr>
+          </table>
+          <br>
+
+          <table width="100%" border=0 cellspacing=0 cellpadding=0>
+            <tr><td class="ruler"><img src="../../../../../../glass.png" width=3 height=3 alt=""></td></tr>
+            <tr><td class="versionInfo">Generated by: <a href="https://github.com//linux-test-project/lcov" target="_parent">LCOV version 2.0-1</a></td></tr>
+          </table>
+          <br>
+
+</body>
+</html>

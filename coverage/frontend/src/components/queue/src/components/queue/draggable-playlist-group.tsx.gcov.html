@@ -1,0 +1,141 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN">
+
+<html lang="en">
+
+<head>
+  <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+  <title>LCOV - lcov.info - src/components/queue/src/components/queue/draggable-playlist-group.tsx</title>
+  <link rel="stylesheet" type="text/css" href="../../../../../../gcov.css">
+</head>
+
+<body>
+
+          <table width="100%" border=0 cellspacing=0 cellpadding=0>
+            <tr><td class="title">LCOV - code coverage report</td></tr>
+            <tr><td class="ruler"><img src="../../../../../../glass.png" width=3 height=3 alt=""></td></tr>
+
+            <tr>
+              <td width="100%">
+                <table cellpadding=1 border=0 width="100%">
+          <tr>
+            <td width="10%" class="headerItem">Current view:</td>
+            <td width="10%" class="headerValue"><a href="../../../../../../index.html">top level</a> - <a href="index.html">src/components/queue/src/components/queue</a> - draggable-playlist-group.tsx<span style="font-size: 80%;"> (source / <a href="draggable-playlist-group.tsx.func-c.html">functions</a>)</span></td>
+            <td width="5%"></td>
+            <td width="5%"></td>
+            <td width="5%" class="headerCovTableHead">Coverage</td>
+            <td width="5%" class="headerCovTableHead" title="Covered + Uncovered code">Total</td>
+            <td width="5%" class="headerCovTableHead" title="Exercised code only">Hit</td>
+          </tr>
+          <tr>
+            <td class="headerItem">Test:</td>
+            <td class="headerValue">lcov.info</td>
+            <td></td>
+            <td class="headerItem">Lines:</td>
+            <td class="headerCovTableEntryHi">100.0&nbsp;%</td>
+            <td class="headerCovTableEntry">3</td>
+            <td class="headerCovTableEntry">3</td>
+          </tr>
+          <tr>
+            <td class="headerItem">Test Date:</td>
+            <td class="headerValue">2026-09-06 00:49:56</td>
+            <td></td>
+            <td class="headerItem">Functions:</td>
+            <td class="headerCovTableEntryHi">100.0&nbsp;%</td>
+            <td class="headerCovTableEntry">1</td>
+            <td class="headerCovTableEntry">1</td>
+          </tr>
+                  <tr><td><img src="../../../../../../glass.png" width=3 height=3 alt=""></td></tr>
+                </table>
+              </td>
+            </tr>
+
+            <tr><td class="ruler"><img src="../../../../../../glass.png" width=3 height=3 alt=""></td></tr>
+          </table>
+
+          <table cellpadding=0 cellspacing=0 border=0>
+            <tr>
+              <td><br></td>
+            </tr>
+            <tr>
+              <td>
+<pre class="sourceHeading">            Line data    Source code</pre>
+<pre class="source">
+<span id="L1"><span class="lineNum">       1</span>              : import { useSortable } from &quot;@dnd-kit/sortable&quot;;</span>
+<span id="L2"><span class="lineNum">       2</span>              : import { CSS } from &quot;@dnd-kit/utilities&quot;;</span>
+<span id="L3"><span class="lineNum">       3</span>              : import Box from &quot;@mui/material/Box&quot;;</span>
+<span id="L4"><span class="lineNum">       4</span>              : import type { PlaylistGroup } from &quot;@/types&quot;;</span>
+<span id="L5"><span class="lineNum">       5</span>              : import { PlaylistGroupCard } from &quot;./playlist-group-card&quot;;</span>
+<span id="L6"><span class="lineNum">       6</span>              : </span>
+<span id="L7"><span class="lineNum">       7</span> <span class="tlaGNC tlaBgGNC">           1 : export function DraggablePlaylistGroup({</span></span>
+<span id="L8"><span class="lineNum">       8</span>              :   group,</span>
+<span id="L9"><span class="lineNum">       9</span>              :   id,</span>
+<span id="L10"><span class="lineNum">      10</span>              :   selected,</span>
+<span id="L11"><span class="lineNum">      11</span>              :   onToggleSelect,</span>
+<span id="L12"><span class="lineNum">      12</span>              :   selectedSongIds,</span>
+<span id="L13"><span class="lineNum">      13</span>              :   onToggleSelectSong,</span>
+<span id="L14"><span class="lineNum">      14</span>              :   onDeleteSong,</span>
+<span id="L15"><span class="lineNum">      15</span>              :   onReorderInGroup,</span>
+<span id="L16"><span class="lineNum">      16</span>              :   onRemovePlaylist,</span>
+<span id="L17"><span class="lineNum">      17</span>              :   onMoveToTop,</span>
+<span id="L18"><span class="lineNum">      18</span>              :   playlistNumber,</span>
+<span id="L19"><span class="lineNum">      19</span>              :   endsAt,</span>
+<span id="L20"><span class="lineNum">      20</span>              :   renderActions,</span>
+<span id="L21"><span class="lineNum">      21</span>              : }: {</span>
+<span id="L22"><span class="lineNum">      22</span>              :   group: PlaylistGroup;</span>
+<span id="L23"><span class="lineNum">      23</span>              :   id: string;</span>
+<span id="L24"><span class="lineNum">      24</span>              :   selected?: boolean;</span>
+<span id="L25"><span class="lineNum">      25</span>              :   onToggleSelect?: () =&gt; void;</span>
+<span id="L26"><span class="lineNum">      26</span>              :   selectedSongIds?: Set&lt;string&gt;;</span>
+<span id="L27"><span class="lineNum">      27</span>              :   onToggleSelectSong?: (id: string) =&gt; void;</span>
+<span id="L28"><span class="lineNum">      28</span>              :   onDeleteSong?: (songId: string) =&gt; void;</span>
+<span id="L29"><span class="lineNum">      29</span>              :   onReorderInGroup?: (songIds: string[]) =&gt; void;</span>
+<span id="L30"><span class="lineNum">      30</span>              :   onRemovePlaylist?: () =&gt; void;</span>
+<span id="L31"><span class="lineNum">      31</span>              :   onMoveToTop?: () =&gt; void;</span>
+<span id="L32"><span class="lineNum">      32</span>              :   playlistNumber?: number;</span>
+<span id="L33"><span class="lineNum">      33</span>              :   endsAt?: string | null;</span>
+<span id="L34"><span class="lineNum">      34</span>              :   renderActions?: (closeMenu: () =&gt; void) =&gt; React.ReactNode;</span>
+<span id="L35"><span class="lineNum">      35</span>              : }) {</span>
+<span id="L36"><span class="lineNum">      36</span> <span class="tlaGNC">           1 :   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id });</span></span>
+<span id="L37"><span class="lineNum">      37</span>              : </span>
+<span id="L38"><span class="lineNum">      38</span> <span class="tlaGNC">           1 :   const style = {</span></span>
+<span id="L39"><span class="lineNum">      39</span>              :     transform: CSS.Transform.toString(transform),</span>
+<span id="L40"><span class="lineNum">      40</span>              :     transition,</span>
+<span id="L41"><span class="lineNum">      41</span>              :     opacity: isDragging ? 0.5 : 1,</span>
+<span id="L42"><span class="lineNum">      42</span>              :     zIndex: isDragging ? 10 : undefined,</span>
+<span id="L43"><span class="lineNum">      43</span>              :     position: &quot;relative&quot; as const,</span>
+<span id="L44"><span class="lineNum">      44</span>              :   };</span>
+<span id="L45"><span class="lineNum">      45</span>              : </span>
+<span id="L46"><span class="lineNum">      46</span> <span class="tlaGNC">           1 :   return (</span></span>
+<span id="L47"><span class="lineNum">      47</span>              :     &lt;Box ref={setNodeRef} style={style}&gt;</span>
+<span id="L48"><span class="lineNum">      48</span>              :       &lt;PlaylistGroupCard</span>
+<span id="L49"><span class="lineNum">      49</span>              :         group={group}</span>
+<span id="L50"><span class="lineNum">      50</span>              :         selected={selected}</span>
+<span id="L51"><span class="lineNum">      51</span>              :         onToggleSelect={onToggleSelect}</span>
+<span id="L52"><span class="lineNum">      52</span>              :         selectedSongIds={selectedSongIds}</span>
+<span id="L53"><span class="lineNum">      53</span>              :         onToggleSelectSong={onToggleSelectSong}</span>
+<span id="L54"><span class="lineNum">      54</span>              :         onDeleteSong={onDeleteSong}</span>
+<span id="L55"><span class="lineNum">      55</span>              :         onReorderInGroup={onReorderInGroup}</span>
+<span id="L56"><span class="lineNum">      56</span>              :         onRemovePlaylist={onRemovePlaylist}</span>
+<span id="L57"><span class="lineNum">      57</span>              :         onMoveToTop={onMoveToTop}</span>
+<span id="L58"><span class="lineNum">      58</span>              :         playlistNumber={playlistNumber}</span>
+<span id="L59"><span class="lineNum">      59</span>              :         endsAt={endsAt}</span>
+<span id="L60"><span class="lineNum">      60</span>              :         renderActions={renderActions}</span>
+<span id="L61"><span class="lineNum">      61</span>              :         dragHandleProps={{ ...attributes, ...listeners }}</span>
+<span id="L62"><span class="lineNum">      62</span>              :       /&gt;</span>
+<span id="L63"><span class="lineNum">      63</span>              :     &lt;/Box&gt;</span>
+<span id="L64"><span class="lineNum">      64</span>              :   );</span>
+<span id="L65"><span class="lineNum">      65</span>              : }</span>
+        </pre>
+              </td>
+            </tr>
+          </table>
+          <br>
+
+          <table width="100%" border=0 cellspacing=0 cellpadding=0>
+            <tr><td class="ruler"><img src="../../../../../../glass.png" width=3 height=3 alt=""></td></tr>
+            <tr><td class="versionInfo">Generated by: <a href="https://github.com//linux-test-project/lcov" target="_parent">LCOV version 2.0-1</a></td></tr>
+          </table>
+          <br>
+
+</body>
+</html>

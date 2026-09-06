@@ -1,0 +1,154 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN">
+
+<html lang="en">
+
+<head>
+  <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+  <title>LCOV - lcov.info - src/lib/src/lib/api.ts</title>
+  <link rel="stylesheet" type="text/css" href="../../../../gcov.css">
+</head>
+
+<body>
+
+          <table width="100%" border=0 cellspacing=0 cellpadding=0>
+            <tr><td class="title">LCOV - code coverage report</td></tr>
+            <tr><td class="ruler"><img src="../../../../glass.png" width=3 height=3 alt=""></td></tr>
+
+            <tr>
+              <td width="100%">
+                <table cellpadding=1 border=0 width="100%">
+          <tr>
+            <td width="10%" class="headerItem">Current view:</td>
+            <td width="10%" class="headerValue"><a href="../../../../index.html">top level</a> - <a href="index.html">src/lib/src/lib</a> - api.ts<span style="font-size: 80%;"> (source / <a href="api.ts.func-c.html">functions</a>)</span></td>
+            <td width="5%"></td>
+            <td width="5%"></td>
+            <td width="5%" class="headerCovTableHead">Coverage</td>
+            <td width="5%" class="headerCovTableHead" title="Covered + Uncovered code">Total</td>
+            <td width="5%" class="headerCovTableHead" title="Exercised code only">Hit</td>
+          </tr>
+          <tr>
+            <td class="headerItem">Test:</td>
+            <td class="headerValue">lcov.info</td>
+            <td></td>
+            <td class="headerItem">Lines:</td>
+            <td class="headerCovTableEntryMed">86.4&nbsp;%</td>
+            <td class="headerCovTableEntry">44</td>
+            <td class="headerCovTableEntry">38</td>
+          </tr>
+          <tr>
+            <td class="headerItem">Test Date:</td>
+            <td class="headerValue">2026-09-06 00:49:56</td>
+            <td></td>
+            <td class="headerItem">Functions:</td>
+            <td class="headerCovTableEntryMed">88.2&nbsp;%</td>
+            <td class="headerCovTableEntry">17</td>
+            <td class="headerCovTableEntry">15</td>
+          </tr>
+                  <tr><td><img src="../../../../glass.png" width=3 height=3 alt=""></td></tr>
+                </table>
+              </td>
+            </tr>
+
+            <tr><td class="ruler"><img src="../../../../glass.png" width=3 height=3 alt=""></td></tr>
+          </table>
+
+          <table cellpadding=0 cellspacing=0 border=0>
+            <tr>
+              <td><br></td>
+            </tr>
+            <tr>
+              <td>
+<pre class="sourceHeading">            Line data    Source code</pre>
+<pre class="source">
+<span id="L1"><span class="lineNum">       1</span>              : import axios from &quot;axios&quot;;</span>
+<span id="L2"><span class="lineNum">       2</span>              : import type { AuthResponse } from &quot;@/types&quot;;</span>
+<span id="L3"><span class="lineNum">       3</span>              : import type { HttpClient } from &quot;./http-client&quot;;</span>
+<span id="L4"><span class="lineNum">       4</span>              : import { localTokenStorage } from &quot;./token-storage&quot;;</span>
+<span id="L5"><span class="lineNum">       5</span>              : </span>
+<span id="L6"><span class="lineNum">       6</span> <span class="tlaGNC tlaBgGNC">          61 : const api = axios.create({</span></span>
+<span id="L7"><span class="lineNum">       7</span>              :   baseURL: &quot;/api&quot;,</span>
+<span id="L8"><span class="lineNum">       8</span>              :   headers: { &quot;Content-Type&quot;: &quot;application/json&quot; },</span>
+<span id="L9"><span class="lineNum">       9</span>              : });</span>
+<span id="L10"><span class="lineNum">      10</span>              : </span>
+<span id="L11"><span class="lineNum">      11</span> <span class="tlaGNC">          61 : api.interceptors.request.use((config) =&gt; {</span></span>
+<span id="L12"><span class="lineNum">      12</span> <span class="tlaGNC">         468 :   const token = localTokenStorage.getAccessToken();</span></span>
+<span id="L13"><span class="lineNum">      13</span> <span class="tlaGNC">         468 :   if (token) config.headers.Authorization = `Bearer ${token}`;</span></span>
+<span id="L14"><span class="lineNum">      14</span> <span class="tlaGNC">         468 :   return config;</span></span>
+<span id="L15"><span class="lineNum">      15</span>              : });</span>
+<span id="L16"><span class="lineNum">      16</span>              : </span>
+<span id="L17"><span class="lineNum">      17</span> <span class="tlaGNC">          61 : let isRefreshing = false;</span></span>
+<span id="L18"><span class="lineNum">      18</span> <span class="tlaGNC">          61 : let failedQueue: Array&lt;{ resolve: (token: string) =&gt; void; reject: (err: unknown) =&gt; void }&gt; = [];</span></span>
+<span id="L19"><span class="lineNum">      19</span>              : </span>
+<span id="L20"><span class="lineNum">      20</span> <span class="tlaGNC">          61 : api.interceptors.response.use(</span></span>
+<span id="L21"><span class="lineNum">      21</span> <span class="tlaGNC">         450 :   (response) =&gt; response,</span></span>
+<span id="L22"><span class="lineNum">      22</span> <span class="tlaGNC">          15 :   async (error) =&gt; {</span></span>
+<span id="L23"><span class="lineNum">      23</span> <span class="tlaGNC">          15 :     const originalRequest = error.config;</span></span>
+<span id="L24"><span class="lineNum">      24</span> <span class="tlaGNC">          15 :     if (error.response?.status === 401 &amp;&amp; !originalRequest._retry) {</span></span>
+<span id="L25"><span class="lineNum">      25</span> <span class="tlaGNC">           4 :       if (isRefreshing) {</span></span>
+<span id="L26"><span class="lineNum">      26</span> <span class="tlaUNC tlaBgUNC">           0 :         return new Promise&lt;string&gt;((resolve, reject) =&gt; {</span></span>
+<span id="L27"><span class="lineNum">      27</span> <span class="tlaUNC">           0 :           failedQueue.push({ resolve, reject });</span></span>
+<span id="L28"><span class="lineNum">      28</span> <span class="tlaUNC">           0 :         }).then((token) =&gt; {</span></span>
+<span id="L29"><span class="lineNum">      29</span> <span class="tlaUNC">           0 :           originalRequest.headers.Authorization = `Bearer ${token}`;</span></span>
+<span id="L30"><span class="lineNum">      30</span> <span class="tlaUNC">           0 :           return api(originalRequest);</span></span>
+<span id="L31"><span class="lineNum">      31</span>              :         });</span>
+<span id="L32"><span class="lineNum">      32</span>              :       }</span>
+<span id="L33"><span class="lineNum">      33</span>              : </span>
+<span id="L34"><span class="lineNum">      34</span> <span class="tlaGNC tlaBgGNC">           4 :       originalRequest._retry = true;</span></span>
+<span id="L35"><span class="lineNum">      35</span> <span class="tlaGNC">           4 :       isRefreshing = true;</span></span>
+<span id="L36"><span class="lineNum">      36</span>              : </span>
+<span id="L37"><span class="lineNum">      37</span> <span class="tlaGNC">           4 :       const refreshToken = localTokenStorage.getRefreshToken();</span></span>
+<span id="L38"><span class="lineNum">      38</span> <span class="tlaGNC">           4 :       if (refreshToken) {</span></span>
+<span id="L39"><span class="lineNum">      39</span> <span class="tlaGNC">           2 :         try {</span></span>
+<span id="L40"><span class="lineNum">      40</span> <span class="tlaGNC">           2 :           const { data } = await axios.post&lt;AuthResponse&gt;(&quot;/api/auth/refresh&quot;, { refresh_token: refreshToken });</span></span>
+<span id="L41"><span class="lineNum">      41</span> <span class="tlaGNC">           1 :           localTokenStorage.setAccessToken(data.access_token);</span></span>
+<span id="L42"><span class="lineNum">      42</span> <span class="tlaGNC">           1 :           localTokenStorage.setRefreshToken(data.refresh_token);</span></span>
+<span id="L43"><span class="lineNum">      43</span>              : </span>
+<span id="L44"><span class="lineNum">      44</span> <span class="tlaGNC">           1 :           for (const { resolve } of failedQueue) {</span></span>
+<span id="L45"><span class="lineNum">      45</span> <span class="tlaUNC tlaBgUNC">           0 :             resolve(data.access_token);</span></span>
+<span id="L46"><span class="lineNum">      46</span>              :           }</span>
+<span id="L47"><span class="lineNum">      47</span> <span class="tlaGNC tlaBgGNC">           1 :           failedQueue = [];</span></span>
+<span id="L48"><span class="lineNum">      48</span>              : </span>
+<span id="L49"><span class="lineNum">      49</span> <span class="tlaGNC">           1 :           originalRequest.headers.Authorization = `Bearer ${data.access_token}`;</span></span>
+<span id="L50"><span class="lineNum">      50</span> <span class="tlaGNC">           1 :           return api(originalRequest);</span></span>
+<span id="L51"><span class="lineNum">      51</span>              :         } catch (err) {</span>
+<span id="L52"><span class="lineNum">      52</span> <span class="tlaGNC">           1 :           for (const { reject } of failedQueue) {</span></span>
+<span id="L53"><span class="lineNum">      53</span> <span class="tlaUNC tlaBgUNC">           0 :             reject(err);</span></span>
+<span id="L54"><span class="lineNum">      54</span>              :           }</span>
+<span id="L55"><span class="lineNum">      55</span> <span class="tlaGNC tlaBgGNC">           1 :           failedQueue = [];</span></span>
+<span id="L56"><span class="lineNum">      56</span> <span class="tlaGNC">           1 :           console.warn(&quot;Token refresh failed, redirecting to login&quot;);</span></span>
+<span id="L57"><span class="lineNum">      57</span> <span class="tlaGNC">           1 :           localTokenStorage.clear();</span></span>
+<span id="L58"><span class="lineNum">      58</span> <span class="tlaGNC">           1 :           window.location.href = &quot;/login&quot;;</span></span>
+<span id="L59"><span class="lineNum">      59</span>              :         } finally {</span>
+<span id="L60"><span class="lineNum">      60</span> <span class="tlaGNC">           2 :           isRefreshing = false;</span></span>
+<span id="L61"><span class="lineNum">      61</span>              :         }</span>
+<span id="L62"><span class="lineNum">      62</span>              :       }</span>
+<span id="L63"><span class="lineNum">      63</span>              :     }</span>
+<span id="L64"><span class="lineNum">      64</span> <span class="tlaGNC">          14 :     return Promise.reject(error);</span></span>
+<span id="L65"><span class="lineNum">      65</span>              :   },</span>
+<span id="L66"><span class="lineNum">      66</span>              : );</span>
+<span id="L67"><span class="lineNum">      67</span>              : </span>
+<span id="L68"><span class="lineNum">      68</span> <span class="tlaGNC">          61 : export const httpClient: HttpClient = {</span></span>
+<span id="L69"><span class="lineNum">      69</span> <span class="tlaGNC">         418 :   get: &lt;T&gt;(url: string) =&gt; api.get&lt;T&gt;(url).then((r) =&gt; r.data),</span></span>
+<span id="L70"><span class="lineNum">      70</span> <span class="tlaGNC">          20 :   post: &lt;T&gt;(url: string, data?: unknown) =&gt; api.post&lt;T&gt;(url, data).then((r) =&gt; r.data),</span></span>
+<span id="L71"><span class="lineNum">      71</span> <span class="tlaGNC">           9 :   put: &lt;T&gt;(url: string, data?: unknown) =&gt; api.put&lt;T&gt;(url, data).then((r) =&gt; r.data),</span></span>
+<span id="L72"><span class="lineNum">      72</span> <span class="tlaGNC">           1 :   patch: &lt;T&gt;(url: string, data?: unknown) =&gt; api.patch&lt;T&gt;(url, data).then((r) =&gt; r.data),</span></span>
+<span id="L73"><span class="lineNum">      73</span> <span class="tlaGNC">          11 :   delete: (url: string, data?: unknown) =&gt; api.delete(url, data ? { data } : undefined).then(() =&gt; undefined),</span></span>
+<span id="L74"><span class="lineNum">      74</span> <span class="tlaGNC">           2 :   postFormData: &lt;T&gt;(url: string, data: FormData) =&gt;</span></span>
+<span id="L75"><span class="lineNum">      75</span> <span class="tlaGNC">           2 :     api.post&lt;T&gt;(url, data, { headers: { &quot;Content-Type&quot;: &quot;multipart/form-data&quot; } }).then((r) =&gt; r.data),</span></span>
+<span id="L76"><span class="lineNum">      76</span>              : };</span>
+<span id="L77"><span class="lineNum">      77</span>              : </span>
+<span id="L78"><span class="lineNum">      78</span>              : export { api };</span>
+        </pre>
+              </td>
+            </tr>
+          </table>
+          <br>
+
+          <table width="100%" border=0 cellspacing=0 cellpadding=0>
+            <tr><td class="ruler"><img src="../../../../glass.png" width=3 height=3 alt=""></td></tr>
+            <tr><td class="versionInfo">Generated by: <a href="https://github.com//linux-test-project/lcov" target="_parent">LCOV version 2.0-1</a></td></tr>
+          </table>
+          <br>
+
+</body>
+</html>

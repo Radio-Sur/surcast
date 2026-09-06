@@ -1,0 +1,264 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN">
+
+<html lang="en">
+
+<head>
+  <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+  <title>LCOV - lcov.info - src/components/listeners/src/components/listeners/listeners-overview-section.tsx</title>
+  <link rel="stylesheet" type="text/css" href="../../../../../../gcov.css">
+</head>
+
+<body>
+
+          <table width="100%" border=0 cellspacing=0 cellpadding=0>
+            <tr><td class="title">LCOV - code coverage report</td></tr>
+            <tr><td class="ruler"><img src="../../../../../../glass.png" width=3 height=3 alt=""></td></tr>
+
+            <tr>
+              <td width="100%">
+                <table cellpadding=1 border=0 width="100%">
+          <tr>
+            <td width="10%" class="headerItem">Current view:</td>
+            <td width="10%" class="headerValue"><a href="../../../../../../index.html">top level</a> - <a href="index.html">src/components/listeners/src/components/listeners</a> - listeners-overview-section.tsx<span style="font-size: 80%;"> (source / <a href="listeners-overview-section.tsx.func-c.html">functions</a>)</span></td>
+            <td width="5%"></td>
+            <td width="5%"></td>
+            <td width="5%" class="headerCovTableHead">Coverage</td>
+            <td width="5%" class="headerCovTableHead" title="Covered + Uncovered code">Total</td>
+            <td width="5%" class="headerCovTableHead" title="Exercised code only">Hit</td>
+          </tr>
+          <tr>
+            <td class="headerItem">Test:</td>
+            <td class="headerValue">lcov.info</td>
+            <td></td>
+            <td class="headerItem">Lines:</td>
+            <td class="headerCovTableEntryLo">68.8&nbsp;%</td>
+            <td class="headerCovTableEntry">16</td>
+            <td class="headerCovTableEntry">11</td>
+          </tr>
+          <tr>
+            <td class="headerItem">Test Date:</td>
+            <td class="headerValue">2026-09-06 00:49:56</td>
+            <td></td>
+            <td class="headerItem">Functions:</td>
+            <td class="headerCovTableEntryLo">54.5&nbsp;%</td>
+            <td class="headerCovTableEntry">11</td>
+            <td class="headerCovTableEntry">6</td>
+          </tr>
+                  <tr><td><img src="../../../../../../glass.png" width=3 height=3 alt=""></td></tr>
+                </table>
+              </td>
+            </tr>
+
+            <tr><td class="ruler"><img src="../../../../../../glass.png" width=3 height=3 alt=""></td></tr>
+          </table>
+
+          <table cellpadding=0 cellspacing=0 border=0>
+            <tr>
+              <td><br></td>
+            </tr>
+            <tr>
+              <td>
+<pre class="sourceHeading">            Line data    Source code</pre>
+<pre class="source">
+<span id="L1"><span class="lineNum">       1</span>              : import Box from &quot;@mui/material/Box&quot;;</span>
+<span id="L2"><span class="lineNum">       2</span>              : import Card from &quot;@mui/material/Card&quot;;</span>
+<span id="L3"><span class="lineNum">       3</span>              : import CardContent from &quot;@mui/material/CardContent&quot;;</span>
+<span id="L4"><span class="lineNum">       4</span>              : import CircularProgress from &quot;@mui/material/CircularProgress&quot;;</span>
+<span id="L5"><span class="lineNum">       5</span>              : import Divider from &quot;@mui/material/Divider&quot;;</span>
+<span id="L6"><span class="lineNum">       6</span>              : import ToggleButton from &quot;@mui/material/ToggleButton&quot;;</span>
+<span id="L7"><span class="lineNum">       7</span>              : import ToggleButtonGroup from &quot;@mui/material/ToggleButtonGroup&quot;;</span>
+<span id="L8"><span class="lineNum">       8</span>              : import Typography from &quot;@mui/material/Typography&quot;;</span>
+<span id="L9"><span class="lineNum">       9</span>              : import { BarChart } from &quot;@mui/x-charts/BarChart&quot;;</span>
+<span id="L10"><span class="lineNum">      10</span>              : import { LineChart } from &quot;@mui/x-charts/LineChart&quot;;</span>
+<span id="L11"><span class="lineNum">      11</span>              : import { useState } from &quot;react&quot;;</span>
+<span id="L12"><span class="lineNum">      12</span>              : import { useTranslation } from &quot;react-i18next&quot;;</span>
+<span id="L13"><span class="lineNum">      13</span>              : import { useListenersOverview } from &quot;@/hooks/use-listeners&quot;;</span>
+<span id="L14"><span class="lineNum">      14</span>              : import type { ListenerRange } from &quot;@/types&quot;;</span>
+<span id="L15"><span class="lineNum">      15</span>              : </span>
+<span id="L16"><span class="lineNum">      16</span> <span class="tlaGNC tlaBgGNC">           2 : const RANGES: ListenerRange[] = [&quot;24h&quot;, &quot;7d&quot;, &quot;30d&quot;];</span></span>
+<span id="L17"><span class="lineNum">      17</span> <span class="tlaGNC">           2 : const WEEKDAYS = [&quot;monday&quot;, &quot;tuesday&quot;, &quot;wednesday&quot;, &quot;thursday&quot;, &quot;friday&quot;, &quot;saturday&quot;, &quot;sunday&quot;];</span></span>
+<span id="L18"><span class="lineNum">      18</span>              : </span>
+<span id="L19"><span class="lineNum">      19</span> <span class="tlaUNC tlaBgUNC">           0 : function formatTime(value: number | Date) {</span></span>
+<span id="L20"><span class="lineNum">      20</span> <span class="tlaUNC">           0 :   return new Date(value).toLocaleString([], {</span></span>
+<span id="L21"><span class="lineNum">      21</span>              :     month: &quot;numeric&quot;,</span>
+<span id="L22"><span class="lineNum">      22</span>              :     day: &quot;numeric&quot;,</span>
+<span id="L23"><span class="lineNum">      23</span>              :     hour: &quot;2-digit&quot;,</span>
+<span id="L24"><span class="lineNum">      24</span>              :     minute: &quot;2-digit&quot;,</span>
+<span id="L25"><span class="lineNum">      25</span>              :   });</span>
+<span id="L26"><span class="lineNum">      26</span>              : }</span>
+<span id="L27"><span class="lineNum">      27</span>              : </span>
+<span id="L28"><span class="lineNum">      28</span> <span class="tlaGNC tlaBgGNC">           9 : export function ListenersOverviewSection() {</span></span>
+<span id="L29"><span class="lineNum">      29</span> <span class="tlaGNC">           9 :   const { t } = useTranslation();</span></span>
+<span id="L30"><span class="lineNum">      30</span> <span class="tlaGNC">           9 :   const [range, setRange] = useState&lt;ListenerRange&gt;(&quot;7d&quot;);</span></span>
+<span id="L31"><span class="lineNum">      31</span> <span class="tlaGNC">           9 :   const { data, isLoading, isError } = useListenersOverview(range);</span></span>
+<span id="L32"><span class="lineNum">      32</span>              : </span>
+<span id="L33"><span class="lineNum">      33</span> <span class="tlaGNC">          72 :   const series = (data?.series ?? []).map((p) =&gt; ({</span></span>
+<span id="L34"><span class="lineNum">      34</span>              :     time: new Date(p.time).getTime(),</span>
+<span id="L35"><span class="lineNum">      35</span>              :     listeners: p.listeners,</span>
+<span id="L36"><span class="lineNum">      36</span>              :   }));</span>
+<span id="L37"><span class="lineNum">      37</span>              : </span>
+<span id="L38"><span class="lineNum">      38</span> <span class="tlaGNC">          24 :   const hours = (data?.by_hour ?? []).map((h) =&gt; ({</span></span>
+<span id="L39"><span class="lineNum">      39</span>              :     hour: `${String(h.hour).padStart(2, &quot;0&quot;)}:00`,</span>
+<span id="L40"><span class="lineNum">      40</span>              :     avg_listeners: h.avg_listeners,</span>
+<span id="L41"><span class="lineNum">      41</span>              :   }));</span>
+<span id="L42"><span class="lineNum">      42</span>              : </span>
+<span id="L43"><span class="lineNum">      43</span> <span class="tlaGNC">          42 :   const weekdays = (data?.by_weekday ?? []).map((w) =&gt; ({</span></span>
+<span id="L44"><span class="lineNum">      44</span>              :     weekday: t(`common:weekday_${WEEKDAYS[w.weekday - 1] ?? &quot;&quot;}`),</span>
+<span id="L45"><span class="lineNum">      45</span>              :     avg_listeners: w.avg_listeners,</span>
+<span id="L46"><span class="lineNum">      46</span>              :   }));</span>
+<span id="L47"><span class="lineNum">      47</span>              : </span>
+<span id="L48"><span class="lineNum">      48</span> <span class="tlaGNC">           9 :   return (</span></span>
+<span id="L49"><span class="lineNum">      49</span>              :     &lt;Card sx={{ borderRadius: 3 }}&gt;</span>
+<span id="L50"><span class="lineNum">      50</span>              :       &lt;CardContent sx={{ p: 3 }}&gt;</span>
+<span id="L51"><span class="lineNum">      51</span>              :         &lt;Box sx={{ display: &quot;flex&quot;, alignItems: &quot;center&quot;, justifyContent: &quot;space-between&quot;, mb: 2 }}&gt;</span>
+<span id="L52"><span class="lineNum">      52</span>              :           &lt;Typography variant=&quot;h6&quot;&gt;{t(&quot;dashboard:listeners_title&quot;)}&lt;/Typography&gt;</span>
+<span id="L53"><span class="lineNum">      53</span>              :           &lt;ToggleButtonGroup</span>
+<span id="L54"><span class="lineNum">      54</span>              :             size=&quot;small&quot;</span>
+<span id="L55"><span class="lineNum">      55</span>              :             exclusive</span>
+<span id="L56"><span class="lineNum">      56</span>              :             value={range}</span>
+<span id="L57"><span class="lineNum">      57</span> <span class="tlaUNC tlaBgUNC">           0 :             onChange={(_, value) =&gt; {</span></span>
+<span id="L58"><span class="lineNum">      58</span> <span class="tlaUNC">           0 :               if (value) setRange(value as ListenerRange);</span></span>
+<span id="L59"><span class="lineNum">      59</span>              :             }}</span>
+<span id="L60"><span class="lineNum">      60</span>              :           &gt;</span>
+<span id="L61"><span class="lineNum">      61</span> <span class="tlaGNC tlaBgGNC">          27 :             {RANGES.map((r) =&gt; (</span></span>
+<span id="L62"><span class="lineNum">      62</span> <span class="tlaGNC">          27 :               &lt;ToggleButton key={r} value={r}&gt;</span></span>
+<span id="L63"><span class="lineNum">      63</span>              :                 {t(`stations:listeners_range_${r}`)}</span>
+<span id="L64"><span class="lineNum">      64</span>              :               &lt;/ToggleButton&gt;</span>
+<span id="L65"><span class="lineNum">      65</span>              :             ))}</span>
+<span id="L66"><span class="lineNum">      66</span>              :           &lt;/ToggleButtonGroup&gt;</span>
+<span id="L67"><span class="lineNum">      67</span>              :         &lt;/Box&gt;</span>
+<span id="L68"><span class="lineNum">      68</span>              : </span>
+<span id="L69"><span class="lineNum">      69</span>              :         {isLoading ? (</span>
+<span id="L70"><span class="lineNum">      70</span>              :           &lt;Box sx={{ display: &quot;flex&quot;, justifyContent: &quot;center&quot;, py: 6 }}&gt;</span>
+<span id="L71"><span class="lineNum">      71</span>              :             &lt;CircularProgress /&gt;</span>
+<span id="L72"><span class="lineNum">      72</span>              :           &lt;/Box&gt;</span>
+<span id="L73"><span class="lineNum">      73</span>              :         ) : isError ? (</span>
+<span id="L74"><span class="lineNum">      74</span>              :           &lt;Typography color=&quot;error&quot;&gt;{t(&quot;dashboard:listeners_load_error&quot;)}&lt;/Typography&gt;</span>
+<span id="L75"><span class="lineNum">      75</span>              :         ) : (</span>
+<span id="L76"><span class="lineNum">      76</span>              :           &lt;&gt;</span>
+<span id="L77"><span class="lineNum">      77</span>              :             &lt;Box sx={{ mb: 2 }}&gt;</span>
+<span id="L78"><span class="lineNum">      78</span>              :               &lt;Typography variant=&quot;body2&quot; color=&quot;text.secondary&quot; sx={{ fontWeight: 500 }}&gt;</span>
+<span id="L79"><span class="lineNum">      79</span>              :                 {t(&quot;dashboard:listeners_now&quot;)}</span>
+<span id="L80"><span class="lineNum">      80</span>              :               &lt;/Typography&gt;</span>
+<span id="L81"><span class="lineNum">      81</span>              :               &lt;Typography variant=&quot;h4&quot;&gt;{data?.total_now ?? 0}&lt;/Typography&gt;</span>
+<span id="L82"><span class="lineNum">      82</span>              :             &lt;/Box&gt;</span>
+<span id="L83"><span class="lineNum">      83</span>              : </span>
+<span id="L84"><span class="lineNum">      84</span>              :             {series.length &gt; 0 ? (</span>
+<span id="L85"><span class="lineNum">      85</span>              :               &lt;LineChart</span>
+<span id="L86"><span class="lineNum">      86</span>              :                 height={240}</span>
+<span id="L87"><span class="lineNum">      87</span>              :                 dataset={series}</span>
+<span id="L88"><span class="lineNum">      88</span>              :                 xAxis={[</span>
+<span id="L89"><span class="lineNum">      89</span>              :                   {</span>
+<span id="L90"><span class="lineNum">      90</span>              :                     dataKey: &quot;time&quot;,</span>
+<span id="L91"><span class="lineNum">      91</span>              :                     scaleType: &quot;time&quot;,</span>
+<span id="L92"><span class="lineNum">      92</span> <span class="tlaUNC tlaBgUNC">           0 :                     valueFormatter: (v) =&gt; formatTime(v),</span></span>
+<span id="L93"><span class="lineNum">      93</span>              :                   },</span>
+<span id="L94"><span class="lineNum">      94</span>              :                 ]}</span>
+<span id="L95"><span class="lineNum">      95</span>              :                 yAxis={[{ min: 0 }]}</span>
+<span id="L96"><span class="lineNum">      96</span>              :                 series={[{ dataKey: &quot;listeners&quot;, area: true, showMark: false, label: t(&quot;stations:listeners&quot;) }]}</span>
+<span id="L97"><span class="lineNum">      97</span>              :                 margin={{ top: 10, right: 20, bottom: 30, left: 45 }}</span>
+<span id="L98"><span class="lineNum">      98</span>              :               /&gt;</span>
+<span id="L99"><span class="lineNum">      99</span>              :             ) : (</span>
+<span id="L100"><span class="lineNum">     100</span>              :               &lt;Typography color=&quot;text.secondary&quot; sx={{ py: 4 }}&gt;</span>
+<span id="L101"><span class="lineNum">     101</span>              :                 {t(&quot;stations:listeners_empty&quot;)}</span>
+<span id="L102"><span class="lineNum">     102</span>              :               &lt;/Typography&gt;</span>
+<span id="L103"><span class="lineNum">     103</span>              :             )}</span>
+<span id="L104"><span class="lineNum">     104</span>              : </span>
+<span id="L105"><span class="lineNum">     105</span>              :             &lt;Box sx={{ display: &quot;grid&quot;, gridTemplateColumns: { xs: &quot;1fr&quot;, md: &quot;1fr 1fr&quot; }, gap: 3, mt: 3 }}&gt;</span>
+<span id="L106"><span class="lineNum">     106</span>              :               &lt;Box&gt;</span>
+<span id="L107"><span class="lineNum">     107</span>              :                 &lt;Typography variant=&quot;body2&quot; color=&quot;text.secondary&quot; sx={{ fontWeight: 500, mb: 1 }}&gt;</span>
+<span id="L108"><span class="lineNum">     108</span>              :                   {t(&quot;dashboard:listeners_by_hour&quot;)}</span>
+<span id="L109"><span class="lineNum">     109</span>              :                 &lt;/Typography&gt;</span>
+<span id="L110"><span class="lineNum">     110</span>              :                 {hours.length &gt; 0 ? (</span>
+<span id="L111"><span class="lineNum">     111</span>              :                   &lt;BarChart</span>
+<span id="L112"><span class="lineNum">     112</span>              :                     height={200}</span>
+<span id="L113"><span class="lineNum">     113</span>              :                     dataset={hours}</span>
+<span id="L114"><span class="lineNum">     114</span>              :                     xAxis={[{ dataKey: &quot;hour&quot;, scaleType: &quot;band&quot;, tickLabelStyle: { fontSize: 10 } }]}</span>
+<span id="L115"><span class="lineNum">     115</span>              :                     series={[</span>
+<span id="L116"><span class="lineNum">     116</span>              :                       {</span>
+<span id="L117"><span class="lineNum">     117</span>              :                         dataKey: &quot;avg_listeners&quot;,</span>
+<span id="L118"><span class="lineNum">     118</span>              :                         label: t(&quot;stations:listeners&quot;),</span>
+<span id="L119"><span class="lineNum">     119</span> <span class="tlaUNC">           0 :                         valueFormatter: (v) =&gt; `${Math.round((v as number) ?? 0)}`,</span></span>
+<span id="L120"><span class="lineNum">     120</span>              :                       },</span>
+<span id="L121"><span class="lineNum">     121</span>              :                     ]}</span>
+<span id="L122"><span class="lineNum">     122</span>              :                     margin={{ top: 10, right: 10, bottom: 30, left: 40 }}</span>
+<span id="L123"><span class="lineNum">     123</span>              :                   /&gt;</span>
+<span id="L124"><span class="lineNum">     124</span>              :                 ) : (</span>
+<span id="L125"><span class="lineNum">     125</span>              :                   &lt;Typography color=&quot;text.secondary&quot;&gt;{t(&quot;stations:listeners_empty&quot;)}&lt;/Typography&gt;</span>
+<span id="L126"><span class="lineNum">     126</span>              :                 )}</span>
+<span id="L127"><span class="lineNum">     127</span>              :               &lt;/Box&gt;</span>
+<span id="L128"><span class="lineNum">     128</span>              : </span>
+<span id="L129"><span class="lineNum">     129</span>              :               &lt;Box&gt;</span>
+<span id="L130"><span class="lineNum">     130</span>              :                 &lt;Typography variant=&quot;body2&quot; color=&quot;text.secondary&quot; sx={{ fontWeight: 500, mb: 1 }}&gt;</span>
+<span id="L131"><span class="lineNum">     131</span>              :                   {t(&quot;dashboard:listeners_by_weekday&quot;)}</span>
+<span id="L132"><span class="lineNum">     132</span>              :                 &lt;/Typography&gt;</span>
+<span id="L133"><span class="lineNum">     133</span>              :                 {weekdays.length &gt; 0 ? (</span>
+<span id="L134"><span class="lineNum">     134</span>              :                   &lt;BarChart</span>
+<span id="L135"><span class="lineNum">     135</span>              :                     height={200}</span>
+<span id="L136"><span class="lineNum">     136</span>              :                     dataset={weekdays}</span>
+<span id="L137"><span class="lineNum">     137</span>              :                     xAxis={[{ dataKey: &quot;weekday&quot;, scaleType: &quot;band&quot;, tickLabelStyle: { fontSize: 10 } }]}</span>
+<span id="L138"><span class="lineNum">     138</span>              :                     series={[</span>
+<span id="L139"><span class="lineNum">     139</span>              :                       {</span>
+<span id="L140"><span class="lineNum">     140</span>              :                         dataKey: &quot;avg_listeners&quot;,</span>
+<span id="L141"><span class="lineNum">     141</span>              :                         label: t(&quot;stations:listeners&quot;),</span>
+<span id="L142"><span class="lineNum">     142</span> <span class="tlaUNC">           0 :                         valueFormatter: (v) =&gt; `${Math.round((v as number) ?? 0)}`,</span></span>
+<span id="L143"><span class="lineNum">     143</span>              :                       },</span>
+<span id="L144"><span class="lineNum">     144</span>              :                     ]}</span>
+<span id="L145"><span class="lineNum">     145</span>              :                     margin={{ top: 10, right: 10, bottom: 30, left: 40 }}</span>
+<span id="L146"><span class="lineNum">     146</span>              :                   /&gt;</span>
+<span id="L147"><span class="lineNum">     147</span>              :                 ) : (</span>
+<span id="L148"><span class="lineNum">     148</span>              :                   &lt;Typography color=&quot;text.secondary&quot;&gt;{t(&quot;stations:listeners_empty&quot;)}&lt;/Typography&gt;</span>
+<span id="L149"><span class="lineNum">     149</span>              :                 )}</span>
+<span id="L150"><span class="lineNum">     150</span>              :               &lt;/Box&gt;</span>
+<span id="L151"><span class="lineNum">     151</span>              :             &lt;/Box&gt;</span>
+<span id="L152"><span class="lineNum">     152</span>              : </span>
+<span id="L153"><span class="lineNum">     153</span>              :             {data &amp;&amp; data.stations.length &gt; 0 &amp;&amp; (</span>
+<span id="L154"><span class="lineNum">     154</span>              :               &lt;&gt;</span>
+<span id="L155"><span class="lineNum">     155</span>              :                 &lt;Divider sx={{ my: 3 }} /&gt;</span>
+<span id="L156"><span class="lineNum">     156</span>              :                 &lt;Typography variant=&quot;body2&quot; color=&quot;text.secondary&quot; sx={{ fontWeight: 500, mb: 1 }}&gt;</span>
+<span id="L157"><span class="lineNum">     157</span>              :                   {t(&quot;dashboard:listeners_per_station&quot;)}</span>
+<span id="L158"><span class="lineNum">     158</span>              :                 &lt;/Typography&gt;</span>
+<span id="L159"><span class="lineNum">     159</span>              :                 &lt;Box sx={{ display: &quot;flex&quot;, flexDirection: &quot;column&quot;, gap: 0.5 }}&gt;</span>
+<span id="L160"><span class="lineNum">     160</span> <span class="tlaGNC tlaBgGNC">          12 :                   {data.stations.map((station) =&gt; (</span></span>
+<span id="L161"><span class="lineNum">     161</span> <span class="tlaGNC">          12 :                     &lt;Box</span></span>
+<span id="L162"><span class="lineNum">     162</span>              :                       key={station.station_id}</span>
+<span id="L163"><span class="lineNum">     163</span>              :                       sx={{</span>
+<span id="L164"><span class="lineNum">     164</span>              :                         display: &quot;flex&quot;,</span>
+<span id="L165"><span class="lineNum">     165</span>              :                         alignItems: &quot;center&quot;,</span>
+<span id="L166"><span class="lineNum">     166</span>              :                         justifyContent: &quot;space-between&quot;,</span>
+<span id="L167"><span class="lineNum">     167</span>              :                         p: 1,</span>
+<span id="L168"><span class="lineNum">     168</span>              :                         borderRadius: 1,</span>
+<span id="L169"><span class="lineNum">     169</span>              :                         &quot;&amp;:hover&quot;: { bgcolor: &quot;action.hover&quot; },</span>
+<span id="L170"><span class="lineNum">     170</span>              :                       }}</span>
+<span id="L171"><span class="lineNum">     171</span>              :                     &gt;</span>
+<span id="L172"><span class="lineNum">     172</span>              :                       &lt;Typography variant=&quot;body2&quot; sx={{ fontWeight: 500 }}&gt;</span>
+<span id="L173"><span class="lineNum">     173</span>              :                         {station.name}</span>
+<span id="L174"><span class="lineNum">     174</span>              :                       &lt;/Typography&gt;</span>
+<span id="L175"><span class="lineNum">     175</span>              :                       &lt;Typography variant=&quot;body2&quot; color={station.online ? &quot;text.primary&quot; : &quot;text.disabled&quot;}&gt;</span>
+<span id="L176"><span class="lineNum">     176</span>              :                         {station.online ? station.listeners : &quot;—&quot;}</span>
+<span id="L177"><span class="lineNum">     177</span>              :                       &lt;/Typography&gt;</span>
+<span id="L178"><span class="lineNum">     178</span>              :                     &lt;/Box&gt;</span>
+<span id="L179"><span class="lineNum">     179</span>              :                   ))}</span>
+<span id="L180"><span class="lineNum">     180</span>              :                 &lt;/Box&gt;</span>
+<span id="L181"><span class="lineNum">     181</span>              :               &lt;/&gt;</span>
+<span id="L182"><span class="lineNum">     182</span>              :             )}</span>
+<span id="L183"><span class="lineNum">     183</span>              :           &lt;/&gt;</span>
+<span id="L184"><span class="lineNum">     184</span>              :         )}</span>
+<span id="L185"><span class="lineNum">     185</span>              :       &lt;/CardContent&gt;</span>
+<span id="L186"><span class="lineNum">     186</span>              :     &lt;/Card&gt;</span>
+<span id="L187"><span class="lineNum">     187</span>              :   );</span>
+<span id="L188"><span class="lineNum">     188</span>              : }</span>
+        </pre>
+              </td>
+            </tr>
+          </table>
+          <br>
+
+          <table width="100%" border=0 cellspacing=0 cellpadding=0>
+            <tr><td class="ruler"><img src="../../../../../../glass.png" width=3 height=3 alt=""></td></tr>
+            <tr><td class="versionInfo">Generated by: <a href="https://github.com//linux-test-project/lcov" target="_parent">LCOV version 2.0-1</a></td></tr>
+          </table>
+          <br>
+
+</body>
+</html>

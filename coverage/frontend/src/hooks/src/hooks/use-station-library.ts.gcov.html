@@ -1,0 +1,114 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN">
+
+<html lang="en">
+
+<head>
+  <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+  <title>LCOV - lcov.info - src/hooks/src/hooks/use-station-library.ts</title>
+  <link rel="stylesheet" type="text/css" href="../../../../gcov.css">
+</head>
+
+<body>
+
+          <table width="100%" border=0 cellspacing=0 cellpadding=0>
+            <tr><td class="title">LCOV - code coverage report</td></tr>
+            <tr><td class="ruler"><img src="../../../../glass.png" width=3 height=3 alt=""></td></tr>
+
+            <tr>
+              <td width="100%">
+                <table cellpadding=1 border=0 width="100%">
+          <tr>
+            <td width="10%" class="headerItem">Current view:</td>
+            <td width="10%" class="headerValue"><a href="../../../../index.html">top level</a> - <a href="index.html">src/hooks/src/hooks</a> - use-station-library.ts<span style="font-size: 80%;"> (source / <a href="use-station-library.ts.func-c.html">functions</a>)</span></td>
+            <td width="5%"></td>
+            <td width="5%"></td>
+            <td width="5%" class="headerCovTableHead">Coverage</td>
+            <td width="5%" class="headerCovTableHead" title="Covered + Uncovered code">Total</td>
+            <td width="5%" class="headerCovTableHead" title="Exercised code only">Hit</td>
+          </tr>
+          <tr>
+            <td class="headerItem">Test:</td>
+            <td class="headerValue">lcov.info</td>
+            <td></td>
+            <td class="headerItem">Lines:</td>
+            <td class="headerCovTableEntryHi">100.0&nbsp;%</td>
+            <td class="headerCovTableEntry">11</td>
+            <td class="headerCovTableEntry">11</td>
+          </tr>
+          <tr>
+            <td class="headerItem">Test Date:</td>
+            <td class="headerValue">2026-09-06 00:49:56</td>
+            <td></td>
+            <td class="headerItem">Functions:</td>
+            <td class="headerCovTableEntryHi">100.0&nbsp;%</td>
+            <td class="headerCovTableEntry">9</td>
+            <td class="headerCovTableEntry">9</td>
+          </tr>
+                  <tr><td><img src="../../../../glass.png" width=3 height=3 alt=""></td></tr>
+                </table>
+              </td>
+            </tr>
+
+            <tr><td class="ruler"><img src="../../../../glass.png" width=3 height=3 alt=""></td></tr>
+          </table>
+
+          <table cellpadding=0 cellspacing=0 border=0>
+            <tr>
+              <td><br></td>
+            </tr>
+            <tr>
+              <td>
+<pre class="sourceHeading">            Line data    Source code</pre>
+<pre class="source">
+<span id="L1"><span class="lineNum">       1</span>              : import { useMutation, useQuery, useQueryClient } from &quot;@tanstack/react-query&quot;;</span>
+<span id="L2"><span class="lineNum">       2</span>              : import { stationLibraryService } from &quot;@/lib/services/station-library&quot;;</span>
+<span id="L3"><span class="lineNum">       3</span>              : import type { SongSelections } from &quot;@/types&quot;;</span>
+<span id="L4"><span class="lineNum">       4</span>              : </span>
+<span id="L5"><span class="lineNum">       5</span> <span class="tlaGNC tlaBgGNC">           9 : export function useStationSongs(stationId: string, page: number = 1, perPage: number = 50) {</span></span>
+<span id="L6"><span class="lineNum">       6</span> <span class="tlaGNC">           9 :   return useQuery({</span></span>
+<span id="L7"><span class="lineNum">       7</span>              :     queryKey: [&quot;station-songs&quot;, stationId, page, perPage],</span>
+<span id="L8"><span class="lineNum">       8</span> <span class="tlaGNC">           4 :     queryFn: () =&gt; stationLibraryService.list(stationId, { page, per_page: perPage }),</span></span>
+<span id="L9"><span class="lineNum">       9</span>              :     enabled: !!stationId,</span>
+<span id="L10"><span class="lineNum">      10</span>              :   });</span>
+<span id="L11"><span class="lineNum">      11</span>              : }</span>
+<span id="L12"><span class="lineNum">      12</span>              : </span>
+<span id="L13"><span class="lineNum">      13</span> <span class="tlaGNC">          15 : export function useStationSongsAll(stationId: string) {</span></span>
+<span id="L14"><span class="lineNum">      14</span> <span class="tlaGNC">          15 :   return useQuery({</span></span>
+<span id="L15"><span class="lineNum">      15</span>              :     queryKey: [&quot;station-songs&quot;, stationId, &quot;all&quot;],</span>
+<span id="L16"><span class="lineNum">      16</span> <span class="tlaGNC">           8 :     queryFn: () =&gt; stationLibraryService.list(stationId, { per_page: 100000 }),</span></span>
+<span id="L17"><span class="lineNum">      17</span>              :     enabled: !!stationId,</span>
+<span id="L18"><span class="lineNum">      18</span>              :     staleTime: 30000,</span>
+<span id="L19"><span class="lineNum">      19</span>              :   });</span>
+<span id="L20"><span class="lineNum">      20</span>              : }</span>
+<span id="L21"><span class="lineNum">      21</span>              : </span>
+<span id="L22"><span class="lineNum">      22</span> <span class="tlaGNC">          11 : export function useAddStationSongs(stationId: string) {</span></span>
+<span id="L23"><span class="lineNum">      23</span> <span class="tlaGNC">          11 :   return useMutation({</span></span>
+<span id="L24"><span class="lineNum">      24</span> <span class="tlaGNC">           1 :     mutationFn: (data: SongSelections) =&gt; stationLibraryService.add(stationId, data),</span></span>
+<span id="L25"><span class="lineNum">      25</span>              :   });</span>
+<span id="L26"><span class="lineNum">      26</span>              : }</span>
+<span id="L27"><span class="lineNum">      27</span>              : </span>
+<span id="L28"><span class="lineNum">      28</span> <span class="tlaGNC">           8 : export function useRemoveStationSong(stationId: string) {</span></span>
+<span id="L29"><span class="lineNum">      29</span> <span class="tlaGNC">           8 :   const queryClient = useQueryClient();</span></span>
+<span id="L30"><span class="lineNum">      30</span>              : </span>
+<span id="L31"><span class="lineNum">      31</span> <span class="tlaGNC">           8 :   return useMutation({</span></span>
+<span id="L32"><span class="lineNum">      32</span> <span class="tlaGNC">           1 :     mutationFn: (songId: string) =&gt; stationLibraryService.remove(stationId, songId),</span></span>
+<span id="L33"><span class="lineNum">      33</span> <span class="tlaGNC">           1 :     onSuccess: () =&gt; {</span></span>
+<span id="L34"><span class="lineNum">      34</span> <span class="tlaGNC">           1 :       queryClient.invalidateQueries({ queryKey: [&quot;station-songs&quot;, stationId] });</span></span>
+<span id="L35"><span class="lineNum">      35</span> <span class="tlaGNC">           1 :       queryClient.invalidateQueries({ queryKey: [&quot;station-queue&quot;, stationId] });</span></span>
+<span id="L36"><span class="lineNum">      36</span>              :     },</span>
+<span id="L37"><span class="lineNum">      37</span>              :   });</span>
+<span id="L38"><span class="lineNum">      38</span>              : }</span>
+        </pre>
+              </td>
+            </tr>
+          </table>
+          <br>
+
+          <table width="100%" border=0 cellspacing=0 cellpadding=0>
+            <tr><td class="ruler"><img src="../../../../glass.png" width=3 height=3 alt=""></td></tr>
+            <tr><td class="versionInfo">Generated by: <a href="https://github.com//linux-test-project/lcov" target="_parent">LCOV version 2.0-1</a></td></tr>
+          </table>
+          <br>
+
+</body>
+</html>
