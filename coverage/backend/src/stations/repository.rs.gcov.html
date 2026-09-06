@@ -37,7 +37,7 @@
           </tr>
           <tr>
             <td class="headerItem">Test Date:</td>
-            <td class="headerValue">2026-09-06 00:49:55</td>
+            <td class="headerValue">2026-09-06 18:16:30</td>
             <td></td>
             <td class="headerItem">Functions:</td>
             <td class="headerCovTableEntryLo">55.2&nbsp;%</td>
@@ -73,13 +73,13 @@
 <span id="L11"><span class="lineNum">      11</span> <span class="tlaGNC">          11 :         .db_error(&quot;failed to list stations&quot;)</span></span>
 <span id="L12"><span class="lineNum">      12</span> <span class="tlaGNC">          11 : }</span></span>
 <span id="L13"><span class="lineNum">      13</span>              : </span>
-<span id="L14"><span class="lineNum">      14</span> <span class="tlaGNC">         401 : pub async fn find_station_by_id(db: &amp;PgPool, id: Uuid) -&gt; Result&lt;Option&lt;Station&gt;, AppError&gt; {</span></span>
-<span id="L15"><span class="lineNum">      15</span> <span class="tlaGNC">         401 :     sqlx::query_as::&lt;_, Station&gt;(&quot;SELECT * FROM stations WHERE id = $1&quot;)</span></span>
-<span id="L16"><span class="lineNum">      16</span> <span class="tlaGNC">         401 :         .bind(id)</span></span>
-<span id="L17"><span class="lineNum">      17</span> <span class="tlaGNC">         401 :         .fetch_optional(db)</span></span>
-<span id="L18"><span class="lineNum">      18</span> <span class="tlaGNC">         401 :         .await</span></span>
-<span id="L19"><span class="lineNum">      19</span> <span class="tlaGNC">         401 :         .db_error(&quot;failed to find station&quot;)</span></span>
-<span id="L20"><span class="lineNum">      20</span> <span class="tlaGNC">         401 : }</span></span>
+<span id="L14"><span class="lineNum">      14</span> <span class="tlaGNC">         400 : pub async fn find_station_by_id(db: &amp;PgPool, id: Uuid) -&gt; Result&lt;Option&lt;Station&gt;, AppError&gt; {</span></span>
+<span id="L15"><span class="lineNum">      15</span> <span class="tlaGNC">         400 :     sqlx::query_as::&lt;_, Station&gt;(&quot;SELECT * FROM stations WHERE id = $1&quot;)</span></span>
+<span id="L16"><span class="lineNum">      16</span> <span class="tlaGNC">         400 :         .bind(id)</span></span>
+<span id="L17"><span class="lineNum">      17</span> <span class="tlaGNC">         400 :         .fetch_optional(db)</span></span>
+<span id="L18"><span class="lineNum">      18</span> <span class="tlaGNC">         400 :         .await</span></span>
+<span id="L19"><span class="lineNum">      19</span> <span class="tlaGNC">         400 :         .db_error(&quot;failed to find station&quot;)</span></span>
+<span id="L20"><span class="lineNum">      20</span> <span class="tlaGNC">         400 : }</span></span>
 <span id="L21"><span class="lineNum">      21</span>              : </span>
 <span id="L22"><span class="lineNum">      22</span>              : pub struct PlaybackSettings {</span>
 <span id="L23"><span class="lineNum">      23</span>              :     pub transition_mode: String,</span>
@@ -330,24 +330,24 @@
 <span id="L268"><span class="lineNum">     268</span> <span class="tlaGNC">          95 :         .ok_or_else(|| AppError::NotFound(&quot;Station not found&quot;.into()))</span></span>
 <span id="L269"><span class="lineNum">     269</span> <span class="tlaGNC">          95 : }</span></span>
 <span id="L270"><span class="lineNum">     270</span>              : </span>
-<span id="L271"><span class="lineNum">     271</span> <span class="tlaGNC">         219 : pub async fn find_station_song_info(</span></span>
-<span id="L272"><span class="lineNum">     272</span> <span class="tlaGNC">         219 :     db: &amp;PgPool,</span></span>
-<span id="L273"><span class="lineNum">     273</span> <span class="tlaGNC">         219 :     station_id: Uuid,</span></span>
-<span id="L274"><span class="lineNum">     274</span> <span class="tlaGNC">         219 : ) -&gt; Result&lt;Vec&lt;(String, String, String, i32, Uuid, Uuid, i32, f64, f64, f64, bool)&gt;, AppError&gt; {</span></span>
-<span id="L275"><span class="lineNum">     275</span> <span class="tlaGNC">         219 :     sqlx::query_as::&lt;_, (String, String, String, i32, Uuid, Uuid, i32, f64, f64, f64, bool)&gt;(</span></span>
-<span id="L276"><span class="lineNum">     276</span> <span class="tlaGNC">         219 :         r#&quot;SELECT s.file_path, s.title, s.artist, s.duration, sq.id, s.id, sq.position,</span></span>
-<span id="L277"><span class="lineNum">     277</span> <span class="tlaGNC">         219 :                   s.cue_in, s.cue_out, s.cross_start_next,</span></span>
-<span id="L278"><span class="lineNum">     278</span> <span class="tlaGNC">         219 :                   (s.analyzed_at IS NOT NULL)::bool AS analyzed</span></span>
-<span id="L279"><span class="lineNum">     279</span> <span class="tlaGNC">         219 :            FROM station_queue sq</span></span>
-<span id="L280"><span class="lineNum">     280</span> <span class="tlaGNC">         219 :            JOIN songs s ON s.id = sq.song_id</span></span>
-<span id="L281"><span class="lineNum">     281</span> <span class="tlaGNC">         219 :            WHERE sq.station_id = $1</span></span>
-<span id="L282"><span class="lineNum">     282</span> <span class="tlaGNC">         219 :            ORDER BY sq.position&quot;#,</span></span>
-<span id="L283"><span class="lineNum">     283</span> <span class="tlaGNC">         219 :     )</span></span>
-<span id="L284"><span class="lineNum">     284</span> <span class="tlaGNC">         219 :     .bind(station_id)</span></span>
-<span id="L285"><span class="lineNum">     285</span> <span class="tlaGNC">         219 :     .fetch_all(db)</span></span>
-<span id="L286"><span class="lineNum">     286</span> <span class="tlaGNC">         219 :     .await</span></span>
-<span id="L287"><span class="lineNum">     287</span> <span class="tlaGNC">         219 :     .db_error(&quot;failed to load station songs&quot;)</span></span>
-<span id="L288"><span class="lineNum">     288</span> <span class="tlaGNC">         219 : }</span></span>
+<span id="L271"><span class="lineNum">     271</span> <span class="tlaGNC">         217 : pub async fn find_station_song_info(</span></span>
+<span id="L272"><span class="lineNum">     272</span> <span class="tlaGNC">         217 :     db: &amp;PgPool,</span></span>
+<span id="L273"><span class="lineNum">     273</span> <span class="tlaGNC">         217 :     station_id: Uuid,</span></span>
+<span id="L274"><span class="lineNum">     274</span> <span class="tlaGNC">         217 : ) -&gt; Result&lt;Vec&lt;(String, String, String, i32, Uuid, Uuid, i32, f64, f64, f64, bool)&gt;, AppError&gt; {</span></span>
+<span id="L275"><span class="lineNum">     275</span> <span class="tlaGNC">         217 :     sqlx::query_as::&lt;_, (String, String, String, i32, Uuid, Uuid, i32, f64, f64, f64, bool)&gt;(</span></span>
+<span id="L276"><span class="lineNum">     276</span> <span class="tlaGNC">         217 :         r#&quot;SELECT s.file_path, s.title, s.artist, s.duration, sq.id, s.id, sq.position,</span></span>
+<span id="L277"><span class="lineNum">     277</span> <span class="tlaGNC">         217 :                   s.cue_in, s.cue_out, s.cross_start_next,</span></span>
+<span id="L278"><span class="lineNum">     278</span> <span class="tlaGNC">         217 :                   (s.analyzed_at IS NOT NULL)::bool AS analyzed</span></span>
+<span id="L279"><span class="lineNum">     279</span> <span class="tlaGNC">         217 :            FROM station_queue sq</span></span>
+<span id="L280"><span class="lineNum">     280</span> <span class="tlaGNC">         217 :            JOIN songs s ON s.id = sq.song_id</span></span>
+<span id="L281"><span class="lineNum">     281</span> <span class="tlaGNC">         217 :            WHERE sq.station_id = $1</span></span>
+<span id="L282"><span class="lineNum">     282</span> <span class="tlaGNC">         217 :            ORDER BY sq.position&quot;#,</span></span>
+<span id="L283"><span class="lineNum">     283</span> <span class="tlaGNC">         217 :     )</span></span>
+<span id="L284"><span class="lineNum">     284</span> <span class="tlaGNC">         217 :     .bind(station_id)</span></span>
+<span id="L285"><span class="lineNum">     285</span> <span class="tlaGNC">         217 :     .fetch_all(db)</span></span>
+<span id="L286"><span class="lineNum">     286</span> <span class="tlaGNC">         217 :     .await</span></span>
+<span id="L287"><span class="lineNum">     287</span> <span class="tlaGNC">         217 :     .db_error(&quot;failed to load station songs&quot;)</span></span>
+<span id="L288"><span class="lineNum">     288</span> <span class="tlaGNC">         217 : }</span></span>
 <span id="L289"><span class="lineNum">     289</span>              : </span>
 <span id="L290"><span class="lineNum">     290</span> <span class="tlaGNC">           5 : pub async fn resolve_station_id_from_slug(db: &amp;PgPool, slug: &amp;str) -&gt; Result&lt;Uuid, AppError&gt; {</span></span>
 <span id="L291"><span class="lineNum">     291</span> <span class="tlaGNC">           5 :     sqlx::query_scalar::&lt;_, Uuid&gt;(&quot;SELECT id FROM stations WHERE slug = $1&quot;)</span></span>

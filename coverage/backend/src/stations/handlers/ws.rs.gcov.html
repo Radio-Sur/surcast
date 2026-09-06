@@ -37,7 +37,7 @@
           </tr>
           <tr>
             <td class="headerItem">Test Date:</td>
-            <td class="headerValue">2026-09-06 00:49:55</td>
+            <td class="headerValue">2026-09-06 18:16:30</td>
             <td></td>
             <td class="headerItem">Functions:</td>
             <td class="headerCovTableEntryLo">46.7&nbsp;%</td>
@@ -248,19 +248,19 @@
 <span id="L186"><span class="lineNum">     186</span> <span class="tlaGNC tlaBgGNC">          19 : async fn ws_send_task(mut sender: SplitSink&lt;WebSocket, Message&gt;, mut out_rx: mpsc::UnboundedReceiver&lt;Outbound&gt;) {</span></span>
 <span id="L187"><span class="lineNum">     187</span> <span class="tlaGNC">          19 :     let mut heartbeat = tokio::time::interval(Duration::from_secs(15));</span></span>
 <span id="L188"><span class="lineNum">     188</span>              :     loop {</span>
-<span id="L189"><span class="lineNum">     189</span> <span class="tlaGNC">         100 :         tokio::select! {</span></span>
-<span id="L190"><span class="lineNum">     190</span> <span class="tlaGNC">         100 :             _ = heartbeat.tick() =&gt; {</span></span>
+<span id="L189"><span class="lineNum">     189</span> <span class="tlaGNC">         102 :         tokio::select! {</span></span>
+<span id="L190"><span class="lineNum">     190</span> <span class="tlaGNC">         102 :             _ = heartbeat.tick() =&gt; {</span></span>
 <span id="L191"><span class="lineNum">     191</span> <span class="tlaGNC">          19 :                 if sender.send(Message::Ping(vec![].into())).await.is_err() {</span></span>
 <span id="L192"><span class="lineNum">     192</span> <span class="tlaUNC tlaBgUNC">           0 :                     return;</span></span>
 <span id="L193"><span class="lineNum">     193</span> <span class="tlaGNC tlaBgGNC">          19 :                 }</span></span>
 <span id="L194"><span class="lineNum">     194</span>              :             }</span>
-<span id="L195"><span class="lineNum">     195</span> <span class="tlaGNC">         100 :             msg = out_rx.recv() =&gt; {</span></span>
-<span id="L196"><span class="lineNum">     196</span> <span class="tlaGNC">          62 :                 match msg {</span></span>
-<span id="L197"><span class="lineNum">     197</span> <span class="tlaGNC">          62 :                     Some(out) =&gt; {</span></span>
-<span id="L198"><span class="lineNum">     198</span> <span class="tlaGNC">          62 :                         let text = serde_json::to_string(&amp;out).unwrap_or_default();</span></span>
-<span id="L199"><span class="lineNum">     199</span> <span class="tlaGNC">          62 :                         if sender.send(Message::Text(text.into())).await.is_err() {</span></span>
+<span id="L195"><span class="lineNum">     195</span> <span class="tlaGNC">         102 :             msg = out_rx.recv() =&gt; {</span></span>
+<span id="L196"><span class="lineNum">     196</span> <span class="tlaGNC">          64 :                 match msg {</span></span>
+<span id="L197"><span class="lineNum">     197</span> <span class="tlaGNC">          64 :                     Some(out) =&gt; {</span></span>
+<span id="L198"><span class="lineNum">     198</span> <span class="tlaGNC">          64 :                         let text = serde_json::to_string(&amp;out).unwrap_or_default();</span></span>
+<span id="L199"><span class="lineNum">     199</span> <span class="tlaGNC">          64 :                         if sender.send(Message::Text(text.into())).await.is_err() {</span></span>
 <span id="L200"><span class="lineNum">     200</span> <span class="tlaUNC tlaBgUNC">           0 :                             return;</span></span>
-<span id="L201"><span class="lineNum">     201</span> <span class="tlaGNC tlaBgGNC">          62 :                         }</span></span>
+<span id="L201"><span class="lineNum">     201</span> <span class="tlaGNC tlaBgGNC">          64 :                         }</span></span>
 <span id="L202"><span class="lineNum">     202</span>              :                     }</span>
 <span id="L203"><span class="lineNum">     203</span> <span class="tlaUNC tlaBgUNC">           0 :                     None =&gt; return,</span></span>
 <span id="L204"><span class="lineNum">     204</span>              :                 }</span>
@@ -496,32 +496,32 @@
 <span id="L434"><span class="lineNum">     434</span> <span class="tlaGNC">          14 :             let mut last_is_started = None;</span></span>
 <span id="L435"><span class="lineNum">     435</span> <span class="tlaGNC">          14 :             let mut force_queue = false;</span></span>
 <span id="L436"><span class="lineNum">     436</span>              :             loop {</span>
-<span id="L437"><span class="lineNum">     437</span> <span class="tlaGNC">          23 :                 match no_runtime_snapshot(</span></span>
-<span id="L438"><span class="lineNum">     438</span> <span class="tlaGNC">          23 :                     &amp;db,</span></span>
-<span id="L439"><span class="lineNum">     439</span> <span class="tlaGNC">          23 :                     &amp;upload_dir,</span></span>
-<span id="L440"><span class="lineNum">     440</span> <span class="tlaGNC">          23 :                     &amp;streamers,</span></span>
-<span id="L441"><span class="lineNum">     441</span> <span class="tlaGNC">          23 :                     &amp;lifecycle,</span></span>
-<span id="L442"><span class="lineNum">     442</span> <span class="tlaGNC">          23 :                     station_id,</span></span>
-<span id="L443"><span class="lineNum">     443</span> <span class="tlaGNC">          23 :                     &amp;out_tx,</span></span>
-<span id="L444"><span class="lineNum">     444</span> <span class="tlaGNC">          23 :                     last_is_started,</span></span>
-<span id="L445"><span class="lineNum">     445</span> <span class="tlaGNC">          23 :                     force_queue,</span></span>
+<span id="L437"><span class="lineNum">     437</span> <span class="tlaGNC">          24 :                 match no_runtime_snapshot(</span></span>
+<span id="L438"><span class="lineNum">     438</span> <span class="tlaGNC">          24 :                     &amp;db,</span></span>
+<span id="L439"><span class="lineNum">     439</span> <span class="tlaGNC">          24 :                     &amp;upload_dir,</span></span>
+<span id="L440"><span class="lineNum">     440</span> <span class="tlaGNC">          24 :                     &amp;streamers,</span></span>
+<span id="L441"><span class="lineNum">     441</span> <span class="tlaGNC">          24 :                     &amp;lifecycle,</span></span>
+<span id="L442"><span class="lineNum">     442</span> <span class="tlaGNC">          24 :                     station_id,</span></span>
+<span id="L443"><span class="lineNum">     443</span> <span class="tlaGNC">          24 :                     &amp;out_tx,</span></span>
+<span id="L444"><span class="lineNum">     444</span> <span class="tlaGNC">          24 :                     last_is_started,</span></span>
+<span id="L445"><span class="lineNum">     445</span> <span class="tlaGNC">          24 :                     force_queue,</span></span>
 <span id="L446"><span class="lineNum">     446</span>              :                 )</span>
-<span id="L447"><span class="lineNum">     447</span> <span class="tlaGNC">          23 :                 .await</span></span>
+<span id="L447"><span class="lineNum">     447</span> <span class="tlaGNC">          24 :                 .await</span></span>
 <span id="L448"><span class="lineNum">     448</span>              :                 {</span>
-<span id="L449"><span class="lineNum">     449</span> <span class="tlaGNC">          17 :                     NoRuntimeSnapshot::Sent { is_started } =&gt; last_is_started = Some(is_started),</span></span>
+<span id="L449"><span class="lineNum">     449</span> <span class="tlaGNC">          18 :                     NoRuntimeSnapshot::Sent { is_started } =&gt; last_is_started = Some(is_started),</span></span>
 <span id="L450"><span class="lineNum">     450</span> <span class="tlaGNC">           5 :                     NoRuntimeSnapshot::RuntimePresent =&gt; break,</span></span>
 <span id="L451"><span class="lineNum">     451</span> <span class="tlaGNC">           1 :                     NoRuntimeSnapshot::StationGone =&gt; return,</span></span>
 <span id="L452"><span class="lineNum">     452</span> <span class="tlaUNC tlaBgUNC">           0 :                     NoRuntimeSnapshot::DbError =&gt; {}</span></span>
 <span id="L453"><span class="lineNum">     453</span> <span class="tlaUNC">           0 :                     NoRuntimeSnapshot::ConnectionGone =&gt; return,</span></span>
 <span id="L454"><span class="lineNum">     454</span>              :                 }</span>
-<span id="L455"><span class="lineNum">     455</span> <span class="tlaGNC tlaBgGNC">          17 :                 let mut lifecycle_changed = false;</span></span>
-<span id="L456"><span class="lineNum">     456</span> <span class="tlaGNC">          17 :                 let mut queue_changed = false;</span></span>
+<span id="L455"><span class="lineNum">     455</span> <span class="tlaGNC tlaBgGNC">          18 :                 let mut lifecycle_changed = false;</span></span>
+<span id="L456"><span class="lineNum">     456</span> <span class="tlaGNC">          18 :                 let mut queue_changed = false;</span></span>
 <span id="L457"><span class="lineNum">     457</span>              :                 loop {</span>
-<span id="L458"><span class="lineNum">     458</span> <span class="tlaGNC">          19 :                     tokio::select! {</span></span>
-<span id="L459"><span class="lineNum">     459</span> <span class="tlaGNC">          19 :                         _ = tokio::time::sleep(Duration::from_millis(200)) =&gt; {}</span></span>
-<span id="L460"><span class="lineNum">     460</span> <span class="tlaGNC">          19 :                         _ = out_tx.closed() =&gt; return,</span></span>
-<span id="L461"><span class="lineNum">     461</span> <span class="tlaGNC">          19 :                         event = notifications.recv() =&gt; match event {</span></span>
-<span id="L462"><span class="lineNum">     462</span> <span class="tlaGNC">           5 :                             Ok(StationEvent::Lifecycle { station_id: id }) if id == station_id =&gt; lifecycle_changed = true,</span></span>
+<span id="L458"><span class="lineNum">     458</span> <span class="tlaGNC">          20 :                     tokio::select! {</span></span>
+<span id="L459"><span class="lineNum">     459</span> <span class="tlaGNC">          20 :                         _ = tokio::time::sleep(Duration::from_millis(200)) =&gt; {}</span></span>
+<span id="L460"><span class="lineNum">     460</span> <span class="tlaGNC">          20 :                         _ = out_tx.closed() =&gt; return,</span></span>
+<span id="L461"><span class="lineNum">     461</span> <span class="tlaGNC">          20 :                         event = notifications.recv() =&gt; match event {</span></span>
+<span id="L462"><span class="lineNum">     462</span> <span class="tlaGNC">           6 :                             Ok(StationEvent::Lifecycle { station_id: id }) if id == station_id =&gt; lifecycle_changed = true,</span></span>
 <span id="L463"><span class="lineNum">     463</span> <span class="tlaGNC">           6 :                             Ok(StationEvent::Queue { station_id: id }) if id == station_id =&gt; queue_changed = true,</span></span>
 <span id="L464"><span class="lineNum">     464</span>              :                             // Another station's change: nothing to re-read.</span>
 <span id="L465"><span class="lineNum">     465</span> <span class="tlaGNC">           2 :                             Ok(_) =&gt; continue,</span></span>
@@ -535,19 +535,19 @@
 <span id="L473"><span class="lineNum">     473</span> <span class="tlaUNC">           0 :                             Err(broadcast::error::RecvError::Closed) =&gt; lifecycle_changed = true,</span></span>
 <span id="L474"><span class="lineNum">     474</span>              :                         },</span>
 <span id="L475"><span class="lineNum">     475</span>              :                     }</span>
-<span id="L476"><span class="lineNum">     476</span> <span class="tlaGNC tlaBgGNC">           9 :                     if get_streamer(&amp;streamers, &amp;station_id).is_some() {</span></span>
+<span id="L476"><span class="lineNum">     476</span> <span class="tlaGNC tlaBgGNC">          10 :                     if get_streamer(&amp;streamers, &amp;station_id).is_some() {</span></span>
 <span id="L477"><span class="lineNum">     477</span> <span class="tlaUNC tlaBgUNC">           0 :                         break;</span></span>
-<span id="L478"><span class="lineNum">     478</span> <span class="tlaGNC tlaBgGNC">           9 :                     }</span></span>
-<span id="L479"><span class="lineNum">     479</span> <span class="tlaGNC">           9 :                     if lifecycle_changed || queue_changed {</span></span>
-<span id="L480"><span class="lineNum">     480</span> <span class="tlaGNC">           9 :                         break;</span></span>
+<span id="L478"><span class="lineNum">     478</span> <span class="tlaGNC tlaBgGNC">          10 :                     }</span></span>
+<span id="L479"><span class="lineNum">     479</span> <span class="tlaGNC">          10 :                     if lifecycle_changed || queue_changed {</span></span>
+<span id="L480"><span class="lineNum">     480</span> <span class="tlaGNC">          10 :                         break;</span></span>
 <span id="L481"><span class="lineNum">     481</span> <span class="tlaUNC tlaBgUNC">           0 :                     }</span></span>
 <span id="L482"><span class="lineNum">     482</span>              :                 }</span>
-<span id="L483"><span class="lineNum">     483</span> <span class="tlaGNC tlaBgGNC">           9 :                 if get_streamer(&amp;streamers, &amp;station_id).is_some() {</span></span>
+<span id="L483"><span class="lineNum">     483</span> <span class="tlaGNC tlaBgGNC">          10 :                 if get_streamer(&amp;streamers, &amp;station_id).is_some() {</span></span>
 <span id="L484"><span class="lineNum">     484</span> <span class="tlaUNC tlaBgUNC">           0 :                     break; // runtime appeared: attach (outer loop)</span></span>
-<span id="L485"><span class="lineNum">     485</span> <span class="tlaGNC tlaBgGNC">           9 :                 }</span></span>
+<span id="L485"><span class="lineNum">     485</span> <span class="tlaGNC tlaBgGNC">          10 :                 }</span></span>
 <span id="L486"><span class="lineNum">     486</span>              :                 // A queue mutation must produce a fresh QueueUpdate even</span>
 <span id="L487"><span class="lineNum">     487</span>              :                 // when `is_started` did not change.</span>
-<span id="L488"><span class="lineNum">     488</span> <span class="tlaGNC">           9 :                 force_queue = queue_changed;</span></span>
+<span id="L488"><span class="lineNum">     488</span> <span class="tlaGNC">          10 :                 force_queue = queue_changed;</span></span>
 <span id="L489"><span class="lineNum">     489</span>              :             }</span>
 <span id="L490"><span class="lineNum">     490</span> <span class="tlaGNC">           5 :             continue;</span></span>
 <span id="L491"><span class="lineNum">     491</span>              :         };</span>
@@ -637,28 +637,28 @@
 <span id="L575"><span class="lineNum">     575</span>              : /// queue. Status/error is sent only when `is_started` changed; `force_queue`</span>
 <span id="L576"><span class="lineNum">     576</span>              : /// additionally sends a fresh queue snapshot (a queue mutation happened),</span>
 <span id="L577"><span class="lineNum">     577</span>              : /// even when `is_started` did not.</span>
-<span id="L578"><span class="lineNum">     578</span> <span class="tlaGNC">          23 : async fn no_runtime_snapshot(</span></span>
-<span id="L579"><span class="lineNum">     579</span> <span class="tlaGNC">          23 :     db: &amp;PgPool,</span></span>
-<span id="L580"><span class="lineNum">     580</span> <span class="tlaGNC">          23 :     upload_dir: &amp;str,</span></span>
-<span id="L581"><span class="lineNum">     581</span> <span class="tlaGNC">          23 :     streamers: &amp;StreamersMap,</span></span>
-<span id="L582"><span class="lineNum">     582</span> <span class="tlaGNC">          23 :     lifecycle: &amp;StationLifecycleLocks,</span></span>
-<span id="L583"><span class="lineNum">     583</span> <span class="tlaGNC">          23 :     station_id: Uuid,</span></span>
-<span id="L584"><span class="lineNum">     584</span> <span class="tlaGNC">          23 :     out_tx: &amp;mpsc::UnboundedSender&lt;Outbound&gt;,</span></span>
-<span id="L585"><span class="lineNum">     585</span> <span class="tlaGNC">          23 :     last_is_started: Option&lt;bool&gt;,</span></span>
-<span id="L586"><span class="lineNum">     586</span> <span class="tlaGNC">          23 :     force_queue: bool,</span></span>
-<span id="L587"><span class="lineNum">     587</span> <span class="tlaGNC">          23 : ) -&gt; NoRuntimeSnapshot {</span></span>
+<span id="L578"><span class="lineNum">     578</span> <span class="tlaGNC">          24 : async fn no_runtime_snapshot(</span></span>
+<span id="L579"><span class="lineNum">     579</span> <span class="tlaGNC">          24 :     db: &amp;PgPool,</span></span>
+<span id="L580"><span class="lineNum">     580</span> <span class="tlaGNC">          24 :     upload_dir: &amp;str,</span></span>
+<span id="L581"><span class="lineNum">     581</span> <span class="tlaGNC">          24 :     streamers: &amp;StreamersMap,</span></span>
+<span id="L582"><span class="lineNum">     582</span> <span class="tlaGNC">          24 :     lifecycle: &amp;StationLifecycleLocks,</span></span>
+<span id="L583"><span class="lineNum">     583</span> <span class="tlaGNC">          24 :     station_id: Uuid,</span></span>
+<span id="L584"><span class="lineNum">     584</span> <span class="tlaGNC">          24 :     out_tx: &amp;mpsc::UnboundedSender&lt;Outbound&gt;,</span></span>
+<span id="L585"><span class="lineNum">     585</span> <span class="tlaGNC">          24 :     last_is_started: Option&lt;bool&gt;,</span></span>
+<span id="L586"><span class="lineNum">     586</span> <span class="tlaGNC">          24 :     force_queue: bool,</span></span>
+<span id="L587"><span class="lineNum">     587</span> <span class="tlaGNC">          24 : ) -&gt; NoRuntimeSnapshot {</span></span>
 <span id="L588"><span class="lineNum">     588</span>              :     // Wait for any in-flight transition of THIS station to finish, then</span>
 <span id="L589"><span class="lineNum">     589</span>              :     // decide runtime-map + persisted state atomically under the same lock.</span>
 <span id="L590"><span class="lineNum">     590</span>              :     // No helper that re-enters the lock is called while it is held.</span>
-<span id="L591"><span class="lineNum">     591</span> <span class="tlaGNC">          23 :     let observation = {</span></span>
-<span id="L592"><span class="lineNum">     592</span> <span class="tlaGNC">          23 :         let _guard = lifecycle.lock(station_id).await;</span></span>
-<span id="L593"><span class="lineNum">     593</span> <span class="tlaGNC">          23 :         if get_streamer(streamers, &amp;station_id).is_some() {</span></span>
+<span id="L591"><span class="lineNum">     591</span> <span class="tlaGNC">          24 :     let observation = {</span></span>
+<span id="L592"><span class="lineNum">     592</span> <span class="tlaGNC">          24 :         let _guard = lifecycle.lock(station_id).await;</span></span>
+<span id="L593"><span class="lineNum">     593</span> <span class="tlaGNC">          24 :         if get_streamer(streamers, &amp;station_id).is_some() {</span></span>
 <span id="L594"><span class="lineNum">     594</span> <span class="tlaGNC">           5 :             StationObservation::RuntimePresent</span></span>
 <span id="L595"><span class="lineNum">     595</span>              :         } else {</span>
-<span id="L596"><span class="lineNum">     596</span> <span class="tlaGNC">          18 :             match repository::find_station_by_id(db, station_id).await {</span></span>
-<span id="L597"><span class="lineNum">     597</span> <span class="tlaGNC">          17 :                 Ok(Some(station)) =&gt; StationObservation::State {</span></span>
-<span id="L598"><span class="lineNum">     598</span> <span class="tlaGNC">          17 :                     is_started: station.is_started,</span></span>
-<span id="L599"><span class="lineNum">     599</span> <span class="tlaGNC">          17 :                 },</span></span>
+<span id="L596"><span class="lineNum">     596</span> <span class="tlaGNC">          19 :             match repository::find_station_by_id(db, station_id).await {</span></span>
+<span id="L597"><span class="lineNum">     597</span> <span class="tlaGNC">          18 :                 Ok(Some(station)) =&gt; StationObservation::State {</span></span>
+<span id="L598"><span class="lineNum">     598</span> <span class="tlaGNC">          18 :                     is_started: station.is_started,</span></span>
+<span id="L599"><span class="lineNum">     599</span> <span class="tlaGNC">          18 :                 },</span></span>
 <span id="L600"><span class="lineNum">     600</span> <span class="tlaGNC">           1 :                 Ok(None) =&gt; StationObservation::StationGone,</span></span>
 <span id="L601"><span class="lineNum">     601</span> <span class="tlaUNC tlaBgUNC">           0 :                 Err(error) =&gt; {</span></span>
 <span id="L602"><span class="lineNum">     602</span> <span class="tlaUNC">           0 :                     tracing::error!(station_id = %station_id, %error, &quot;station lookup failed&quot;);</span></span>
@@ -668,7 +668,7 @@
 <span id="L606"><span class="lineNum">     606</span>              :         }</span>
 <span id="L607"><span class="lineNum">     607</span>              :     };</span>
 <span id="L608"><span class="lineNum">     608</span>              : </span>
-<span id="L609"><span class="lineNum">     609</span> <span class="tlaGNC tlaBgGNC">          23 :     let is_started = match observation {</span></span>
+<span id="L609"><span class="lineNum">     609</span> <span class="tlaGNC tlaBgGNC">          24 :     let is_started = match observation {</span></span>
 <span id="L610"><span class="lineNum">     610</span> <span class="tlaGNC">           5 :         StationObservation::RuntimePresent =&gt; return NoRuntimeSnapshot::RuntimePresent,</span></span>
 <span id="L611"><span class="lineNum">     611</span>              :         StationObservation::StationGone =&gt; {</span>
 <span id="L612"><span class="lineNum">     612</span>              :             // Deleted while subscribed without a runtime: end forwarding</span>
@@ -700,12 +700,12 @@
 <span id="L638"><span class="lineNum">     638</span> <span class="tlaUNC">           0 :             }</span></span>
 <span id="L639"><span class="lineNum">     639</span> <span class="tlaUNC">           0 :             return NoRuntimeSnapshot::DbError;</span></span>
 <span id="L640"><span class="lineNum">     640</span>              :         }</span>
-<span id="L641"><span class="lineNum">     641</span> <span class="tlaGNC tlaBgGNC">          17 :         StationObservation::State { is_started } =&gt; is_started,</span></span>
+<span id="L641"><span class="lineNum">     641</span> <span class="tlaGNC tlaBgGNC">          18 :         StationObservation::State { is_started } =&gt; is_started,</span></span>
 <span id="L642"><span class="lineNum">     642</span>              :     };</span>
 <span id="L643"><span class="lineNum">     643</span>              : </span>
-<span id="L644"><span class="lineNum">     644</span> <span class="tlaGNC">          17 :     let is_started_changed = last_is_started != Some(is_started);</span></span>
-<span id="L645"><span class="lineNum">     645</span> <span class="tlaGNC">          17 :     if is_started_changed {</span></span>
-<span id="L646"><span class="lineNum">     646</span> <span class="tlaGNC">          13 :         if is_started {</span></span>
+<span id="L644"><span class="lineNum">     644</span> <span class="tlaGNC">          18 :     let is_started_changed = last_is_started != Some(is_started);</span></span>
+<span id="L645"><span class="lineNum">     645</span> <span class="tlaGNC">          18 :     if is_started_changed {</span></span>
+<span id="L646"><span class="lineNum">     646</span> <span class="tlaGNC">          14 :         if is_started {</span></span>
 <span id="L647"><span class="lineNum">     647</span>              :             // Desired-started but no runtime (e.g. a failed startup</span>
 <span id="L648"><span class="lineNum">     648</span>              :             // restore or a start that produced no runtime): observation</span>
 <span id="L649"><span class="lineNum">     649</span>              :             // stays read-only — no runtime is created here — but the</span>
@@ -721,33 +721,33 @@
 <span id="L659"><span class="lineNum">     659</span>              :             {</span>
 <span id="L660"><span class="lineNum">     660</span> <span class="tlaUNC tlaBgUNC">           0 :                 return NoRuntimeSnapshot::ConnectionGone;</span></span>
 <span id="L661"><span class="lineNum">     661</span> <span class="tlaGNC tlaBgGNC">           2 :             }</span></span>
-<span id="L662"><span class="lineNum">     662</span> <span class="tlaGNC">          11 :         } else if out_tx</span></span>
-<span id="L663"><span class="lineNum">     663</span> <span class="tlaGNC">          11 :             .send(Outbound::Status {</span></span>
-<span id="L664"><span class="lineNum">     664</span> <span class="tlaGNC">          11 :                 station_id,</span></span>
-<span id="L665"><span class="lineNum">     665</span> <span class="tlaGNC">          11 :                 data: StatusEvent::State {</span></span>
-<span id="L666"><span class="lineNum">     666</span> <span class="tlaGNC">          11 :                     playing: false,</span></span>
-<span id="L667"><span class="lineNum">     667</span> <span class="tlaGNC">          11 :                     song_index: 0,</span></span>
-<span id="L668"><span class="lineNum">     668</span> <span class="tlaGNC">          11 :                     total: 0,</span></span>
-<span id="L669"><span class="lineNum">     669</span> <span class="tlaGNC">          11 :                     elapsed: 0,</span></span>
-<span id="L670"><span class="lineNum">     670</span> <span class="tlaGNC">          11 :                     title: String::new(),</span></span>
-<span id="L671"><span class="lineNum">     671</span> <span class="tlaGNC">          11 :                     artist: String::new(),</span></span>
-<span id="L672"><span class="lineNum">     672</span> <span class="tlaGNC">          11 :                     duration: 0,</span></span>
-<span id="L673"><span class="lineNum">     673</span> <span class="tlaGNC">          11 :                 },</span></span>
-<span id="L674"><span class="lineNum">     674</span> <span class="tlaGNC">          11 :             })</span></span>
-<span id="L675"><span class="lineNum">     675</span> <span class="tlaGNC">          11 :             .is_err()</span></span>
+<span id="L662"><span class="lineNum">     662</span> <span class="tlaGNC">          12 :         } else if out_tx</span></span>
+<span id="L663"><span class="lineNum">     663</span> <span class="tlaGNC">          12 :             .send(Outbound::Status {</span></span>
+<span id="L664"><span class="lineNum">     664</span> <span class="tlaGNC">          12 :                 station_id,</span></span>
+<span id="L665"><span class="lineNum">     665</span> <span class="tlaGNC">          12 :                 data: StatusEvent::State {</span></span>
+<span id="L666"><span class="lineNum">     666</span> <span class="tlaGNC">          12 :                     playing: false,</span></span>
+<span id="L667"><span class="lineNum">     667</span> <span class="tlaGNC">          12 :                     song_index: 0,</span></span>
+<span id="L668"><span class="lineNum">     668</span> <span class="tlaGNC">          12 :                     total: 0,</span></span>
+<span id="L669"><span class="lineNum">     669</span> <span class="tlaGNC">          12 :                     elapsed: 0,</span></span>
+<span id="L670"><span class="lineNum">     670</span> <span class="tlaGNC">          12 :                     title: String::new(),</span></span>
+<span id="L671"><span class="lineNum">     671</span> <span class="tlaGNC">          12 :                     artist: String::new(),</span></span>
+<span id="L672"><span class="lineNum">     672</span> <span class="tlaGNC">          12 :                     duration: 0,</span></span>
+<span id="L673"><span class="lineNum">     673</span> <span class="tlaGNC">          12 :                 },</span></span>
+<span id="L674"><span class="lineNum">     674</span> <span class="tlaGNC">          12 :             })</span></span>
+<span id="L675"><span class="lineNum">     675</span> <span class="tlaGNC">          12 :             .is_err()</span></span>
 <span id="L676"><span class="lineNum">     676</span>              :         {</span>
 <span id="L677"><span class="lineNum">     677</span> <span class="tlaUNC tlaBgUNC">           0 :             return NoRuntimeSnapshot::ConnectionGone;</span></span>
-<span id="L678"><span class="lineNum">     678</span> <span class="tlaGNC tlaBgGNC">          11 :         }</span></span>
+<span id="L678"><span class="lineNum">     678</span> <span class="tlaGNC tlaBgGNC">          12 :         }</span></span>
 <span id="L679"><span class="lineNum">     679</span> <span class="tlaGNC">           4 :     }</span></span>
-<span id="L680"><span class="lineNum">     680</span> <span class="tlaGNC">          17 :     if is_started_changed || force_queue {</span></span>
-<span id="L681"><span class="lineNum">     681</span> <span class="tlaGNC">          17 :         if let Some(queue) = db_queue_snapshot(db, upload_dir, station_id).await {</span></span>
-<span id="L682"><span class="lineNum">     682</span> <span class="tlaGNC">          17 :             if out_tx.send(Outbound::QueueUpdate { station_id, data: queue }).is_err() {</span></span>
+<span id="L680"><span class="lineNum">     680</span> <span class="tlaGNC">          18 :     if is_started_changed || force_queue {</span></span>
+<span id="L681"><span class="lineNum">     681</span> <span class="tlaGNC">          18 :         if let Some(queue) = db_queue_snapshot(db, upload_dir, station_id).await {</span></span>
+<span id="L682"><span class="lineNum">     682</span> <span class="tlaGNC">          18 :             if out_tx.send(Outbound::QueueUpdate { station_id, data: queue }).is_err() {</span></span>
 <span id="L683"><span class="lineNum">     683</span> <span class="tlaUNC tlaBgUNC">           0 :                 return NoRuntimeSnapshot::ConnectionGone;</span></span>
-<span id="L684"><span class="lineNum">     684</span> <span class="tlaGNC tlaBgGNC">          17 :             }</span></span>
+<span id="L684"><span class="lineNum">     684</span> <span class="tlaGNC tlaBgGNC">          18 :             }</span></span>
 <span id="L685"><span class="lineNum">     685</span> <span class="tlaUNC tlaBgUNC">           0 :         }</span></span>
 <span id="L686"><span class="lineNum">     686</span> <span class="tlaUNC">           0 :     }</span></span>
-<span id="L687"><span class="lineNum">     687</span> <span class="tlaGNC tlaBgGNC">          17 :     NoRuntimeSnapshot::Sent { is_started }</span></span>
-<span id="L688"><span class="lineNum">     688</span> <span class="tlaGNC">          23 : }</span></span>
+<span id="L687"><span class="lineNum">     687</span> <span class="tlaGNC tlaBgGNC">          18 :     NoRuntimeSnapshot::Sent { is_started }</span></span>
+<span id="L688"><span class="lineNum">     688</span> <span class="tlaGNC">          24 : }</span></span>
 <span id="L689"><span class="lineNum">     689</span>              : </span>
 <span id="L690"><span class="lineNum">     690</span>              : /// Attaches to ONE runtime: broadcast receivers first, then a fresh</span>
 <span id="L691"><span class="lineNum">     691</span>              : /// per-client Status/Error + DB queue snapshot, then live forwarding.</span>
@@ -883,20 +883,20 @@
 <span id="L821"><span class="lineNum">     821</span>              :     }</span>
 <span id="L822"><span class="lineNum">     822</span> <span class="tlaGNC">           4 : }</span></span>
 <span id="L823"><span class="lineNum">     823</span>              : </span>
-<span id="L824"><span class="lineNum">     824</span> <span class="tlaGNC">         119 : fn get_streamer(streamers: &amp;StreamersMap, station_id: &amp;Uuid) -&gt; Option&lt;Arc&lt;StationStreamer&gt;&gt; {</span></span>
-<span id="L825"><span class="lineNum">     825</span> <span class="tlaGNC">         119 :     let map = streamers.lock().unwrap_or_else(|e| e.into_inner());</span></span>
-<span id="L826"><span class="lineNum">     826</span> <span class="tlaGNC">         119 :     map.get(station_id).cloned()</span></span>
-<span id="L827"><span class="lineNum">     827</span> <span class="tlaGNC">         119 : }</span></span>
+<span id="L824"><span class="lineNum">     824</span> <span class="tlaGNC">         122 : fn get_streamer(streamers: &amp;StreamersMap, station_id: &amp;Uuid) -&gt; Option&lt;Arc&lt;StationStreamer&gt;&gt; {</span></span>
+<span id="L825"><span class="lineNum">     825</span> <span class="tlaGNC">         122 :     let map = streamers.lock().unwrap_or_else(|e| e.into_inner());</span></span>
+<span id="L826"><span class="lineNum">     826</span> <span class="tlaGNC">         122 :     map.get(station_id).cloned()</span></span>
+<span id="L827"><span class="lineNum">     827</span> <span class="tlaGNC">         122 : }</span></span>
 <span id="L828"><span class="lineNum">     828</span>              : </span>
 <span id="L829"><span class="lineNum">     829</span>              : /// Read-only queue snapshot straight from the database, using the same queue</span>
 <span id="L830"><span class="lineNum">     830</span>              : /// repository the streamers feed their broadcasts from. Never creates a</span>
 <span id="L831"><span class="lineNum">     831</span>              : /// runtime — this is what Subscribe uses for stations without one.</span>
-<span id="L832"><span class="lineNum">     832</span> <span class="tlaGNC">          30 : async fn db_queue_snapshot(db: &amp;PgPool, upload_dir: &amp;str, station_id: Uuid) -&gt; Option&lt;serde_json::Value&gt; {</span></span>
-<span id="L833"><span class="lineNum">     833</span> <span class="tlaGNC">          30 :     let raw = crate::streamer::queue_repository::QueueRepository::new(db.clone(), station_id, upload_dir.to_string())</span></span>
-<span id="L834"><span class="lineNum">     834</span> <span class="tlaGNC">          30 :         .queue_json()</span></span>
-<span id="L835"><span class="lineNum">     835</span> <span class="tlaGNC">          30 :         .await;</span></span>
-<span id="L836"><span class="lineNum">     836</span> <span class="tlaGNC">          30 :     serde_json::from_str(&amp;raw).ok()</span></span>
-<span id="L837"><span class="lineNum">     837</span> <span class="tlaGNC">          30 : }</span></span>
+<span id="L832"><span class="lineNum">     832</span> <span class="tlaGNC">          31 : async fn db_queue_snapshot(db: &amp;PgPool, upload_dir: &amp;str, station_id: Uuid) -&gt; Option&lt;serde_json::Value&gt; {</span></span>
+<span id="L833"><span class="lineNum">     833</span> <span class="tlaGNC">          31 :     let raw = crate::streamer::queue_repository::QueueRepository::new(db.clone(), station_id, upload_dir.to_string())</span></span>
+<span id="L834"><span class="lineNum">     834</span> <span class="tlaGNC">          31 :         .queue_json()</span></span>
+<span id="L835"><span class="lineNum">     835</span> <span class="tlaGNC">          31 :         .await;</span></span>
+<span id="L836"><span class="lineNum">     836</span> <span class="tlaGNC">          31 :     serde_json::from_str(&amp;raw).ok()</span></span>
+<span id="L837"><span class="lineNum">     837</span> <span class="tlaGNC">          31 : }</span></span>
 <span id="L838"><span class="lineNum">     838</span>              : </span>
 <span id="L839"><span class="lineNum">     839</span>              : #[cfg(test)]</span>
 <span id="L840"><span class="lineNum">     840</span>              : mod tests {</span>
