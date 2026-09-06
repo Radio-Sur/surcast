@@ -37,7 +37,7 @@
           </tr>
           <tr>
             <td class="headerItem">Test Date:</td>
-            <td class="headerValue">2026-09-06 18:41:37</td>
+            <td class="headerValue">2026-09-06 21:10:43</td>
             <td></td>
             <td class="headerItem">Functions:</td>
             <td class="headerCovTableEntryLo">52.2&nbsp;%</td>
@@ -361,15 +361,15 @@
 <span id="L299"><span class="lineNum">     299</span>              : </span>
 <span id="L300"><span class="lineNum">     300</span> <span class="tlaGNC">          55 : async fn kill_zombie_icecast() {</span></span>
 <span id="L301"><span class="lineNum">     301</span> <span class="tlaGNC">          55 :     if let Ok(proc) = std::fs::read_dir(&quot;/proc&quot;) {</span></span>
-<span id="L302"><span class="lineNum">     302</span> <span class="tlaGNC">       12658 :         for entry in proc.flatten() {</span></span>
-<span id="L303"><span class="lineNum">     303</span> <span class="tlaGNC">       12658 :             let pid_str = entry.file_name().to_string_lossy().to_string();</span></span>
-<span id="L304"><span class="lineNum">     304</span> <span class="tlaGNC">       12658 :             if let Ok(pid) = pid_str.parse::&lt;i32&gt;() {</span></span>
-<span id="L305"><span class="lineNum">     305</span> <span class="tlaGNC">        9248 :                 if let Ok(exe) = std::fs::read_link(format!(&quot;/proc/{pid}/exe&quot;)) {</span></span>
+<span id="L302"><span class="lineNum">     302</span> <span class="tlaGNC">       12517 :         for entry in proc.flatten() {</span></span>
+<span id="L303"><span class="lineNum">     303</span> <span class="tlaGNC">       12517 :             let pid_str = entry.file_name().to_string_lossy().to_string();</span></span>
+<span id="L304"><span class="lineNum">     304</span> <span class="tlaGNC">       12517 :             if let Ok(pid) = pid_str.parse::&lt;i32&gt;() {</span></span>
+<span id="L305"><span class="lineNum">     305</span> <span class="tlaGNC">        9107 :                 if let Ok(exe) = std::fs::read_link(format!(&quot;/proc/{pid}/exe&quot;)) {</span></span>
 <span id="L306"><span class="lineNum">     306</span> <span class="tlaGNC">         386 :                     if is_icecast_executable(&amp;exe) {</span></span>
 <span id="L307"><span class="lineNum">     307</span> <span class="tlaGNC">           1 :                         tracing::warn!(&quot;Killing zombie icecast PID {pid}&quot;);</span></span>
 <span id="L308"><span class="lineNum">     308</span> <span class="tlaGNC">           1 :                         let _ = std::process::Command::new(&quot;kill&quot;).arg(&quot;-9&quot;).arg(pid.to_string()).output();</span></span>
 <span id="L309"><span class="lineNum">     309</span> <span class="tlaGNC">         385 :                     }</span></span>
-<span id="L310"><span class="lineNum">     310</span> <span class="tlaGNC">        8862 :                 }</span></span>
+<span id="L310"><span class="lineNum">     310</span> <span class="tlaGNC">        8721 :                 }</span></span>
 <span id="L311"><span class="lineNum">     311</span> <span class="tlaGNC">        3410 :             }</span></span>
 <span id="L312"><span class="lineNum">     312</span>              :         }</span>
 <span id="L313"><span class="lineNum">     313</span> <span class="tlaUNC tlaBgUNC">           0 :     }</span></span>

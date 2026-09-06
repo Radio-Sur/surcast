@@ -37,7 +37,7 @@
           </tr>
           <tr>
             <td class="headerItem">Test Date:</td>
-            <td class="headerValue">2026-09-06 18:41:37</td>
+            <td class="headerValue">2026-09-06 21:10:43</td>
             <td></td>
             <td class="headerItem">Functions:</td>
             <td class="headerCovTableEntryMed">83.3&nbsp;%</td>
@@ -118,12 +118,12 @@
 <span id="L56"><span class="lineNum">      56</span>              :     pub auto_dj_songs_ahead: Option&lt;i32&gt;,</span>
 <span id="L57"><span class="lineNum">      57</span>              : }</span>
 <span id="L58"><span class="lineNum">      58</span>              : </span>
-<span id="L59"><span class="lineNum">      59</span> <span class="tlaGNC tlaBgGNC">         153 : fn find_active_schedule(schedules: &amp;[StationScheduleRow], current_day: i16, current_time: NaiveTime) -&gt; Option&lt;ActiveSchedule&gt; {</span></span>
-<span id="L60"><span class="lineNum">      60</span> <span class="tlaGNC">         153 :     let current_seconds = current_time.hour() as i32 * 3600 + current_time.minute() as i32 * 60 + current_time.second() as i32;</span></span>
+<span id="L59"><span class="lineNum">      59</span> <span class="tlaGNC tlaBgGNC">         151 : fn find_active_schedule(schedules: &amp;[StationScheduleRow], current_day: i16, current_time: NaiveTime) -&gt; Option&lt;ActiveSchedule&gt; {</span></span>
+<span id="L60"><span class="lineNum">      60</span> <span class="tlaGNC">         151 :     let current_seconds = current_time.hour() as i32 * 3600 + current_time.minute() as i32 * 60 + current_time.second() as i32;</span></span>
 <span id="L61"><span class="lineNum">      61</span>              : </span>
-<span id="L62"><span class="lineNum">      62</span> <span class="tlaGNC">         153 :     let mut best: Option&lt;(i32, &amp;StationScheduleRow)&gt; = None;</span></span>
+<span id="L62"><span class="lineNum">      62</span> <span class="tlaGNC">         151 :     let mut best: Option&lt;(i32, &amp;StationScheduleRow)&gt; = None;</span></span>
 <span id="L63"><span class="lineNum">      63</span>              : </span>
-<span id="L64"><span class="lineNum">      64</span> <span class="tlaGNC">         153 :     for entry in schedules {</span></span>
+<span id="L64"><span class="lineNum">      64</span> <span class="tlaGNC">         151 :     for entry in schedules {</span></span>
 <span id="L65"><span class="lineNum">      65</span> <span class="tlaGNC">           6 :         if entry.day_of_week != current_day {</span></span>
 <span id="L66"><span class="lineNum">      66</span> <span class="tlaUNC tlaBgUNC">           0 :             continue;</span></span>
 <span id="L67"><span class="lineNum">      67</span> <span class="tlaGNC tlaBgGNC">           6 :         }</span></span>
@@ -150,7 +150,7 @@
 <span id="L88"><span class="lineNum">      88</span> <span class="tlaUNC">           0 :         }</span></span>
 <span id="L89"><span class="lineNum">      89</span>              :     }</span>
 <span id="L90"><span class="lineNum">      90</span>              : </span>
-<span id="L91"><span class="lineNum">      91</span> <span class="tlaGNC tlaBgGNC">         153 :     best.map(|(_, entry)| ActiveSchedule {</span></span>
+<span id="L91"><span class="lineNum">      91</span> <span class="tlaGNC tlaBgGNC">         151 :     best.map(|(_, entry)| ActiveSchedule {</span></span>
 <span id="L92"><span class="lineNum">      92</span> <span class="tlaGNC">           6 :         source_type: entry.source_type.clone(),</span></span>
 <span id="L93"><span class="lineNum">      93</span> <span class="tlaGNC">           6 :         playlist_id: entry.playlist_id,</span></span>
 <span id="L94"><span class="lineNum">      94</span> <span class="tlaGNC">           6 :         auto_dj_mode: entry.auto_dj_mode.clone(),</span></span>
@@ -158,7 +158,7 @@
 <span id="L96"><span class="lineNum">      96</span> <span class="tlaGNC">           6 :         auto_dj_min_gap: entry.auto_dj_min_gap,</span></span>
 <span id="L97"><span class="lineNum">      97</span> <span class="tlaGNC">           6 :         auto_dj_songs_ahead: entry.auto_dj_songs_ahead,</span></span>
 <span id="L98"><span class="lineNum">      98</span> <span class="tlaGNC">           6 :     })</span></span>
-<span id="L99"><span class="lineNum">      99</span> <span class="tlaGNC">         153 : }</span></span>
+<span id="L99"><span class="lineNum">      99</span> <span class="tlaGNC">         151 : }</span></span>
 <span id="L100"><span class="lineNum">     100</span>              : </span>
 <span id="L101"><span class="lineNum">     101</span> <span class="tlaGNC">           7 : async fn fill_from_schedule_entry_locked(</span></span>
 <span id="L102"><span class="lineNum">     102</span> <span class="tlaGNC">           7 :     connection: &amp;mut PgConnection,</span></span>
@@ -227,24 +227,24 @@
 <span id="L165"><span class="lineNum">     165</span>              : </span>
 <span id="L166"><span class="lineNum">     166</span>              : /// Fill variant that runs inside an already locked transaction. The caller</span>
 <span id="L167"><span class="lineNum">     167</span>              : /// owns the advisory lock; no nested transaction is opened.</span>
-<span id="L168"><span class="lineNum">     168</span> <span class="tlaGNC">         153 : pub(crate) async fn fill_queue_from_schedule_locked(connection: &amp;mut PgConnection, station_id: Uuid) -&gt; Result&lt;Vec&lt;Uuid&gt;, AppError&gt; {</span></span>
-<span id="L169"><span class="lineNum">     169</span> <span class="tlaGNC">         153 :     let mut analyze = Vec::new();</span></span>
-<span id="L170"><span class="lineNum">     170</span> <span class="tlaGNC">         153 :     let now = Local::now();</span></span>
-<span id="L171"><span class="lineNum">     171</span> <span class="tlaGNC">         153 :     let current_day = now.weekday().num_days_from_monday() as i16;</span></span>
-<span id="L172"><span class="lineNum">     172</span> <span class="tlaGNC">         153 :     let current_time = now.time();</span></span>
-<span id="L173"><span class="lineNum">     173</span> <span class="tlaGNC">         153 :     let today = now.date_naive();</span></span>
+<span id="L168"><span class="lineNum">     168</span> <span class="tlaGNC">         151 : pub(crate) async fn fill_queue_from_schedule_locked(connection: &amp;mut PgConnection, station_id: Uuid) -&gt; Result&lt;Vec&lt;Uuid&gt;, AppError&gt; {</span></span>
+<span id="L169"><span class="lineNum">     169</span> <span class="tlaGNC">         151 :     let mut analyze = Vec::new();</span></span>
+<span id="L170"><span class="lineNum">     170</span> <span class="tlaGNC">         151 :     let now = Local::now();</span></span>
+<span id="L171"><span class="lineNum">     171</span> <span class="tlaGNC">         151 :     let current_day = now.weekday().num_days_from_monday() as i16;</span></span>
+<span id="L172"><span class="lineNum">     172</span> <span class="tlaGNC">         151 :     let current_time = now.time();</span></span>
+<span id="L173"><span class="lineNum">     173</span> <span class="tlaGNC">         151 :     let today = now.date_naive();</span></span>
 <span id="L174"><span class="lineNum">     174</span>              : </span>
-<span id="L175"><span class="lineNum">     175</span> <span class="tlaGNC">         153 :     let schedules = sqlx::query_as::&lt;_, StationScheduleRow&gt;(</span></span>
-<span id="L176"><span class="lineNum">     176</span> <span class="tlaGNC">         153 :         &quot;SELECT id, day_of_week, start_time, end_time, source_type, playlist_id, auto_dj_mode, auto_dj_avoid_repeat, auto_dj_min_gap, auto_dj_songs_ahead FROM station_schedules WHERE station_id = $1 ORDER BY day_of_week, start_time&quot;,</span></span>
-<span id="L177"><span class="lineNum">     177</span> <span class="tlaGNC">         153 :     )</span></span>
-<span id="L178"><span class="lineNum">     178</span> <span class="tlaGNC">         153 :     .bind(station_id)</span></span>
-<span id="L179"><span class="lineNum">     179</span> <span class="tlaGNC">         153 :     .fetch_all(&amp;mut *connection)</span></span>
-<span id="L180"><span class="lineNum">     180</span> <span class="tlaGNC">         153 :     .await</span></span>
-<span id="L181"><span class="lineNum">     181</span> <span class="tlaGNC">         153 :     .db_error(&quot;failed to load station schedules&quot;)?;</span></span>
+<span id="L175"><span class="lineNum">     175</span> <span class="tlaGNC">         151 :     let schedules = sqlx::query_as::&lt;_, StationScheduleRow&gt;(</span></span>
+<span id="L176"><span class="lineNum">     176</span> <span class="tlaGNC">         151 :         &quot;SELECT id, day_of_week, start_time, end_time, source_type, playlist_id, auto_dj_mode, auto_dj_avoid_repeat, auto_dj_min_gap, auto_dj_songs_ahead FROM station_schedules WHERE station_id = $1 ORDER BY day_of_week, start_time&quot;,</span></span>
+<span id="L177"><span class="lineNum">     177</span> <span class="tlaGNC">         151 :     )</span></span>
+<span id="L178"><span class="lineNum">     178</span> <span class="tlaGNC">         151 :     .bind(station_id)</span></span>
+<span id="L179"><span class="lineNum">     179</span> <span class="tlaGNC">         151 :     .fetch_all(&amp;mut *connection)</span></span>
+<span id="L180"><span class="lineNum">     180</span> <span class="tlaGNC">         151 :     .await</span></span>
+<span id="L181"><span class="lineNum">     181</span> <span class="tlaGNC">         151 :     .db_error(&quot;failed to load station schedules&quot;)?;</span></span>
 <span id="L182"><span class="lineNum">     182</span>              : </span>
-<span id="L183"><span class="lineNum">     183</span> <span class="tlaGNC">         153 :     let active = find_active_schedule(&amp;schedules, current_day, current_time);</span></span>
+<span id="L183"><span class="lineNum">     183</span> <span class="tlaGNC">         151 :     let active = find_active_schedule(&amp;schedules, current_day, current_time);</span></span>
 <span id="L184"><span class="lineNum">     184</span>              : </span>
-<span id="L185"><span class="lineNum">     185</span> <span class="tlaGNC">         153 :     if let Some(active) = active {</span></span>
+<span id="L185"><span class="lineNum">     185</span> <span class="tlaGNC">         151 :     if let Some(active) = active {</span></span>
 <span id="L186"><span class="lineNum">     186</span> <span class="tlaGNC">           6 :         fill_from_schedule_entry_locked(</span></span>
 <span id="L187"><span class="lineNum">     187</span> <span class="tlaGNC">           6 :             &amp;mut *connection,</span></span>
 <span id="L188"><span class="lineNum">     188</span> <span class="tlaGNC">           6 :             station_id,</span></span>
@@ -258,17 +258,17 @@
 <span id="L196"><span class="lineNum">     196</span> <span class="tlaGNC">           6 :         )</span></span>
 <span id="L197"><span class="lineNum">     197</span> <span class="tlaGNC">           6 :         .await?;</span></span>
 <span id="L198"><span class="lineNum">     198</span> <span class="tlaGNC">           5 :         return Ok(analyze);</span></span>
-<span id="L199"><span class="lineNum">     199</span> <span class="tlaGNC">         147 :     }</span></span>
+<span id="L199"><span class="lineNum">     199</span> <span class="tlaGNC">         145 :     }</span></span>
 <span id="L200"><span class="lineNum">     200</span>              : </span>
-<span id="L201"><span class="lineNum">     201</span> <span class="tlaGNC">         147 :     let events = sqlx::query_as::&lt;_, StationScheduleEventRow&gt;(</span></span>
-<span id="L202"><span class="lineNum">     202</span> <span class="tlaGNC">         147 :         &quot;SELECT id, title, start_date, start_time, end_time, source_type, playlist_id, auto_dj_mode, auto_dj_avoid_repeat, auto_dj_min_gap, auto_dj_songs_ahead, recurrence_type, recurrence_interval, recurrence_days, recurrence_end_date, recurrence_count FROM station_schedule_events WHERE station_id = $1 ORDER BY start_date, start_time&quot;,</span></span>
-<span id="L203"><span class="lineNum">     203</span> <span class="tlaGNC">         147 :     )</span></span>
-<span id="L204"><span class="lineNum">     204</span> <span class="tlaGNC">         147 :     .bind(station_id)</span></span>
-<span id="L205"><span class="lineNum">     205</span> <span class="tlaGNC">         147 :     .fetch_all(&amp;mut *connection)</span></span>
-<span id="L206"><span class="lineNum">     206</span> <span class="tlaGNC">         147 :     .await</span></span>
-<span id="L207"><span class="lineNum">     207</span> <span class="tlaGNC">         147 :     .db_error(&quot;failed to load station events&quot;)?;</span></span>
+<span id="L201"><span class="lineNum">     201</span> <span class="tlaGNC">         145 :     let events = sqlx::query_as::&lt;_, StationScheduleEventRow&gt;(</span></span>
+<span id="L202"><span class="lineNum">     202</span> <span class="tlaGNC">         145 :         &quot;SELECT id, title, start_date, start_time, end_time, source_type, playlist_id, auto_dj_mode, auto_dj_avoid_repeat, auto_dj_min_gap, auto_dj_songs_ahead, recurrence_type, recurrence_interval, recurrence_days, recurrence_end_date, recurrence_count FROM station_schedule_events WHERE station_id = $1 ORDER BY start_date, start_time&quot;,</span></span>
+<span id="L203"><span class="lineNum">     203</span> <span class="tlaGNC">         145 :     )</span></span>
+<span id="L204"><span class="lineNum">     204</span> <span class="tlaGNC">         145 :     .bind(station_id)</span></span>
+<span id="L205"><span class="lineNum">     205</span> <span class="tlaGNC">         145 :     .fetch_all(&amp;mut *connection)</span></span>
+<span id="L206"><span class="lineNum">     206</span> <span class="tlaGNC">         145 :     .await</span></span>
+<span id="L207"><span class="lineNum">     207</span> <span class="tlaGNC">         145 :     .db_error(&quot;failed to load station events&quot;)?;</span></span>
 <span id="L208"><span class="lineNum">     208</span>              : </span>
-<span id="L209"><span class="lineNum">     209</span> <span class="tlaGNC">         146 :     for event in &amp;events {</span></span>
+<span id="L209"><span class="lineNum">     209</span> <span class="tlaGNC">         144 :     for event in &amp;events {</span></span>
 <span id="L210"><span class="lineNum">     210</span> <span class="tlaGNC">           1 :         if !self::recurrence::matches_recurrence(</span></span>
 <span id="L211"><span class="lineNum">     211</span> <span class="tlaGNC">           1 :             today,</span></span>
 <span id="L212"><span class="lineNum">     212</span> <span class="tlaGNC">           1 :             event.start_date,</span></span>
@@ -308,10 +308,10 @@
 <span id="L246"><span class="lineNum">     246</span> <span class="tlaUNC tlaBgUNC">           0 :         }</span></span>
 <span id="L247"><span class="lineNum">     247</span>              :     }</span>
 <span id="L248"><span class="lineNum">     248</span>              : </span>
-<span id="L249"><span class="lineNum">     249</span> <span class="tlaGNC tlaBgGNC">         145 :     self::auto_fill::fill_from_auto_config_locked(&amp;mut *connection, station_id, &amp;mut analyze).await?;</span></span>
+<span id="L249"><span class="lineNum">     249</span> <span class="tlaGNC tlaBgGNC">         143 :     self::auto_fill::fill_from_auto_config_locked(&amp;mut *connection, station_id, &amp;mut analyze).await?;</span></span>
 <span id="L250"><span class="lineNum">     250</span>              : </span>
-<span id="L251"><span class="lineNum">     251</span> <span class="tlaGNC">         145 :     Ok(analyze)</span></span>
-<span id="L252"><span class="lineNum">     252</span> <span class="tlaGNC">         152 : }</span></span>
+<span id="L251"><span class="lineNum">     251</span> <span class="tlaGNC">         143 :     Ok(analyze)</span></span>
+<span id="L252"><span class="lineNum">     252</span> <span class="tlaGNC">         150 : }</span></span>
         </pre>
               </td>
             </tr>

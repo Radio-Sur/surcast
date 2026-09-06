@@ -37,7 +37,7 @@
           </tr>
           <tr>
             <td class="headerItem">Test Date:</td>
-            <td class="headerValue">2026-09-06 18:41:37</td>
+            <td class="headerValue">2026-09-06 21:10:43</td>
             <td></td>
             <td class="headerItem">Functions:</td>
             <td class="headerCovTableEntryHi">90.2&nbsp;%</td>
@@ -345,16 +345,16 @@
 <span id="L283"><span class="lineNum">     283</span>              : }</span>
 <span id="L284"><span class="lineNum">     284</span>              : </span>
 <span id="L285"><span class="lineNum">     285</span>              : impl fmt::Display for PipelineError {</span>
-<span id="L286"><span class="lineNum">     286</span> <span class="tlaGNC">          15 :     fn fmt(&amp;self, f: &amp;mut fmt::Formatter&lt;'_&gt;) -&gt; fmt::Result {</span></span>
-<span id="L287"><span class="lineNum">     287</span> <span class="tlaGNC">          15 :         match self {</span></span>
+<span id="L286"><span class="lineNum">     286</span> <span class="tlaGNC">           7 :     fn fmt(&amp;self, f: &amp;mut fmt::Formatter&lt;'_&gt;) -&gt; fmt::Result {</span></span>
+<span id="L287"><span class="lineNum">     287</span> <span class="tlaGNC">           7 :         match self {</span></span>
 <span id="L288"><span class="lineNum">     288</span> <span class="tlaUNC tlaBgUNC">           0 :             Self::MissingElement(element) =&gt; write!(f, &quot;required GStreamer element is unavailable: {element}&quot;),</span></span>
-<span id="L289"><span class="lineNum">     289</span> <span class="tlaGNC tlaBgGNC">          14 :             Self::StalePlan =&gt; write!(f, &quot;stale playback plan&quot;),</span></span>
+<span id="L289"><span class="lineNum">     289</span> <span class="tlaGNC tlaBgGNC">           6 :             Self::StalePlan =&gt; write!(f, &quot;stale playback plan&quot;),</span></span>
 <span id="L290"><span class="lineNum">     290</span> <span class="tlaUNC tlaBgUNC">           0 :             Self::InvalidTarget(message) =&gt; write!(f, &quot;invalid Icecast target: {message}&quot;),</span></span>
 <span id="L291"><span class="lineNum">     291</span> <span class="tlaGNC tlaBgGNC">           1 :             Self::InvalidTransitionMode(mode) =&gt; write!(f, &quot;invalid persisted transition mode: {mode}&quot;),</span></span>
 <span id="L292"><span class="lineNum">     292</span> <span class="tlaUNC tlaBgUNC">           0 :             Self::Initialization(message) =&gt; write!(f, &quot;GStreamer initialization failed: {message}&quot;),</span></span>
 <span id="L293"><span class="lineNum">     293</span> <span class="tlaUNC">           0 :             Self::Pipeline(message) =&gt; write!(f, &quot;GStreamer pipeline failure: {message}&quot;),</span></span>
 <span id="L294"><span class="lineNum">     294</span>              :         }</span>
-<span id="L295"><span class="lineNum">     295</span> <span class="tlaGNC tlaBgGNC">          15 :     }</span></span>
+<span id="L295"><span class="lineNum">     295</span> <span class="tlaGNC tlaBgGNC">           7 :     }</span></span>
 <span id="L296"><span class="lineNum">     296</span>              : }</span>
 <span id="L297"><span class="lineNum">     297</span>              : </span>
 <span id="L298"><span class="lineNum">     298</span>              : impl std::error::Error for PipelineError {}</span>
@@ -383,13 +383,13 @@
 <span id="L321"><span class="lineNum">     321</span>              : pub(crate) struct TransitionPlanner;</span>
 <span id="L322"><span class="lineNum">     322</span>              : </span>
 <span id="L323"><span class="lineNum">     323</span>              : impl TransitionPlanner {</span>
-<span id="L324"><span class="lineNum">     324</span> <span class="tlaGNC">         185 :     pub(crate) fn plan(config: TransitionConfig, current: &amp;PipelineTrack, next: Option&lt;&amp;PipelineTrack&gt;) -&gt; TransitionPlan {</span></span>
-<span id="L325"><span class="lineNum">     325</span> <span class="tlaGNC">         185 :         let Some(next) = next else {</span></span>
+<span id="L324"><span class="lineNum">     324</span> <span class="tlaGNC">         183 :     pub(crate) fn plan(config: TransitionConfig, current: &amp;PipelineTrack, next: Option&lt;&amp;PipelineTrack&gt;) -&gt; TransitionPlan {</span></span>
+<span id="L325"><span class="lineNum">     325</span> <span class="tlaGNC">         183 :         let Some(next) = next else {</span></span>
 <span id="L326"><span class="lineNum">     326</span> <span class="tlaGNC">           1 :             return TransitionPlan::Cut;</span></span>
 <span id="L327"><span class="lineNum">     327</span>              :         };</span>
 <span id="L328"><span class="lineNum">     328</span>              : </span>
-<span id="L329"><span class="lineNum">     329</span> <span class="tlaGNC">         184 :         if config.mode == TransitionMode::Off {</span></span>
-<span id="L330"><span class="lineNum">     330</span> <span class="tlaGNC">         128 :             return TransitionPlan::Cut;</span></span>
+<span id="L329"><span class="lineNum">     329</span> <span class="tlaGNC">         182 :         if config.mode == TransitionMode::Off {</span></span>
+<span id="L330"><span class="lineNum">     330</span> <span class="tlaGNC">         126 :             return TransitionPlan::Cut;</span></span>
 <span id="L331"><span class="lineNum">     331</span> <span class="tlaGNC">          56 :         }</span></span>
 <span id="L332"><span class="lineNum">     332</span>              : </span>
 <span id="L333"><span class="lineNum">     333</span> <span class="tlaGNC">          56 :         if config.mode == TransitionMode::AutoCue &amp;&amp; current.analyzed &amp;&amp; next.analyzed {</span></span>
@@ -418,17 +418,17 @@
 <span id="L356"><span class="lineNum">     356</span> <span class="tlaGNC">          39 :                 requested_fade: config.requested_fade,</span></span>
 <span id="L357"><span class="lineNum">     357</span> <span class="tlaGNC">          39 :             }</span></span>
 <span id="L358"><span class="lineNum">     358</span>              :         }</span>
-<span id="L359"><span class="lineNum">     359</span> <span class="tlaGNC">         185 :     }</span></span>
+<span id="L359"><span class="lineNum">     359</span> <span class="tlaGNC">         183 :     }</span></span>
 <span id="L360"><span class="lineNum">     360</span>              : }</span>
 <span id="L361"><span class="lineNum">     361</span>              : </span>
-<span id="L362"><span class="lineNum">     362</span> <span class="tlaGNC">         122 : pub(crate) fn resolve_transition(</span></span>
-<span id="L363"><span class="lineNum">     363</span> <span class="tlaGNC">         122 :     plan: TransitionPlan,</span></span>
-<span id="L364"><span class="lineNum">     364</span> <span class="tlaGNC">         122 :     current_duration: Option&lt;Duration&gt;,</span></span>
-<span id="L365"><span class="lineNum">     365</span> <span class="tlaGNC">         122 :     next_duration: Option&lt;Duration&gt;,</span></span>
-<span id="L366"><span class="lineNum">     366</span> <span class="tlaGNC">         122 :     current_seekable: bool,</span></span>
-<span id="L367"><span class="lineNum">     367</span> <span class="tlaGNC">         122 :     next_seekable: bool,</span></span>
-<span id="L368"><span class="lineNum">     368</span> <span class="tlaGNC">         122 : ) -&gt; TransitionPlan {</span></span>
-<span id="L369"><span class="lineNum">     369</span> <span class="tlaGNC">         122 :     let naive = |requested_fade: Duration| match (current_duration, next_duration) {</span></span>
+<span id="L362"><span class="lineNum">     362</span> <span class="tlaGNC">         120 : pub(crate) fn resolve_transition(</span></span>
+<span id="L363"><span class="lineNum">     363</span> <span class="tlaGNC">         120 :     plan: TransitionPlan,</span></span>
+<span id="L364"><span class="lineNum">     364</span> <span class="tlaGNC">         120 :     current_duration: Option&lt;Duration&gt;,</span></span>
+<span id="L365"><span class="lineNum">     365</span> <span class="tlaGNC">         120 :     next_duration: Option&lt;Duration&gt;,</span></span>
+<span id="L366"><span class="lineNum">     366</span> <span class="tlaGNC">         120 :     current_seekable: bool,</span></span>
+<span id="L367"><span class="lineNum">     367</span> <span class="tlaGNC">         120 :     next_seekable: bool,</span></span>
+<span id="L368"><span class="lineNum">     368</span> <span class="tlaGNC">         120 : ) -&gt; TransitionPlan {</span></span>
+<span id="L369"><span class="lineNum">     369</span> <span class="tlaGNC">         120 :     let naive = |requested_fade: Duration| match (current_duration, next_duration) {</span></span>
 <span id="L370"><span class="lineNum">     370</span> <span class="tlaGNC">          40 :         (Some(current), Some(next)) if !requested_fade.is_zero() =&gt; {</span></span>
 <span id="L371"><span class="lineNum">     371</span> <span class="tlaGNC">          40 :             let fade = requested_fade.min(current).min(next);</span></span>
 <span id="L372"><span class="lineNum">     372</span> <span class="tlaGNC">          40 :             if fade.is_zero() {</span></span>
@@ -440,7 +440,7 @@
 <span id="L378"><span class="lineNum">     378</span> <span class="tlaGNC">           1 :         _ =&gt; TransitionPlan::Cut,</span></span>
 <span id="L379"><span class="lineNum">     379</span> <span class="tlaGNC">          41 :     };</span></span>
 <span id="L380"><span class="lineNum">     380</span>              : </span>
-<span id="L381"><span class="lineNum">     381</span> <span class="tlaGNC">         122 :     match plan {</span></span>
+<span id="L381"><span class="lineNum">     381</span> <span class="tlaGNC">         120 :     match plan {</span></span>
 <span id="L382"><span class="lineNum">     382</span> <span class="tlaGNC">          40 :         TransitionPlan::NaiveCrossfade { requested_fade } =&gt; naive(requested_fade),</span></span>
 <span id="L383"><span class="lineNum">     383</span>              :         TransitionPlan::AutoCueCrossfade {</span>
 <span id="L384"><span class="lineNum">     384</span> <span class="tlaGNC">           3 :             current_start,</span></span>
@@ -481,9 +481,9 @@
 <span id="L419"><span class="lineNum">     419</span> <span class="tlaGNC">           2 :                 }</span></span>
 <span id="L420"><span class="lineNum">     420</span>              :             }</span>
 <span id="L421"><span class="lineNum">     421</span>              :         }</span>
-<span id="L422"><span class="lineNum">     422</span> <span class="tlaGNC">          79 :         TransitionPlan::Cut =&gt; TransitionPlan::Cut,</span></span>
+<span id="L422"><span class="lineNum">     422</span> <span class="tlaGNC">          77 :         TransitionPlan::Cut =&gt; TransitionPlan::Cut,</span></span>
 <span id="L423"><span class="lineNum">     423</span>              :     }</span>
-<span id="L424"><span class="lineNum">     424</span> <span class="tlaGNC">         122 : }</span></span>
+<span id="L424"><span class="lineNum">     424</span> <span class="tlaGNC">         120 : }</span></span>
 <span id="L425"><span class="lineNum">     425</span>              : </span>
 <span id="L426"><span class="lineNum">     426</span>              : #[cfg(test)]</span>
 <span id="L427"><span class="lineNum">     427</span>              : mod tests {</span>

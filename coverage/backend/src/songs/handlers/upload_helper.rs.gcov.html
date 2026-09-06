@@ -37,7 +37,7 @@
           </tr>
           <tr>
             <td class="headerItem">Test Date:</td>
-            <td class="headerValue">2026-09-06 18:41:37</td>
+            <td class="headerValue">2026-09-06 21:10:43</td>
             <td></td>
             <td class="headerItem">Functions:</td>
             <td class="headerCovTableEntryHi">90.5&nbsp;%</td>
@@ -67,14 +67,14 @@
 <span id="L5"><span class="lineNum">       5</span>              : use crate::errors::{AppError, DbResult};</span>
 <span id="L6"><span class="lineNum">       6</span>              : use crate::util::normalize_lexically;</span>
 <span id="L7"><span class="lineNum">       7</span>              : </span>
-<span id="L8"><span class="lineNum">       8</span> <span class="tlaGNC tlaBgGNC">         703 : pub(crate) fn resolve_audio_path(upload_dir: &amp;str, filename: &amp;str) -&gt; String {</span></span>
-<span id="L9"><span class="lineNum">       9</span> <span class="tlaGNC">         703 :     if filename.starts_with('/') || filename.contains('/') {</span></span>
+<span id="L8"><span class="lineNum">       8</span> <span class="tlaGNC tlaBgGNC">         693 : pub(crate) fn resolve_audio_path(upload_dir: &amp;str, filename: &amp;str) -&gt; String {</span></span>
+<span id="L9"><span class="lineNum">       9</span> <span class="tlaGNC">         693 :     if filename.starts_with('/') || filename.contains('/') {</span></span>
 <span id="L10"><span class="lineNum">      10</span> <span class="tlaGNC">          38 :         filename.to_string()</span></span>
 <span id="L11"><span class="lineNum">      11</span>              :     } else {</span>
-<span id="L12"><span class="lineNum">      12</span> <span class="tlaGNC">         665 :         let p = PathBuf::from(upload_dir).join(&quot;audio&quot;).join(filename);</span></span>
-<span id="L13"><span class="lineNum">      13</span> <span class="tlaGNC">         665 :         normalize_lexically(&amp;p).to_string_lossy().into_owned()</span></span>
+<span id="L12"><span class="lineNum">      12</span> <span class="tlaGNC">         655 :         let p = PathBuf::from(upload_dir).join(&quot;audio&quot;).join(filename);</span></span>
+<span id="L13"><span class="lineNum">      13</span> <span class="tlaGNC">         655 :         normalize_lexically(&amp;p).to_string_lossy().into_owned()</span></span>
 <span id="L14"><span class="lineNum">      14</span>              :     }</span>
-<span id="L15"><span class="lineNum">      15</span> <span class="tlaGNC">         703 : }</span></span>
+<span id="L15"><span class="lineNum">      15</span> <span class="tlaGNC">         693 : }</span></span>
 <span id="L16"><span class="lineNum">      16</span>              : </span>
 <span id="L17"><span class="lineNum">      17</span> <span class="tlaGNC">           3 : pub(crate) fn resolve_cover_path(upload_dir: &amp;str, filename: &amp;str) -&gt; String {</span></span>
 <span id="L18"><span class="lineNum">      18</span> <span class="tlaGNC">           3 :     if filename.is_empty() {</span></span>

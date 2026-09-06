@@ -37,7 +37,7 @@
           </tr>
           <tr>
             <td class="headerItem">Test Date:</td>
-            <td class="headerValue">2026-09-06 18:41:37</td>
+            <td class="headerValue">2026-09-06 21:10:43</td>
             <td></td>
             <td class="headerItem">Functions:</td>
             <td class="headerCovTableEntryLo">50.0&nbsp;%</td>
@@ -79,16 +79,16 @@
 <span id="L17"><span class="lineNum">      17</span>              : </span>
 <span id="L18"><span class="lineNum">      18</span>              : use super::stream::{resolve_station_id, sync_streamer_songs, StationLifecycleLocks};</span>
 <span id="L19"><span class="lineNum">      19</span>              : </span>
-<span id="L20"><span class="lineNum">      20</span> <span class="tlaGNC tlaBgGNC">         100 : async fn fetch_queue_items(db: &amp;sqlx::PgPool, station_id: Uuid, song_ids: Option&lt;&amp;[Uuid]&gt;) -&gt; Result&lt;Vec&lt;QueueItemResponse&gt;, AppError&gt; {</span></span>
-<span id="L21"><span class="lineNum">      21</span> <span class="tlaGNC">         100 :     let rows = if let Some(song_ids) = song_ids {</span></span>
+<span id="L20"><span class="lineNum">      20</span> <span class="tlaGNC tlaBgGNC">          99 : async fn fetch_queue_items(db: &amp;sqlx::PgPool, station_id: Uuid, song_ids: Option&lt;&amp;[Uuid]&gt;) -&gt; Result&lt;Vec&lt;QueueItemResponse&gt;, AppError&gt; {</span></span>
+<span id="L21"><span class="lineNum">      21</span> <span class="tlaGNC">          99 :     let rows = if let Some(song_ids) = song_ids {</span></span>
 <span id="L22"><span class="lineNum">      22</span> <span class="tlaGNC">          58 :         queue_repo::find_queue_items_by_song_ids(db, station_id, song_ids).await?</span></span>
 <span id="L23"><span class="lineNum">      23</span>              :     } else {</span>
-<span id="L24"><span class="lineNum">      24</span> <span class="tlaGNC">          42 :         queue_repo::find_queue_items_all(db, station_id).await?</span></span>
+<span id="L24"><span class="lineNum">      24</span> <span class="tlaGNC">          41 :         queue_repo::find_queue_items_all(db, station_id).await?</span></span>
 <span id="L25"><span class="lineNum">      25</span>              :     };</span>
 <span id="L26"><span class="lineNum">      26</span>              : </span>
-<span id="L27"><span class="lineNum">      27</span> <span class="tlaGNC">         100 :     let items = rows</span></span>
-<span id="L28"><span class="lineNum">      28</span> <span class="tlaGNC">         100 :         .into_iter()</span></span>
-<span id="L29"><span class="lineNum">      29</span> <span class="tlaGNC">         100 :         .map(</span></span>
+<span id="L27"><span class="lineNum">      27</span> <span class="tlaGNC">          99 :     let items = rows</span></span>
+<span id="L28"><span class="lineNum">      28</span> <span class="tlaGNC">          99 :         .into_iter()</span></span>
+<span id="L29"><span class="lineNum">      29</span> <span class="tlaGNC">          99 :         .map(</span></span>
 <span id="L30"><span class="lineNum">      30</span>              :             |(</span>
 <span id="L31"><span class="lineNum">      31</span>              :                 id,</span>
 <span id="L32"><span class="lineNum">      32</span>              :                 station_id,</span>
@@ -103,40 +103,40 @@
 <span id="L41"><span class="lineNum">      41</span>              :                 origin_playlist_id,</span>
 <span id="L42"><span class="lineNum">      42</span>              :                 playlist_name,</span>
 <span id="L43"><span class="lineNum">      43</span>              :                 is_auto_dj,</span>
-<span id="L44"><span class="lineNum">      44</span> <span class="tlaGNC">         373 :             )| {</span></span>
-<span id="L45"><span class="lineNum">      45</span> <span class="tlaGNC">         373 :                 QueueItemResponse {</span></span>
-<span id="L46"><span class="lineNum">      46</span> <span class="tlaGNC">         373 :                     id,</span></span>
-<span id="L47"><span class="lineNum">      47</span> <span class="tlaGNC">         373 :                     station_id,</span></span>
-<span id="L48"><span class="lineNum">      48</span> <span class="tlaGNC">         373 :                     song_id,</span></span>
-<span id="L49"><span class="lineNum">      49</span> <span class="tlaGNC">         373 :                     position,</span></span>
-<span id="L50"><span class="lineNum">      50</span> <span class="tlaGNC">         373 :                     title,</span></span>
-<span id="L51"><span class="lineNum">      51</span> <span class="tlaGNC">         373 :                     artist,</span></span>
-<span id="L52"><span class="lineNum">      52</span> <span class="tlaGNC">         373 :                     album,</span></span>
-<span id="L53"><span class="lineNum">      53</span> <span class="tlaGNC">         373 :                     duration,</span></span>
-<span id="L54"><span class="lineNum">      54</span> <span class="tlaGNC">         373 :                     has_cover: !cover_path.is_empty(),</span></span>
-<span id="L55"><span class="lineNum">      55</span> <span class="tlaGNC">         373 :                     mime_type,</span></span>
-<span id="L56"><span class="lineNum">      56</span> <span class="tlaGNC">         373 :                     origin_playlist_id,</span></span>
-<span id="L57"><span class="lineNum">      57</span> <span class="tlaGNC">         373 :                     playlist_name,</span></span>
-<span id="L58"><span class="lineNum">      58</span> <span class="tlaGNC">         373 :                     is_auto_dj,</span></span>
-<span id="L59"><span class="lineNum">      59</span> <span class="tlaGNC">         373 :                 }</span></span>
-<span id="L60"><span class="lineNum">      60</span> <span class="tlaGNC">         373 :             },</span></span>
+<span id="L44"><span class="lineNum">      44</span> <span class="tlaGNC">         363 :             )| {</span></span>
+<span id="L45"><span class="lineNum">      45</span> <span class="tlaGNC">         363 :                 QueueItemResponse {</span></span>
+<span id="L46"><span class="lineNum">      46</span> <span class="tlaGNC">         363 :                     id,</span></span>
+<span id="L47"><span class="lineNum">      47</span> <span class="tlaGNC">         363 :                     station_id,</span></span>
+<span id="L48"><span class="lineNum">      48</span> <span class="tlaGNC">         363 :                     song_id,</span></span>
+<span id="L49"><span class="lineNum">      49</span> <span class="tlaGNC">         363 :                     position,</span></span>
+<span id="L50"><span class="lineNum">      50</span> <span class="tlaGNC">         363 :                     title,</span></span>
+<span id="L51"><span class="lineNum">      51</span> <span class="tlaGNC">         363 :                     artist,</span></span>
+<span id="L52"><span class="lineNum">      52</span> <span class="tlaGNC">         363 :                     album,</span></span>
+<span id="L53"><span class="lineNum">      53</span> <span class="tlaGNC">         363 :                     duration,</span></span>
+<span id="L54"><span class="lineNum">      54</span> <span class="tlaGNC">         363 :                     has_cover: !cover_path.is_empty(),</span></span>
+<span id="L55"><span class="lineNum">      55</span> <span class="tlaGNC">         363 :                     mime_type,</span></span>
+<span id="L56"><span class="lineNum">      56</span> <span class="tlaGNC">         363 :                     origin_playlist_id,</span></span>
+<span id="L57"><span class="lineNum">      57</span> <span class="tlaGNC">         363 :                     playlist_name,</span></span>
+<span id="L58"><span class="lineNum">      58</span> <span class="tlaGNC">         363 :                     is_auto_dj,</span></span>
+<span id="L59"><span class="lineNum">      59</span> <span class="tlaGNC">         363 :                 }</span></span>
+<span id="L60"><span class="lineNum">      60</span> <span class="tlaGNC">         363 :             },</span></span>
 <span id="L61"><span class="lineNum">      61</span>              :         )</span>
-<span id="L62"><span class="lineNum">      62</span> <span class="tlaGNC">         100 :         .collect();</span></span>
+<span id="L62"><span class="lineNum">      62</span> <span class="tlaGNC">          99 :         .collect();</span></span>
 <span id="L63"><span class="lineNum">      63</span>              : </span>
-<span id="L64"><span class="lineNum">      64</span> <span class="tlaGNC">         100 :     Ok(items)</span></span>
-<span id="L65"><span class="lineNum">      65</span> <span class="tlaGNC">         100 : }</span></span>
+<span id="L64"><span class="lineNum">      64</span> <span class="tlaGNC">          99 :     Ok(items)</span></span>
+<span id="L65"><span class="lineNum">      65</span> <span class="tlaGNC">          99 : }</span></span>
 <span id="L66"><span class="lineNum">      66</span>              : </span>
-<span id="L67"><span class="lineNum">      67</span> <span class="tlaGNC">          35 : pub async fn list_queue(</span></span>
-<span id="L68"><span class="lineNum">      68</span> <span class="tlaGNC">          35 :     Extension(_auth_user): Extension&lt;AuthUser&gt;,</span></span>
-<span id="L69"><span class="lineNum">      69</span> <span class="tlaGNC">          35 :     State(db): State&lt;PgPool&gt;,</span></span>
-<span id="L70"><span class="lineNum">      70</span> <span class="tlaGNC">          35 :     Path(station_id): Path&lt;String&gt;,</span></span>
-<span id="L71"><span class="lineNum">      71</span> <span class="tlaGNC">          35 : ) -&gt; Result&lt;Json&lt;Vec&lt;QueueItemResponse&gt;&gt;, AppError&gt; {</span></span>
-<span id="L72"><span class="lineNum">      72</span> <span class="tlaGNC">          35 :     let station_id = resolve_station_id(&amp;db, &amp;station_id).await?;</span></span>
-<span id="L73"><span class="lineNum">      73</span> <span class="tlaGNC">          35 :     repository::verify_station_exists(&amp;db, station_id).await?;</span></span>
-<span id="L74"><span class="lineNum">      74</span> <span class="tlaGNC">          35 :     let items = fetch_queue_items(&amp;db, station_id, None).await?;</span></span>
+<span id="L67"><span class="lineNum">      67</span> <span class="tlaGNC">          34 : pub async fn list_queue(</span></span>
+<span id="L68"><span class="lineNum">      68</span> <span class="tlaGNC">          34 :     Extension(_auth_user): Extension&lt;AuthUser&gt;,</span></span>
+<span id="L69"><span class="lineNum">      69</span> <span class="tlaGNC">          34 :     State(db): State&lt;PgPool&gt;,</span></span>
+<span id="L70"><span class="lineNum">      70</span> <span class="tlaGNC">          34 :     Path(station_id): Path&lt;String&gt;,</span></span>
+<span id="L71"><span class="lineNum">      71</span> <span class="tlaGNC">          34 : ) -&gt; Result&lt;Json&lt;Vec&lt;QueueItemResponse&gt;&gt;, AppError&gt; {</span></span>
+<span id="L72"><span class="lineNum">      72</span> <span class="tlaGNC">          34 :     let station_id = resolve_station_id(&amp;db, &amp;station_id).await?;</span></span>
+<span id="L73"><span class="lineNum">      73</span> <span class="tlaGNC">          34 :     repository::verify_station_exists(&amp;db, station_id).await?;</span></span>
+<span id="L74"><span class="lineNum">      74</span> <span class="tlaGNC">          34 :     let items = fetch_queue_items(&amp;db, station_id, None).await?;</span></span>
 <span id="L75"><span class="lineNum">      75</span>              : </span>
-<span id="L76"><span class="lineNum">      76</span> <span class="tlaGNC">          35 :     Ok(Json(items))</span></span>
-<span id="L77"><span class="lineNum">      77</span> <span class="tlaGNC">          35 : }</span></span>
+<span id="L76"><span class="lineNum">      76</span> <span class="tlaGNC">          34 :     Ok(Json(items))</span></span>
+<span id="L77"><span class="lineNum">      77</span> <span class="tlaGNC">          34 : }</span></span>
 <span id="L78"><span class="lineNum">      78</span>              : </span>
 <span id="L79"><span class="lineNum">      79</span> <span class="tlaGNC">          59 : pub async fn add_songs_to_queue(</span></span>
 <span id="L80"><span class="lineNum">      80</span> <span class="tlaGNC">          59 :     Extension(_auth_user): Extension&lt;AuthUser&gt;,</span></span>

@@ -37,12 +37,12 @@
           </tr>
           <tr>
             <td class="headerItem">Test Date:</td>
-            <td class="headerValue">2026-09-06 18:41:37</td>
+            <td class="headerValue">2026-09-06 21:10:43</td>
             <td></td>
             <td class="headerItem">Functions:</td>
-            <td class="headerCovTableEntryLo">29.2&nbsp;%</td>
+            <td class="headerCovTableEntryLo">29.9&nbsp;%</td>
             <td class="headerCovTableEntry">264</td>
-            <td class="headerCovTableEntry">77</td>
+            <td class="headerCovTableEntry">79</td>
           </tr>
                   <tr><td><img src="../glass.png" width=3 height=3 alt=""></td></tr>
                 </table>
@@ -106,12 +106,12 @@
 <span id="L44"><span class="lineNum">      44</span>              : }</span>
 <span id="L45"><span class="lineNum">      45</span>              : </span>
 <span id="L46"><span class="lineNum">      46</span>              : impl&lt;T, E: std::fmt::Display&gt; DbResult&lt;T&gt; for Result&lt;T, E&gt; {</span>
-<span id="L47"><span class="lineNum">      47</span> <span class="tlaGNC">        5325 :     fn db_error(self, ctx: &amp;str) -&gt; Result&lt;T, AppError&gt; {</span></span>
-<span id="L48"><span class="lineNum">      48</span> <span class="tlaGNC">        5325 :         self.map_err(|e| {</span></span>
-<span id="L49"><span class="lineNum">      49</span> <span class="tlaGNC">         140 :             tracing::error!(&quot;{ctx}: {e}&quot;);</span></span>
-<span id="L50"><span class="lineNum">      50</span> <span class="tlaGNC">         140 :             AppError::Internal(&quot;Database operation failed&quot;.into())</span></span>
-<span id="L51"><span class="lineNum">      51</span> <span class="tlaGNC">         140 :         })</span></span>
-<span id="L52"><span class="lineNum">      52</span> <span class="tlaGNC">        5325 :     }</span></span>
+<span id="L47"><span class="lineNum">      47</span> <span class="tlaGNC">        5637 :     fn db_error(self, ctx: &amp;str) -&gt; Result&lt;T, AppError&gt; {</span></span>
+<span id="L48"><span class="lineNum">      48</span> <span class="tlaGNC">        5637 :         self.map_err(|e| {</span></span>
+<span id="L49"><span class="lineNum">      49</span> <span class="tlaGNC">         141 :             tracing::error!(&quot;{ctx}: {e}&quot;);</span></span>
+<span id="L50"><span class="lineNum">      50</span> <span class="tlaGNC">         141 :             AppError::Internal(&quot;Database operation failed&quot;.into())</span></span>
+<span id="L51"><span class="lineNum">      51</span> <span class="tlaGNC">         141 :         })</span></span>
+<span id="L52"><span class="lineNum">      52</span> <span class="tlaGNC">        5637 :     }</span></span>
 <span id="L53"><span class="lineNum">      53</span>              : }</span>
 <span id="L54"><span class="lineNum">      54</span>              : </span>
 <span id="L55"><span class="lineNum">      55</span>              : #[cfg(test)]</span>

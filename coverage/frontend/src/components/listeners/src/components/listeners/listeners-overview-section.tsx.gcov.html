@@ -37,7 +37,7 @@
           </tr>
           <tr>
             <td class="headerItem">Test Date:</td>
-            <td class="headerValue">2026-09-06 18:41:38</td>
+            <td class="headerValue">2026-09-06 21:10:44</td>
             <td></td>
             <td class="headerItem">Functions:</td>
             <td class="headerCovTableEntryLo">54.5&nbsp;%</td>
@@ -164,90 +164,93 @@
 <span id="L102"><span class="lineNum">     102</span>              :               &lt;/Typography&gt;</span>
 <span id="L103"><span class="lineNum">     103</span>              :             )}</span>
 <span id="L104"><span class="lineNum">     104</span>              : </span>
-<span id="L105"><span class="lineNum">     105</span>              :             &lt;Box sx={{ display: &quot;grid&quot;, gridTemplateColumns: { xs: &quot;1fr&quot;, md: &quot;1fr 1fr&quot; }, gap: 3, mt: 3 }}&gt;</span>
-<span id="L106"><span class="lineNum">     106</span>              :               &lt;Box&gt;</span>
-<span id="L107"><span class="lineNum">     107</span>              :                 &lt;Typography variant=&quot;body2&quot; color=&quot;text.secondary&quot; sx={{ fontWeight: 500, mb: 1 }}&gt;</span>
-<span id="L108"><span class="lineNum">     108</span>              :                   {t(&quot;dashboard:listeners_by_hour&quot;)}</span>
-<span id="L109"><span class="lineNum">     109</span>              :                 &lt;/Typography&gt;</span>
-<span id="L110"><span class="lineNum">     110</span>              :                 {hours.length &gt; 0 ? (</span>
-<span id="L111"><span class="lineNum">     111</span>              :                   &lt;BarChart</span>
-<span id="L112"><span class="lineNum">     112</span>              :                     height={200}</span>
-<span id="L113"><span class="lineNum">     113</span>              :                     dataset={hours}</span>
-<span id="L114"><span class="lineNum">     114</span>              :                     xAxis={[{ dataKey: &quot;hour&quot;, scaleType: &quot;band&quot;, tickLabelStyle: { fontSize: 10 } }]}</span>
-<span id="L115"><span class="lineNum">     115</span>              :                     series={[</span>
-<span id="L116"><span class="lineNum">     116</span>              :                       {</span>
-<span id="L117"><span class="lineNum">     117</span>              :                         dataKey: &quot;avg_listeners&quot;,</span>
-<span id="L118"><span class="lineNum">     118</span>              :                         label: t(&quot;stations:listeners&quot;),</span>
-<span id="L119"><span class="lineNum">     119</span> <span class="tlaUNC">           0 :                         valueFormatter: (v) =&gt; `${Math.round((v as number) ?? 0)}`,</span></span>
-<span id="L120"><span class="lineNum">     120</span>              :                       },</span>
-<span id="L121"><span class="lineNum">     121</span>              :                     ]}</span>
-<span id="L122"><span class="lineNum">     122</span>              :                     margin={{ top: 10, right: 10, bottom: 30, left: 40 }}</span>
-<span id="L123"><span class="lineNum">     123</span>              :                   /&gt;</span>
-<span id="L124"><span class="lineNum">     124</span>              :                 ) : (</span>
-<span id="L125"><span class="lineNum">     125</span>              :                   &lt;Typography color=&quot;text.secondary&quot;&gt;{t(&quot;stations:listeners_empty&quot;)}&lt;/Typography&gt;</span>
-<span id="L126"><span class="lineNum">     126</span>              :                 )}</span>
-<span id="L127"><span class="lineNum">     127</span>              :               &lt;/Box&gt;</span>
-<span id="L128"><span class="lineNum">     128</span>              : </span>
-<span id="L129"><span class="lineNum">     129</span>              :               &lt;Box&gt;</span>
-<span id="L130"><span class="lineNum">     130</span>              :                 &lt;Typography variant=&quot;body2&quot; color=&quot;text.secondary&quot; sx={{ fontWeight: 500, mb: 1 }}&gt;</span>
-<span id="L131"><span class="lineNum">     131</span>              :                   {t(&quot;dashboard:listeners_by_weekday&quot;)}</span>
-<span id="L132"><span class="lineNum">     132</span>              :                 &lt;/Typography&gt;</span>
-<span id="L133"><span class="lineNum">     133</span>              :                 {weekdays.length &gt; 0 ? (</span>
-<span id="L134"><span class="lineNum">     134</span>              :                   &lt;BarChart</span>
-<span id="L135"><span class="lineNum">     135</span>              :                     height={200}</span>
-<span id="L136"><span class="lineNum">     136</span>              :                     dataset={weekdays}</span>
-<span id="L137"><span class="lineNum">     137</span>              :                     xAxis={[{ dataKey: &quot;weekday&quot;, scaleType: &quot;band&quot;, tickLabelStyle: { fontSize: 10 } }]}</span>
-<span id="L138"><span class="lineNum">     138</span>              :                     series={[</span>
-<span id="L139"><span class="lineNum">     139</span>              :                       {</span>
-<span id="L140"><span class="lineNum">     140</span>              :                         dataKey: &quot;avg_listeners&quot;,</span>
-<span id="L141"><span class="lineNum">     141</span>              :                         label: t(&quot;stations:listeners&quot;),</span>
-<span id="L142"><span class="lineNum">     142</span> <span class="tlaUNC">           0 :                         valueFormatter: (v) =&gt; `${Math.round((v as number) ?? 0)}`,</span></span>
-<span id="L143"><span class="lineNum">     143</span>              :                       },</span>
-<span id="L144"><span class="lineNum">     144</span>              :                     ]}</span>
-<span id="L145"><span class="lineNum">     145</span>              :                     margin={{ top: 10, right: 10, bottom: 30, left: 40 }}</span>
-<span id="L146"><span class="lineNum">     146</span>              :                   /&gt;</span>
-<span id="L147"><span class="lineNum">     147</span>              :                 ) : (</span>
-<span id="L148"><span class="lineNum">     148</span>              :                   &lt;Typography color=&quot;text.secondary&quot;&gt;{t(&quot;stations:listeners_empty&quot;)}&lt;/Typography&gt;</span>
-<span id="L149"><span class="lineNum">     149</span>              :                 )}</span>
-<span id="L150"><span class="lineNum">     150</span>              :               &lt;/Box&gt;</span>
-<span id="L151"><span class="lineNum">     151</span>              :             &lt;/Box&gt;</span>
-<span id="L152"><span class="lineNum">     152</span>              : </span>
-<span id="L153"><span class="lineNum">     153</span>              :             {data &amp;&amp; data.stations.length &gt; 0 &amp;&amp; (</span>
-<span id="L154"><span class="lineNum">     154</span>              :               &lt;&gt;</span>
-<span id="L155"><span class="lineNum">     155</span>              :                 &lt;Divider sx={{ my: 3 }} /&gt;</span>
-<span id="L156"><span class="lineNum">     156</span>              :                 &lt;Typography variant=&quot;body2&quot; color=&quot;text.secondary&quot; sx={{ fontWeight: 500, mb: 1 }}&gt;</span>
-<span id="L157"><span class="lineNum">     157</span>              :                   {t(&quot;dashboard:listeners_per_station&quot;)}</span>
-<span id="L158"><span class="lineNum">     158</span>              :                 &lt;/Typography&gt;</span>
-<span id="L159"><span class="lineNum">     159</span>              :                 &lt;Box sx={{ display: &quot;flex&quot;, flexDirection: &quot;column&quot;, gap: 0.5 }}&gt;</span>
-<span id="L160"><span class="lineNum">     160</span> <span class="tlaGNC tlaBgGNC">          12 :                   {data.stations.map((station) =&gt; (</span></span>
-<span id="L161"><span class="lineNum">     161</span> <span class="tlaGNC">          12 :                     &lt;Box</span></span>
-<span id="L162"><span class="lineNum">     162</span>              :                       key={station.station_id}</span>
-<span id="L163"><span class="lineNum">     163</span>              :                       sx={{</span>
-<span id="L164"><span class="lineNum">     164</span>              :                         display: &quot;flex&quot;,</span>
-<span id="L165"><span class="lineNum">     165</span>              :                         alignItems: &quot;center&quot;,</span>
-<span id="L166"><span class="lineNum">     166</span>              :                         justifyContent: &quot;space-between&quot;,</span>
-<span id="L167"><span class="lineNum">     167</span>              :                         p: 1,</span>
-<span id="L168"><span class="lineNum">     168</span>              :                         borderRadius: 1,</span>
-<span id="L169"><span class="lineNum">     169</span>              :                         &quot;&amp;:hover&quot;: { bgcolor: &quot;action.hover&quot; },</span>
-<span id="L170"><span class="lineNum">     170</span>              :                       }}</span>
-<span id="L171"><span class="lineNum">     171</span>              :                     &gt;</span>
-<span id="L172"><span class="lineNum">     172</span>              :                       &lt;Typography variant=&quot;body2&quot; sx={{ fontWeight: 500 }}&gt;</span>
-<span id="L173"><span class="lineNum">     173</span>              :                         {station.name}</span>
-<span id="L174"><span class="lineNum">     174</span>              :                       &lt;/Typography&gt;</span>
-<span id="L175"><span class="lineNum">     175</span>              :                       &lt;Typography variant=&quot;body2&quot; color={station.online ? &quot;text.primary&quot; : &quot;text.disabled&quot;}&gt;</span>
-<span id="L176"><span class="lineNum">     176</span>              :                         {station.online ? station.listeners : &quot;—&quot;}</span>
+<span id="L105"><span class="lineNum">     105</span>              :             &lt;Typography variant=&quot;caption&quot; color=&quot;text.secondary&quot;&gt;</span>
+<span id="L106"><span class="lineNum">     106</span>              :               {t(&quot;dashboard:listeners_avg_hint&quot;)}</span>
+<span id="L107"><span class="lineNum">     107</span>              :             &lt;/Typography&gt;</span>
+<span id="L108"><span class="lineNum">     108</span>              :             &lt;Box sx={{ display: &quot;grid&quot;, gridTemplateColumns: { xs: &quot;1fr&quot;, md: &quot;1fr 1fr&quot; }, gap: 3, mt: 1 }}&gt;</span>
+<span id="L109"><span class="lineNum">     109</span>              :               &lt;Box&gt;</span>
+<span id="L110"><span class="lineNum">     110</span>              :                 &lt;Typography variant=&quot;body2&quot; color=&quot;text.secondary&quot; sx={{ fontWeight: 500, mb: 1 }}&gt;</span>
+<span id="L111"><span class="lineNum">     111</span>              :                   {t(&quot;dashboard:listeners_by_hour&quot;)}</span>
+<span id="L112"><span class="lineNum">     112</span>              :                 &lt;/Typography&gt;</span>
+<span id="L113"><span class="lineNum">     113</span>              :                 {hours.length &gt; 0 ? (</span>
+<span id="L114"><span class="lineNum">     114</span>              :                   &lt;BarChart</span>
+<span id="L115"><span class="lineNum">     115</span>              :                     height={200}</span>
+<span id="L116"><span class="lineNum">     116</span>              :                     dataset={hours}</span>
+<span id="L117"><span class="lineNum">     117</span>              :                     xAxis={[{ dataKey: &quot;hour&quot;, scaleType: &quot;band&quot;, tickLabelStyle: { fontSize: 10 } }]}</span>
+<span id="L118"><span class="lineNum">     118</span>              :                     series={[</span>
+<span id="L119"><span class="lineNum">     119</span>              :                       {</span>
+<span id="L120"><span class="lineNum">     120</span>              :                         dataKey: &quot;avg_listeners&quot;,</span>
+<span id="L121"><span class="lineNum">     121</span>              :                         label: t(&quot;stations:listeners&quot;),</span>
+<span id="L122"><span class="lineNum">     122</span> <span class="tlaUNC">           0 :                         valueFormatter: (v) =&gt; `${Math.round((v as number) ?? 0)}`,</span></span>
+<span id="L123"><span class="lineNum">     123</span>              :                       },</span>
+<span id="L124"><span class="lineNum">     124</span>              :                     ]}</span>
+<span id="L125"><span class="lineNum">     125</span>              :                     margin={{ top: 10, right: 10, bottom: 30, left: 40 }}</span>
+<span id="L126"><span class="lineNum">     126</span>              :                   /&gt;</span>
+<span id="L127"><span class="lineNum">     127</span>              :                 ) : (</span>
+<span id="L128"><span class="lineNum">     128</span>              :                   &lt;Typography color=&quot;text.secondary&quot;&gt;{t(&quot;stations:listeners_empty&quot;)}&lt;/Typography&gt;</span>
+<span id="L129"><span class="lineNum">     129</span>              :                 )}</span>
+<span id="L130"><span class="lineNum">     130</span>              :               &lt;/Box&gt;</span>
+<span id="L131"><span class="lineNum">     131</span>              : </span>
+<span id="L132"><span class="lineNum">     132</span>              :               &lt;Box&gt;</span>
+<span id="L133"><span class="lineNum">     133</span>              :                 &lt;Typography variant=&quot;body2&quot; color=&quot;text.secondary&quot; sx={{ fontWeight: 500, mb: 1 }}&gt;</span>
+<span id="L134"><span class="lineNum">     134</span>              :                   {t(&quot;dashboard:listeners_by_weekday&quot;)}</span>
+<span id="L135"><span class="lineNum">     135</span>              :                 &lt;/Typography&gt;</span>
+<span id="L136"><span class="lineNum">     136</span>              :                 {weekdays.length &gt; 0 ? (</span>
+<span id="L137"><span class="lineNum">     137</span>              :                   &lt;BarChart</span>
+<span id="L138"><span class="lineNum">     138</span>              :                     height={200}</span>
+<span id="L139"><span class="lineNum">     139</span>              :                     dataset={weekdays}</span>
+<span id="L140"><span class="lineNum">     140</span>              :                     xAxis={[{ dataKey: &quot;weekday&quot;, scaleType: &quot;band&quot;, tickLabelStyle: { fontSize: 10 } }]}</span>
+<span id="L141"><span class="lineNum">     141</span>              :                     series={[</span>
+<span id="L142"><span class="lineNum">     142</span>              :                       {</span>
+<span id="L143"><span class="lineNum">     143</span>              :                         dataKey: &quot;avg_listeners&quot;,</span>
+<span id="L144"><span class="lineNum">     144</span>              :                         label: t(&quot;stations:listeners&quot;),</span>
+<span id="L145"><span class="lineNum">     145</span> <span class="tlaUNC">           0 :                         valueFormatter: (v) =&gt; `${Math.round((v as number) ?? 0)}`,</span></span>
+<span id="L146"><span class="lineNum">     146</span>              :                       },</span>
+<span id="L147"><span class="lineNum">     147</span>              :                     ]}</span>
+<span id="L148"><span class="lineNum">     148</span>              :                     margin={{ top: 10, right: 10, bottom: 30, left: 40 }}</span>
+<span id="L149"><span class="lineNum">     149</span>              :                   /&gt;</span>
+<span id="L150"><span class="lineNum">     150</span>              :                 ) : (</span>
+<span id="L151"><span class="lineNum">     151</span>              :                   &lt;Typography color=&quot;text.secondary&quot;&gt;{t(&quot;stations:listeners_empty&quot;)}&lt;/Typography&gt;</span>
+<span id="L152"><span class="lineNum">     152</span>              :                 )}</span>
+<span id="L153"><span class="lineNum">     153</span>              :               &lt;/Box&gt;</span>
+<span id="L154"><span class="lineNum">     154</span>              :             &lt;/Box&gt;</span>
+<span id="L155"><span class="lineNum">     155</span>              : </span>
+<span id="L156"><span class="lineNum">     156</span>              :             {data &amp;&amp; data.stations.length &gt; 0 &amp;&amp; (</span>
+<span id="L157"><span class="lineNum">     157</span>              :               &lt;&gt;</span>
+<span id="L158"><span class="lineNum">     158</span>              :                 &lt;Divider sx={{ my: 3 }} /&gt;</span>
+<span id="L159"><span class="lineNum">     159</span>              :                 &lt;Typography variant=&quot;body2&quot; color=&quot;text.secondary&quot; sx={{ fontWeight: 500, mb: 1 }}&gt;</span>
+<span id="L160"><span class="lineNum">     160</span>              :                   {t(&quot;dashboard:listeners_per_station&quot;)}</span>
+<span id="L161"><span class="lineNum">     161</span>              :                 &lt;/Typography&gt;</span>
+<span id="L162"><span class="lineNum">     162</span>              :                 &lt;Box sx={{ display: &quot;flex&quot;, flexDirection: &quot;column&quot;, gap: 0.5 }}&gt;</span>
+<span id="L163"><span class="lineNum">     163</span> <span class="tlaGNC tlaBgGNC">          12 :                   {data.stations.map((station) =&gt; (</span></span>
+<span id="L164"><span class="lineNum">     164</span> <span class="tlaGNC">          12 :                     &lt;Box</span></span>
+<span id="L165"><span class="lineNum">     165</span>              :                       key={station.station_id}</span>
+<span id="L166"><span class="lineNum">     166</span>              :                       sx={{</span>
+<span id="L167"><span class="lineNum">     167</span>              :                         display: &quot;flex&quot;,</span>
+<span id="L168"><span class="lineNum">     168</span>              :                         alignItems: &quot;center&quot;,</span>
+<span id="L169"><span class="lineNum">     169</span>              :                         justifyContent: &quot;space-between&quot;,</span>
+<span id="L170"><span class="lineNum">     170</span>              :                         p: 1,</span>
+<span id="L171"><span class="lineNum">     171</span>              :                         borderRadius: 1,</span>
+<span id="L172"><span class="lineNum">     172</span>              :                         &quot;&amp;:hover&quot;: { bgcolor: &quot;action.hover&quot; },</span>
+<span id="L173"><span class="lineNum">     173</span>              :                       }}</span>
+<span id="L174"><span class="lineNum">     174</span>              :                     &gt;</span>
+<span id="L175"><span class="lineNum">     175</span>              :                       &lt;Typography variant=&quot;body2&quot; sx={{ fontWeight: 500 }}&gt;</span>
+<span id="L176"><span class="lineNum">     176</span>              :                         {station.name}</span>
 <span id="L177"><span class="lineNum">     177</span>              :                       &lt;/Typography&gt;</span>
-<span id="L178"><span class="lineNum">     178</span>              :                     &lt;/Box&gt;</span>
-<span id="L179"><span class="lineNum">     179</span>              :                   ))}</span>
-<span id="L180"><span class="lineNum">     180</span>              :                 &lt;/Box&gt;</span>
-<span id="L181"><span class="lineNum">     181</span>              :               &lt;/&gt;</span>
-<span id="L182"><span class="lineNum">     182</span>              :             )}</span>
-<span id="L183"><span class="lineNum">     183</span>              :           &lt;/&gt;</span>
-<span id="L184"><span class="lineNum">     184</span>              :         )}</span>
-<span id="L185"><span class="lineNum">     185</span>              :       &lt;/CardContent&gt;</span>
-<span id="L186"><span class="lineNum">     186</span>              :     &lt;/Card&gt;</span>
-<span id="L187"><span class="lineNum">     187</span>              :   );</span>
-<span id="L188"><span class="lineNum">     188</span>              : }</span>
+<span id="L178"><span class="lineNum">     178</span>              :                       &lt;Typography variant=&quot;body2&quot; color={station.online ? &quot;text.primary&quot; : &quot;text.disabled&quot;}&gt;</span>
+<span id="L179"><span class="lineNum">     179</span>              :                         {station.online ? station.listeners : &quot;—&quot;}</span>
+<span id="L180"><span class="lineNum">     180</span>              :                       &lt;/Typography&gt;</span>
+<span id="L181"><span class="lineNum">     181</span>              :                     &lt;/Box&gt;</span>
+<span id="L182"><span class="lineNum">     182</span>              :                   ))}</span>
+<span id="L183"><span class="lineNum">     183</span>              :                 &lt;/Box&gt;</span>
+<span id="L184"><span class="lineNum">     184</span>              :               &lt;/&gt;</span>
+<span id="L185"><span class="lineNum">     185</span>              :             )}</span>
+<span id="L186"><span class="lineNum">     186</span>              :           &lt;/&gt;</span>
+<span id="L187"><span class="lineNum">     187</span>              :         )}</span>
+<span id="L188"><span class="lineNum">     188</span>              :       &lt;/CardContent&gt;</span>
+<span id="L189"><span class="lineNum">     189</span>              :     &lt;/Card&gt;</span>
+<span id="L190"><span class="lineNum">     190</span>              :   );</span>
+<span id="L191"><span class="lineNum">     191</span>              : }</span>
         </pre>
               </td>
             </tr>

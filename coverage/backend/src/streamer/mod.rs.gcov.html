@@ -37,7 +37,7 @@
           </tr>
           <tr>
             <td class="headerItem">Test Date:</td>
-            <td class="headerValue">2026-09-06 18:41:37</td>
+            <td class="headerValue">2026-09-06 21:10:43</td>
             <td></td>
             <td class="headerItem">Functions:</td>
             <td class="headerCovTableEntryLo">60.0&nbsp;%</td>
@@ -215,26 +215,26 @@
 <span id="L153"><span class="lineNum">     153</span> <span class="tlaGNC">          44 :     pub async fn shutdown(&amp;self) {</span></span>
 <span id="L154"><span class="lineNum">     154</span> <span class="tlaGNC">          44 :         let _ = self.runtime.shutdown().await;</span></span>
 <span id="L155"><span class="lineNum">     155</span> <span class="tlaGNC">          44 :     }</span></span>
-<span id="L156"><span class="lineNum">     156</span> <span class="tlaGNC">        7212 :     pub(crate) async fn status(&amp;self) -&gt; Result&lt;StatusEvent, PipelineError&gt; {</span></span>
-<span id="L157"><span class="lineNum">     157</span> <span class="tlaGNC">        7212 :         self.runtime.status().await</span></span>
-<span id="L158"><span class="lineNum">     158</span> <span class="tlaGNC">        7212 :     }</span></span>
-<span id="L159"><span class="lineNum">     159</span> <span class="tlaGNC">        7199 :     pub(crate) async fn status_json(&amp;self) -&gt; Result&lt;serde_json::Value, PipelineError&gt; {</span></span>
-<span id="L160"><span class="lineNum">     160</span> <span class="tlaGNC">        7199 :         match self.status().await? {</span></span>
+<span id="L156"><span class="lineNum">     156</span> <span class="tlaGNC">        6940 :     pub(crate) async fn status(&amp;self) -&gt; Result&lt;StatusEvent, PipelineError&gt; {</span></span>
+<span id="L157"><span class="lineNum">     157</span> <span class="tlaGNC">        6940 :         self.runtime.status().await</span></span>
+<span id="L158"><span class="lineNum">     158</span> <span class="tlaGNC">        6940 :     }</span></span>
+<span id="L159"><span class="lineNum">     159</span> <span class="tlaGNC">        6927 :     pub(crate) async fn status_json(&amp;self) -&gt; Result&lt;serde_json::Value, PipelineError&gt; {</span></span>
+<span id="L160"><span class="lineNum">     160</span> <span class="tlaGNC">        6927 :         match self.status().await? {</span></span>
 <span id="L161"><span class="lineNum">     161</span>              :             StatusEvent::State {</span>
-<span id="L162"><span class="lineNum">     162</span> <span class="tlaGNC">        7199 :                 playing,</span></span>
-<span id="L163"><span class="lineNum">     163</span> <span class="tlaGNC">        7199 :                 song_index,</span></span>
-<span id="L164"><span class="lineNum">     164</span> <span class="tlaGNC">        7199 :                 total,</span></span>
-<span id="L165"><span class="lineNum">     165</span> <span class="tlaGNC">        7199 :                 elapsed,</span></span>
-<span id="L166"><span class="lineNum">     166</span> <span class="tlaGNC">        7199 :                 title,</span></span>
-<span id="L167"><span class="lineNum">     167</span> <span class="tlaGNC">        7199 :                 artist,</span></span>
-<span id="L168"><span class="lineNum">     168</span> <span class="tlaGNC">        7199 :                 duration,</span></span>
-<span id="L169"><span class="lineNum">     169</span> <span class="tlaGNC">        7199 :             } =&gt; Ok(serde_json::json!({</span></span>
-<span id="L170"><span class="lineNum">     170</span> <span class="tlaGNC">        7199 :                 &quot;playing&quot;: playing, &quot;song_index&quot;: song_index, &quot;total&quot;: total, &quot;elapsed&quot;: elapsed,</span></span>
-<span id="L171"><span class="lineNum">     171</span> <span class="tlaGNC">        7199 :                 &quot;title&quot;: title, &quot;artist&quot;: artist, &quot;duration&quot;: duration,</span></span>
-<span id="L172"><span class="lineNum">     172</span> <span class="tlaGNC">        7199 :             })),</span></span>
+<span id="L162"><span class="lineNum">     162</span> <span class="tlaGNC">        6927 :                 playing,</span></span>
+<span id="L163"><span class="lineNum">     163</span> <span class="tlaGNC">        6927 :                 song_index,</span></span>
+<span id="L164"><span class="lineNum">     164</span> <span class="tlaGNC">        6927 :                 total,</span></span>
+<span id="L165"><span class="lineNum">     165</span> <span class="tlaGNC">        6927 :                 elapsed,</span></span>
+<span id="L166"><span class="lineNum">     166</span> <span class="tlaGNC">        6927 :                 title,</span></span>
+<span id="L167"><span class="lineNum">     167</span> <span class="tlaGNC">        6927 :                 artist,</span></span>
+<span id="L168"><span class="lineNum">     168</span> <span class="tlaGNC">        6927 :                 duration,</span></span>
+<span id="L169"><span class="lineNum">     169</span> <span class="tlaGNC">        6927 :             } =&gt; Ok(serde_json::json!({</span></span>
+<span id="L170"><span class="lineNum">     170</span> <span class="tlaGNC">        6927 :                 &quot;playing&quot;: playing, &quot;song_index&quot;: song_index, &quot;total&quot;: total, &quot;elapsed&quot;: elapsed,</span></span>
+<span id="L171"><span class="lineNum">     171</span> <span class="tlaGNC">        6927 :                 &quot;title&quot;: title, &quot;artist&quot;: artist, &quot;duration&quot;: duration,</span></span>
+<span id="L172"><span class="lineNum">     172</span> <span class="tlaGNC">        6927 :             })),</span></span>
 <span id="L173"><span class="lineNum">     173</span> <span class="tlaUNC tlaBgUNC">           0 :             StatusEvent::SongChange { .. } =&gt; unreachable!(),</span></span>
 <span id="L174"><span class="lineNum">     174</span>              :         }</span>
-<span id="L175"><span class="lineNum">     175</span> <span class="tlaGNC tlaBgGNC">        7199 :     }</span></span>
+<span id="L175"><span class="lineNum">     175</span> <span class="tlaGNC tlaBgGNC">        6927 :     }</span></span>
 <span id="L176"><span class="lineNum">     176</span> <span class="tlaGNC">           1 :     pub(crate) fn current_song_index(&amp;self) -&gt; usize {</span></span>
 <span id="L177"><span class="lineNum">     177</span> <span class="tlaGNC">           1 :         self.queue.current_song_index()</span></span>
 <span id="L178"><span class="lineNum">     178</span> <span class="tlaGNC">           1 :     }</span></span>

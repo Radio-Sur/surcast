@@ -37,7 +37,7 @@
           </tr>
           <tr>
             <td class="headerItem">Test Date:</td>
-            <td class="headerValue">2026-09-06 18:41:37</td>
+            <td class="headerValue">2026-09-06 21:10:43</td>
             <td></td>
             <td class="headerItem">Functions:</td>
             <td class="headerCovTableEntryLo">34.2&nbsp;%</td>
@@ -257,48 +257,48 @@
 <span id="L195"><span class="lineNum">     195</span> <span class="tlaGNC">          71 :     let clock_gate_src = clock_gate</span></span>
 <span id="L196"><span class="lineNum">     196</span> <span class="tlaGNC">          71 :         .static_pad(&quot;src&quot;)</span></span>
 <span id="L197"><span class="lineNum">     197</span> <span class="tlaGNC">          71 :         .ok_or_else(|| PipelineError::Pipeline(&quot;clock gate has no source pad&quot;.into()))?;</span></span>
-<span id="L198"><span class="lineNum">     198</span> <span class="tlaGNC">        8391 :     clock_gate_src.add_probe(gst::PadProbeType::BUFFER, move |_, info| {</span></span>
-<span id="L199"><span class="lineNum">     199</span> <span class="tlaGNC">        8391 :         let Some(gst::PadProbeData::Buffer(buffer)) = &amp;info.data else {</span></span>
+<span id="L198"><span class="lineNum">     198</span> <span class="tlaGNC">        8076 :     clock_gate_src.add_probe(gst::PadProbeType::BUFFER, move |_, info| {</span></span>
+<span id="L199"><span class="lineNum">     199</span> <span class="tlaGNC">        8076 :         let Some(gst::PadProbeData::Buffer(buffer)) = &amp;info.data else {</span></span>
 <span id="L200"><span class="lineNum">     200</span> <span class="tlaUNC tlaBgUNC">           0 :             return gst::PadProbeReturn::Ok;</span></span>
 <span id="L201"><span class="lineNum">     201</span>              :         };</span>
-<span id="L202"><span class="lineNum">     202</span> <span class="tlaGNC tlaBgGNC">        8391 :         let handover = {</span></span>
-<span id="L203"><span class="lineNum">     203</span> <span class="tlaGNC">        8391 :             let mut active = handover_active.lock().unwrap_or_else(|error| error.into_inner());</span></span>
-<span id="L204"><span class="lineNum">     204</span> <span class="tlaGNC">        8391 :             active.as_mut().and_then(|plan| {</span></span>
-<span id="L205"><span class="lineNum">     205</span> <span class="tlaGNC">        8326 :                 let due = buffer.pts().is_some_and(|pts| {</span></span>
-<span id="L206"><span class="lineNum">     206</span> <span class="tlaGNC">        8326 :                     let started_at = *plan.started_at.get_or_insert(pts);</span></span>
-<span id="L207"><span class="lineNum">     207</span> <span class="tlaGNC">        8326 :                     let elapsed = pts.saturating_sub(started_at);</span></span>
-<span id="L208"><span class="lineNum">     208</span> <span class="tlaGNC">        8326 :                     plan.last_elapsed = elapsed;</span></span>
-<span id="L209"><span class="lineNum">     209</span> <span class="tlaGNC">        8326 :                     plan.handover_at.is_some_and(|handover_at| elapsed &gt;= handover_at)</span></span>
-<span id="L210"><span class="lineNum">     210</span> <span class="tlaGNC">        8326 :                 });</span></span>
-<span id="L211"><span class="lineNum">     211</span> <span class="tlaGNC">        8326 :                 if due &amp;&amp; !plan.handed_over {</span></span>
-<span id="L212"><span class="lineNum">     212</span> <span class="tlaGNC">          41 :                     plan.handed_over = true;</span></span>
-<span id="L213"><span class="lineNum">     213</span> <span class="tlaGNC">          41 :                     plan.next.take().map(|(next, metadata)| {</span></span>
-<span id="L214"><span class="lineNum">     214</span> <span class="tlaGNC">          41 :                         plan.current = next.clone();</span></span>
-<span id="L215"><span class="lineNum">     215</span> <span class="tlaGNC">          41 :                         plan.current_metadata = metadata.clone();</span></span>
-<span id="L216"><span class="lineNum">     216</span> <span class="tlaGNC">          41 :                         plan.current_epoch = plan.last_elapsed;</span></span>
-<span id="L217"><span class="lineNum">     217</span> <span class="tlaGNC">          41 :                         (plan.generation, next, metadata)</span></span>
-<span id="L218"><span class="lineNum">     218</span> <span class="tlaGNC">          41 :                     })</span></span>
+<span id="L202"><span class="lineNum">     202</span> <span class="tlaGNC tlaBgGNC">        8076 :         let handover = {</span></span>
+<span id="L203"><span class="lineNum">     203</span> <span class="tlaGNC">        8076 :             let mut active = handover_active.lock().unwrap_or_else(|error| error.into_inner());</span></span>
+<span id="L204"><span class="lineNum">     204</span> <span class="tlaGNC">        8076 :             active.as_mut().and_then(|plan| {</span></span>
+<span id="L205"><span class="lineNum">     205</span> <span class="tlaGNC">        8011 :                 let due = buffer.pts().is_some_and(|pts| {</span></span>
+<span id="L206"><span class="lineNum">     206</span> <span class="tlaGNC">        8011 :                     let started_at = *plan.started_at.get_or_insert(pts);</span></span>
+<span id="L207"><span class="lineNum">     207</span> <span class="tlaGNC">        8011 :                     let elapsed = pts.saturating_sub(started_at);</span></span>
+<span id="L208"><span class="lineNum">     208</span> <span class="tlaGNC">        8011 :                     plan.last_elapsed = elapsed;</span></span>
+<span id="L209"><span class="lineNum">     209</span> <span class="tlaGNC">        8011 :                     plan.handover_at.is_some_and(|handover_at| elapsed &gt;= handover_at)</span></span>
+<span id="L210"><span class="lineNum">     210</span> <span class="tlaGNC">        8011 :                 });</span></span>
+<span id="L211"><span class="lineNum">     211</span> <span class="tlaGNC">        8011 :                 if due &amp;&amp; !plan.handed_over {</span></span>
+<span id="L212"><span class="lineNum">     212</span> <span class="tlaGNC">          39 :                     plan.handed_over = true;</span></span>
+<span id="L213"><span class="lineNum">     213</span> <span class="tlaGNC">          39 :                     plan.next.take().map(|(next, metadata)| {</span></span>
+<span id="L214"><span class="lineNum">     214</span> <span class="tlaGNC">          39 :                         plan.current = next.clone();</span></span>
+<span id="L215"><span class="lineNum">     215</span> <span class="tlaGNC">          39 :                         plan.current_metadata = metadata.clone();</span></span>
+<span id="L216"><span class="lineNum">     216</span> <span class="tlaGNC">          39 :                         plan.current_epoch = plan.last_elapsed;</span></span>
+<span id="L217"><span class="lineNum">     217</span> <span class="tlaGNC">          39 :                         (plan.generation, next, metadata)</span></span>
+<span id="L218"><span class="lineNum">     218</span> <span class="tlaGNC">          39 :                     })</span></span>
 <span id="L219"><span class="lineNum">     219</span>              :                 } else {</span>
-<span id="L220"><span class="lineNum">     220</span> <span class="tlaGNC">        8285 :                     None</span></span>
+<span id="L220"><span class="lineNum">     220</span> <span class="tlaGNC">        7972 :                     None</span></span>
 <span id="L221"><span class="lineNum">     221</span>              :                 }</span>
-<span id="L222"><span class="lineNum">     222</span> <span class="tlaGNC">        8326 :             })</span></span>
+<span id="L222"><span class="lineNum">     222</span> <span class="tlaGNC">        8011 :             })</span></span>
 <span id="L223"><span class="lineNum">     223</span>              :         };</span>
-<span id="L224"><span class="lineNum">     224</span> <span class="tlaGNC">        8391 :         if let Some((generation, current, metadata)) = handover {</span></span>
-<span id="L225"><span class="lineNum">     225</span> <span class="tlaGNC">          41 :             if let Some(publisher) = &amp;handover_publisher {</span></span>
-<span id="L226"><span class="lineNum">     226</span> <span class="tlaGNC">          40 :                 let target = handover_target.lock().unwrap_or_else(|error| error.into_inner()).clone();</span></span>
-<span id="L227"><span class="lineNum">     227</span> <span class="tlaGNC">          40 :                 publisher.publish(target, metadata);</span></span>
+<span id="L224"><span class="lineNum">     224</span> <span class="tlaGNC">        8076 :         if let Some((generation, current, metadata)) = handover {</span></span>
+<span id="L225"><span class="lineNum">     225</span> <span class="tlaGNC">          39 :             if let Some(publisher) = &amp;handover_publisher {</span></span>
+<span id="L226"><span class="lineNum">     226</span> <span class="tlaGNC">          38 :                 let target = handover_target.lock().unwrap_or_else(|error| error.into_inner()).clone();</span></span>
+<span id="L227"><span class="lineNum">     227</span> <span class="tlaGNC">          38 :                 publisher.publish(target, metadata);</span></span>
 <span id="L228"><span class="lineNum">     228</span> <span class="tlaGNC">           1 :             }</span></span>
-<span id="L229"><span class="lineNum">     229</span> <span class="tlaGNC">          41 :             let _ = handover_events.send(PipelineEvent::Handover { generation, current });</span></span>
-<span id="L230"><span class="lineNum">     230</span> <span class="tlaGNC">        8350 :         }</span></span>
-<span id="L231"><span class="lineNum">     231</span> <span class="tlaGNC">        8391 :         gst::PadProbeReturn::Ok</span></span>
-<span id="L232"><span class="lineNum">     232</span> <span class="tlaGNC">        8391 :     });</span></span>
+<span id="L229"><span class="lineNum">     229</span> <span class="tlaGNC">          39 :             let _ = handover_events.send(PipelineEvent::Handover { generation, current });</span></span>
+<span id="L230"><span class="lineNum">     230</span> <span class="tlaGNC">        8037 :         }</span></span>
+<span id="L231"><span class="lineNum">     231</span> <span class="tlaGNC">        8076 :         gst::PadProbeReturn::Ok</span></span>
+<span id="L232"><span class="lineNum">     232</span> <span class="tlaGNC">        8076 :     });</span></span>
 <span id="L233"><span class="lineNum">     233</span>              : </span>
 <span id="L234"><span class="lineNum">     234</span> <span class="tlaGNC">          71 :     let eos_active = active.clone();</span></span>
 <span id="L235"><span class="lineNum">     235</span> <span class="tlaGNC">          71 :     let eos_replacing = replacing.clone();</span></span>
 <span id="L236"><span class="lineNum">     236</span> <span class="tlaGNC">          71 :     let eos_events = events.clone();</span></span>
-<span id="L237"><span class="lineNum">     237</span> <span class="tlaGNC">         442 :     clock_gate_src.add_probe(gst::PadProbeType::EVENT_DOWNSTREAM, move |_, info| {</span></span>
-<span id="L238"><span class="lineNum">     238</span> <span class="tlaGNC">         442 :         if let Some(gst::PadProbeData::Event(event)) = &amp;info.data {</span></span>
-<span id="L239"><span class="lineNum">     239</span> <span class="tlaGNC">         442 :             if event.type_() == gst::EventType::Eos {</span></span>
+<span id="L237"><span class="lineNum">     237</span> <span class="tlaGNC">         440 :     clock_gate_src.add_probe(gst::PadProbeType::EVENT_DOWNSTREAM, move |_, info| {</span></span>
+<span id="L238"><span class="lineNum">     238</span> <span class="tlaGNC">         440 :         if let Some(gst::PadProbeData::Event(event)) = &amp;info.data {</span></span>
+<span id="L239"><span class="lineNum">     239</span> <span class="tlaGNC">         440 :             if event.type_() == gst::EventType::Eos {</span></span>
 <span id="L240"><span class="lineNum">     240</span> <span class="tlaGNC">          10 :                 if let Some(plan) = eos_active.lock().unwrap_or_else(|error| error.into_inner()).clone() {</span></span>
 <span id="L241"><span class="lineNum">     241</span> <span class="tlaGNC">          10 :                     if let Some(replacing) = eos_replacing.lock().unwrap_or_else(|error| error.into_inner()).as_ref() {</span></span>
 <span id="L242"><span class="lineNum">     242</span> <span class="tlaUNC tlaBgUNC">           0 :                         replacing.cancel_if_matches(plan.generation, &amp;plan.current);</span></span>
@@ -308,10 +308,10 @@
 <span id="L246"><span class="lineNum">     246</span> <span class="tlaGNC">          10 :                         current: plan.current,</span></span>
 <span id="L247"><span class="lineNum">     247</span> <span class="tlaGNC">          10 :                     });</span></span>
 <span id="L248"><span class="lineNum">     248</span> <span class="tlaUNC tlaBgUNC">           0 :                 }</span></span>
-<span id="L249"><span class="lineNum">     249</span> <span class="tlaGNC tlaBgGNC">         432 :             }</span></span>
+<span id="L249"><span class="lineNum">     249</span> <span class="tlaGNC tlaBgGNC">         430 :             }</span></span>
 <span id="L250"><span class="lineNum">     250</span> <span class="tlaUNC tlaBgUNC">           0 :         }</span></span>
-<span id="L251"><span class="lineNum">     251</span> <span class="tlaGNC tlaBgGNC">         442 :         gst::PadProbeReturn::Ok</span></span>
-<span id="L252"><span class="lineNum">     252</span> <span class="tlaGNC">         442 :     });</span></span>
+<span id="L251"><span class="lineNum">     251</span> <span class="tlaGNC tlaBgGNC">         440 :         gst::PadProbeReturn::Ok</span></span>
+<span id="L252"><span class="lineNum">     252</span> <span class="tlaGNC">         440 :     });</span></span>
 <span id="L253"><span class="lineNum">     253</span>              : </span>
 <span id="L254"><span class="lineNum">     254</span> <span class="tlaGNC">          71 :     let bus = pipeline</span></span>
 <span id="L255"><span class="lineNum">     255</span> <span class="tlaGNC">          71 :         .bus()</span></span>
@@ -321,8 +321,8 @@
 <span id="L259"><span class="lineNum">     259</span> <span class="tlaGNC">          71 :     let bus_registry = registry;</span></span>
 <span id="L260"><span class="lineNum">     260</span> <span class="tlaGNC">          71 :     let bus_pending_epoch = pending_epoch;</span></span>
 <span id="L261"><span class="lineNum">     261</span> <span class="tlaGNC">          71 :     let bus_pipeline = pipeline.clone();</span></span>
-<span id="L262"><span class="lineNum">     262</span> <span class="tlaGNC">       15358 :     bus.set_sync_handler(move |_, message| {</span></span>
-<span id="L263"><span class="lineNum">     263</span> <span class="tlaGNC">       15358 :         if let gst::MessageView::Error(error) = message.view() {</span></span>
+<span id="L262"><span class="lineNum">     262</span> <span class="tlaGNC">       15226 :     bus.set_sync_handler(move |_, message| {</span></span>
+<span id="L263"><span class="lineNum">     263</span> <span class="tlaGNC">       15226 :         if let gst::MessageView::Error(error) = message.view() {</span></span>
 <span id="L264"><span class="lineNum">     264</span> <span class="tlaGNC">          10 :             handle_error_message(</span></span>
 <span id="L265"><span class="lineNum">     265</span> <span class="tlaGNC">          10 :                 message.src(),</span></span>
 <span id="L266"><span class="lineNum">     266</span> <span class="tlaGNC">          10 :                 &amp;error.error().to_string(),</span></span>
@@ -334,9 +334,9 @@
 <span id="L272"><span class="lineNum">     272</span> <span class="tlaGNC">          10 :                 &amp;bus_pending_epoch,</span></span>
 <span id="L273"><span class="lineNum">     273</span> <span class="tlaGNC">          10 :                 &amp;events,</span></span>
 <span id="L274"><span class="lineNum">     274</span> <span class="tlaGNC">          10 :             );</span></span>
-<span id="L275"><span class="lineNum">     275</span> <span class="tlaGNC">       15348 :         }</span></span>
-<span id="L276"><span class="lineNum">     276</span> <span class="tlaGNC">       15358 :         gst::BusSyncReply::Pass</span></span>
-<span id="L277"><span class="lineNum">     277</span> <span class="tlaGNC">       15358 :     });</span></span>
+<span id="L275"><span class="lineNum">     275</span> <span class="tlaGNC">       15216 :         }</span></span>
+<span id="L276"><span class="lineNum">     276</span> <span class="tlaGNC">       15226 :         gst::BusSyncReply::Pass</span></span>
+<span id="L277"><span class="lineNum">     277</span> <span class="tlaGNC">       15226 :     });</span></span>
 <span id="L278"><span class="lineNum">     278</span> <span class="tlaGNC">          71 :     Ok(())</span></span>
 <span id="L279"><span class="lineNum">     279</span> <span class="tlaGNC">          71 : }</span></span>
 <span id="L280"><span class="lineNum">     280</span>              : </span>

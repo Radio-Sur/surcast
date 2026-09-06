@@ -37,7 +37,7 @@
           </tr>
           <tr>
             <td class="headerItem">Test Date:</td>
-            <td class="headerValue">2026-09-06 18:41:37</td>
+            <td class="headerValue">2026-09-06 21:10:43</td>
             <td></td>
             <td class="headerItem">Functions:</td>
             <td class="headerCovTableEntryLo">56.6&nbsp;%</td>
@@ -340,12 +340,12 @@
 <span id="L278"><span class="lineNum">     278</span> <span class="tlaGNC">          13 :     }</span></span>
 <span id="L279"><span class="lineNum">     279</span>              : }</span>
 <span id="L280"><span class="lineNum">     280</span>              : </span>
-<span id="L281"><span class="lineNum">     281</span> <span class="tlaGNC">        7420 : pub(crate) async fn resolve_station_id(db: &amp;PgPool, id_or_slug: &amp;str) -&gt; Result&lt;Uuid, AppError&gt; {</span></span>
-<span id="L282"><span class="lineNum">     282</span> <span class="tlaGNC">        7420 :     if let Ok(uuid) = Uuid::parse_str(id_or_slug) {</span></span>
-<span id="L283"><span class="lineNum">     283</span> <span class="tlaGNC">        7417 :         return Ok(uuid);</span></span>
+<span id="L281"><span class="lineNum">     281</span> <span class="tlaGNC">        7147 : pub(crate) async fn resolve_station_id(db: &amp;PgPool, id_or_slug: &amp;str) -&gt; Result&lt;Uuid, AppError&gt; {</span></span>
+<span id="L282"><span class="lineNum">     282</span> <span class="tlaGNC">        7147 :     if let Ok(uuid) = Uuid::parse_str(id_or_slug) {</span></span>
+<span id="L283"><span class="lineNum">     283</span> <span class="tlaGNC">        7144 :         return Ok(uuid);</span></span>
 <span id="L284"><span class="lineNum">     284</span> <span class="tlaGNC">           3 :     }</span></span>
 <span id="L285"><span class="lineNum">     285</span> <span class="tlaGNC">           3 :     repository::resolve_station_id_from_slug(db, id_or_slug).await</span></span>
-<span id="L286"><span class="lineNum">     286</span> <span class="tlaGNC">        7420 : }</span></span>
+<span id="L286"><span class="lineNum">     286</span> <span class="tlaGNC">        7147 : }</span></span>
 <span id="L287"><span class="lineNum">     287</span>              : </span>
 <span id="L288"><span class="lineNum">     288</span> <span class="tlaGNC">          57 : async fn get_or_create_streamer(</span></span>
 <span id="L289"><span class="lineNum">     289</span> <span class="tlaGNC">          57 :     db: &amp;PgPool,</span></span>
@@ -1173,28 +1173,28 @@
 <span id="L1111"><span class="lineNum">    1111</span> <span class="tlaGNC">          17 :     Ok(Json(serde_json::json!({ &quot;ok&quot;: true })))</span></span>
 <span id="L1112"><span class="lineNum">    1112</span> <span class="tlaGNC">          17 : }</span></span>
 <span id="L1113"><span class="lineNum">    1113</span>              : </span>
-<span id="L1114"><span class="lineNum">    1114</span> <span class="tlaGNC">        7201 : pub async fn stream_status(</span></span>
-<span id="L1115"><span class="lineNum">    1115</span> <span class="tlaGNC">        7201 :     State(db): State&lt;PgPool&gt;,</span></span>
-<span id="L1116"><span class="lineNum">    1116</span> <span class="tlaGNC">        7201 :     State(streamers): State&lt;StreamersMap&gt;,</span></span>
-<span id="L1117"><span class="lineNum">    1117</span> <span class="tlaGNC">        7201 :     Path(station_id): Path&lt;String&gt;,</span></span>
-<span id="L1118"><span class="lineNum">    1118</span> <span class="tlaGNC">        7201 : ) -&gt; Result&lt;Json&lt;serde_json::Value&gt;, AppError&gt; {</span></span>
-<span id="L1119"><span class="lineNum">    1119</span> <span class="tlaGNC">        7201 :     let station_id = resolve_station_id(&amp;db, &amp;station_id).await?;</span></span>
-<span id="L1120"><span class="lineNum">    1120</span> <span class="tlaGNC">        7200 :     let streamer = {</span></span>
-<span id="L1121"><span class="lineNum">    1121</span> <span class="tlaGNC">        7200 :         let map = streamers.lock().unwrap_or_else(|e| e.into_inner());</span></span>
-<span id="L1122"><span class="lineNum">    1122</span> <span class="tlaGNC">        7200 :         map.get(&amp;station_id).cloned()</span></span>
+<span id="L1114"><span class="lineNum">    1114</span> <span class="tlaGNC">        6929 : pub async fn stream_status(</span></span>
+<span id="L1115"><span class="lineNum">    1115</span> <span class="tlaGNC">        6929 :     State(db): State&lt;PgPool&gt;,</span></span>
+<span id="L1116"><span class="lineNum">    1116</span> <span class="tlaGNC">        6929 :     State(streamers): State&lt;StreamersMap&gt;,</span></span>
+<span id="L1117"><span class="lineNum">    1117</span> <span class="tlaGNC">        6929 :     Path(station_id): Path&lt;String&gt;,</span></span>
+<span id="L1118"><span class="lineNum">    1118</span> <span class="tlaGNC">        6929 : ) -&gt; Result&lt;Json&lt;serde_json::Value&gt;, AppError&gt; {</span></span>
+<span id="L1119"><span class="lineNum">    1119</span> <span class="tlaGNC">        6929 :     let station_id = resolve_station_id(&amp;db, &amp;station_id).await?;</span></span>
+<span id="L1120"><span class="lineNum">    1120</span> <span class="tlaGNC">        6928 :     let streamer = {</span></span>
+<span id="L1121"><span class="lineNum">    1121</span> <span class="tlaGNC">        6928 :         let map = streamers.lock().unwrap_or_else(|e| e.into_inner());</span></span>
+<span id="L1122"><span class="lineNum">    1122</span> <span class="tlaGNC">        6928 :         map.get(&amp;station_id).cloned()</span></span>
 <span id="L1123"><span class="lineNum">    1123</span>              :     };</span>
-<span id="L1124"><span class="lineNum">    1124</span> <span class="tlaGNC">        7200 :     if let Some(streamer) = streamer {</span></span>
-<span id="L1125"><span class="lineNum">    1125</span> <span class="tlaGNC">        7198 :         let status = streamer.status_json().await.map_err(|error| {</span></span>
+<span id="L1124"><span class="lineNum">    1124</span> <span class="tlaGNC">        6928 :     if let Some(streamer) = streamer {</span></span>
+<span id="L1125"><span class="lineNum">    1125</span> <span class="tlaGNC">        6926 :         let status = streamer.status_json().await.map_err(|error| {</span></span>
 <span id="L1126"><span class="lineNum">    1126</span> <span class="tlaUNC tlaBgUNC">           0 :             tracing::error!(station_id = %station_id, %error, &quot;stream status failed&quot;);</span></span>
 <span id="L1127"><span class="lineNum">    1127</span> <span class="tlaUNC">           0 :             AppError::Internal(&quot;Stream status failed&quot;.into())</span></span>
 <span id="L1128"><span class="lineNum">    1128</span> <span class="tlaUNC">           0 :         })?;</span></span>
-<span id="L1129"><span class="lineNum">    1129</span> <span class="tlaGNC tlaBgGNC">        7198 :         Ok(Json(status))</span></span>
+<span id="L1129"><span class="lineNum">    1129</span> <span class="tlaGNC tlaBgGNC">        6926 :         Ok(Json(status))</span></span>
 <span id="L1130"><span class="lineNum">    1130</span>              :     } else {</span>
 <span id="L1131"><span class="lineNum">    1131</span> <span class="tlaGNC">           2 :         Ok(Json(serde_json::json!({</span></span>
 <span id="L1132"><span class="lineNum">    1132</span> <span class="tlaGNC">           2 :             &quot;playing&quot;: false, &quot;song_index&quot;: 0, &quot;total&quot;: 0, &quot;elapsed&quot;: 0, &quot;title&quot;: &quot;&quot;, &quot;artist&quot;: &quot;&quot;, &quot;duration&quot;: 0,</span></span>
 <span id="L1133"><span class="lineNum">    1133</span> <span class="tlaGNC">           2 :         })))</span></span>
 <span id="L1134"><span class="lineNum">    1134</span>              :     }</span>
-<span id="L1135"><span class="lineNum">    1135</span> <span class="tlaGNC">        7201 : }</span></span>
+<span id="L1135"><span class="lineNum">    1135</span> <span class="tlaGNC">        6929 : }</span></span>
 <span id="L1136"><span class="lineNum">    1136</span>              : </span>
 <span id="L1137"><span class="lineNum">    1137</span>              : #[cfg(test)]</span>
 <span id="L1138"><span class="lineNum">    1138</span>              : mod tests {</span>

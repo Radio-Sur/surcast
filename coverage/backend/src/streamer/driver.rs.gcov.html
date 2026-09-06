@@ -37,7 +37,7 @@
           </tr>
           <tr>
             <td class="headerItem">Test Date:</td>
-            <td class="headerValue">2026-09-06 18:41:37</td>
+            <td class="headerValue">2026-09-06 21:10:43</td>
             <td></td>
             <td class="headerItem">Functions:</td>
             <td class="headerCovTableEntryMed">75.0&nbsp;%</td>
@@ -95,34 +95,34 @@
 <span id="L33"><span class="lineNum">      33</span> <span class="tlaGNC tlaBgGNC">         142 :     pub(crate) fn spawn(pipeline: Arc&lt;dyn PlaybackPipeline&gt;) -&gt; Self {</span></span>
 <span id="L34"><span class="lineNum">      34</span> <span class="tlaGNC">         142 :         let (commands, mut receiver) = mpsc::unbounded_channel::&lt;DriverCommand&gt;();</span></span>
 <span id="L35"><span class="lineNum">      35</span> <span class="tlaGNC">         142 :         tokio::spawn(async move {</span></span>
-<span id="L36"><span class="lineNum">      36</span> <span class="tlaGNC">        7642 :             while let Some(command) = receiver.recv().await {</span></span>
-<span id="L37"><span class="lineNum">      37</span> <span class="tlaGNC">        7501 :                 let result = execute(&amp;*pipeline, command.operation).await;</span></span>
-<span id="L38"><span class="lineNum">      38</span> <span class="tlaGNC">        7501 :                 let _ = command.response.send(result);</span></span>
+<span id="L36"><span class="lineNum">      36</span> <span class="tlaGNC">        7368 :             while let Some(command) = receiver.recv().await {</span></span>
+<span id="L37"><span class="lineNum">      37</span> <span class="tlaGNC">        7227 :                 let result = execute(&amp;*pipeline, command.operation).await;</span></span>
+<span id="L38"><span class="lineNum">      38</span> <span class="tlaGNC">        7227 :                 let _ = command.response.send(result);</span></span>
 <span id="L39"><span class="lineNum">      39</span>              :             }</span>
 <span id="L40"><span class="lineNum">      40</span> <span class="tlaGNC">          94 :         });</span></span>
 <span id="L41"><span class="lineNum">      41</span> <span class="tlaGNC">         142 :         Self { commands }</span></span>
 <span id="L42"><span class="lineNum">      42</span> <span class="tlaGNC">         142 :     }</span></span>
 <span id="L43"><span class="lineNum">      43</span>              : </span>
-<span id="L44"><span class="lineNum">      44</span> <span class="tlaGNC">        7501 :     pub(crate) async fn execute(&amp;self, operation: PipelineOperation) -&gt; Result&lt;PipelineOperationResult, PipelineError&gt; {</span></span>
-<span id="L45"><span class="lineNum">      45</span> <span class="tlaGNC">        7501 :         let (response, receiver) = oneshot::channel();</span></span>
-<span id="L46"><span class="lineNum">      46</span> <span class="tlaGNC">        7501 :         self.commands</span></span>
-<span id="L47"><span class="lineNum">      47</span> <span class="tlaGNC">        7501 :             .send(DriverCommand { operation, response })</span></span>
-<span id="L48"><span class="lineNum">      48</span> <span class="tlaGNC">        7501 :             .map_err(|_| PipelineError::Pipeline(&quot;pipeline driver stopped&quot;.into()))?;</span></span>
-<span id="L49"><span class="lineNum">      49</span> <span class="tlaGNC">        7501 :         receiver</span></span>
-<span id="L50"><span class="lineNum">      50</span> <span class="tlaGNC">        7501 :             .await</span></span>
-<span id="L51"><span class="lineNum">      51</span> <span class="tlaGNC">        7501 :             .map_err(|_| PipelineError::Pipeline(&quot;pipeline driver stopped&quot;.into()))?</span></span>
-<span id="L52"><span class="lineNum">      52</span> <span class="tlaGNC">        7501 :     }</span></span>
+<span id="L44"><span class="lineNum">      44</span> <span class="tlaGNC">        7227 :     pub(crate) async fn execute(&amp;self, operation: PipelineOperation) -&gt; Result&lt;PipelineOperationResult, PipelineError&gt; {</span></span>
+<span id="L45"><span class="lineNum">      45</span> <span class="tlaGNC">        7227 :         let (response, receiver) = oneshot::channel();</span></span>
+<span id="L46"><span class="lineNum">      46</span> <span class="tlaGNC">        7227 :         self.commands</span></span>
+<span id="L47"><span class="lineNum">      47</span> <span class="tlaGNC">        7227 :             .send(DriverCommand { operation, response })</span></span>
+<span id="L48"><span class="lineNum">      48</span> <span class="tlaGNC">        7227 :             .map_err(|_| PipelineError::Pipeline(&quot;pipeline driver stopped&quot;.into()))?;</span></span>
+<span id="L49"><span class="lineNum">      49</span> <span class="tlaGNC">        7227 :         receiver</span></span>
+<span id="L50"><span class="lineNum">      50</span> <span class="tlaGNC">        7227 :             .await</span></span>
+<span id="L51"><span class="lineNum">      51</span> <span class="tlaGNC">        7227 :             .map_err(|_| PipelineError::Pipeline(&quot;pipeline driver stopped&quot;.into()))?</span></span>
+<span id="L52"><span class="lineNum">      52</span> <span class="tlaGNC">        7227 :     }</span></span>
 <span id="L53"><span class="lineNum">      53</span>              : }</span>
 <span id="L54"><span class="lineNum">      54</span>              : </span>
-<span id="L55"><span class="lineNum">      55</span> <span class="tlaGNC">        7501 : async fn execute(pipeline: &amp;dyn PlaybackPipeline, operation: PipelineOperation) -&gt; Result&lt;PipelineOperationResult, PipelineError&gt; {</span></span>
-<span id="L56"><span class="lineNum">      56</span> <span class="tlaGNC">        7501 :     match operation {</span></span>
+<span id="L55"><span class="lineNum">      55</span> <span class="tlaGNC">        7227 : async fn execute(pipeline: &amp;dyn PlaybackPipeline, operation: PipelineOperation) -&gt; Result&lt;PipelineOperationResult, PipelineError&gt; {</span></span>
+<span id="L56"><span class="lineNum">      56</span> <span class="tlaGNC">        7227 :     match operation {</span></span>
 <span id="L57"><span class="lineNum">      57</span> <span class="tlaGNC">          96 :         PipelineOperation::Replace(plan) =&gt; {</span></span>
 <span id="L58"><span class="lineNum">      58</span> <span class="tlaGNC">          96 :             pipeline.replace(*plan).await?;</span></span>
 <span id="L59"><span class="lineNum">      59</span> <span class="tlaGNC">          91 :             Ok(PipelineOperationResult::Unit)</span></span>
 <span id="L60"><span class="lineNum">      60</span>              :         }</span>
-<span id="L61"><span class="lineNum">      61</span> <span class="tlaGNC">          54 :         PipelineOperation::Roll(plan) =&gt; {</span></span>
-<span id="L62"><span class="lineNum">      62</span> <span class="tlaGNC">          54 :             pipeline.roll(*plan).await?;</span></span>
-<span id="L63"><span class="lineNum">      63</span> <span class="tlaGNC">          45 :             Ok(PipelineOperationResult::Unit)</span></span>
+<span id="L61"><span class="lineNum">      61</span> <span class="tlaGNC">          52 :         PipelineOperation::Roll(plan) =&gt; {</span></span>
+<span id="L62"><span class="lineNum">      62</span> <span class="tlaGNC">          52 :             pipeline.roll(*plan).await?;</span></span>
+<span id="L63"><span class="lineNum">      63</span> <span class="tlaGNC">          44 :             Ok(PipelineOperationResult::Unit)</span></span>
 <span id="L64"><span class="lineNum">      64</span>              :         }</span>
 <span id="L65"><span class="lineNum">      65</span> <span class="tlaUNC tlaBgUNC">           0 :         PipelineOperation::ApplyOutput(output) =&gt; {</span></span>
 <span id="L66"><span class="lineNum">      66</span> <span class="tlaUNC">           0 :             pipeline.apply_output(output).await?;</span></span>
@@ -140,9 +140,9 @@
 <span id="L78"><span class="lineNum">      78</span> <span class="tlaGNC">          10 :             pipeline.reconnect(target).await?;</span></span>
 <span id="L79"><span class="lineNum">      79</span> <span class="tlaGNC">           6 :             Ok(PipelineOperationResult::Unit)</span></span>
 <span id="L80"><span class="lineNum">      80</span>              :         }</span>
-<span id="L81"><span class="lineNum">      81</span> <span class="tlaGNC">        7229 :         PipelineOperation::Snapshot =&gt; Ok(PipelineOperationResult::Snapshot(pipeline.snapshot().await?)),</span></span>
+<span id="L81"><span class="lineNum">      81</span> <span class="tlaGNC">        6957 :         PipelineOperation::Snapshot =&gt; Ok(PipelineOperationResult::Snapshot(pipeline.snapshot().await?)),</span></span>
 <span id="L82"><span class="lineNum">      82</span>              :     }</span>
-<span id="L83"><span class="lineNum">      83</span> <span class="tlaGNC">        7501 : }</span></span>
+<span id="L83"><span class="lineNum">      83</span> <span class="tlaGNC">        7227 : }</span></span>
         </pre>
               </td>
             </tr>
