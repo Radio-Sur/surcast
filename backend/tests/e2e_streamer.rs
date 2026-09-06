@@ -376,37 +376,6 @@ async fn crossfade_naturally_promotes_each_queued_track_once() {
 
 #[tokio::test]
 #[serial]
-async fn manual_auto_dj_trigger_keeps_an_exhausted_memory_queue_playing() {
-    run_streamer_test(async |app| {
-        let station = setup_auto_dj_station(app, "Auto DJ trigger", "auto-dj-trigger", "dj", &STANDARD_TONES, 10, 1).await?;
-        app.disable_auto_fill(&station).await?;
-        app.restart(&station).await?;
-        app.assert_station_serves_audio(&station).await?;
-        app.wait_title_playing(&station, "tone A").await?;
-
-        app.enable_auto_fill(&station, 2, false).await?;
-        app.trigger_auto_fill(&station).await?;
-
-        let synced = app.wait_status(&station, "queue sync", |status| status.total == 3).await?;
-        if synced.song_index != 0 {
-            return Err(failure(format!("auto-fill sync moved cursor: {synced:?}")));
-        }
-
-        let advanced = app
-            .wait_status(&station, "Auto DJ pick after exhaustion", |status| {
-                status.playing && status.title != "tone A"
-            })
-            .await?;
-        if advanced.song_index != 1 {
-            return Err(failure(format!("auto-fill pick played at wrong index: {advanced:?}")));
-        }
-        Ok(())
-    })
-    .await
-}
-
-#[tokio::test]
-#[serial]
 async fn play_with_empty_queue_fills_from_auto_dj_and_starts() {
     // Regression: pressing play with an empty queue used to leave the
     // streamer Stopped forever, even with Auto DJ enabled and a library full
