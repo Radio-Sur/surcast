@@ -16,7 +16,10 @@ use tracing_subscriber::EnvFilter;
 async fn main() {
     let _ = dotenvy::from_path("../.env");
 
-    tracing_subscriber::fmt().with_env_filter(EnvFilter::from_default_env()).init();
+    // Console shows info+ by default; debug stays opt-in via RUST_LOG
+    // (e.g. RUST_LOG=surcast_backend=debug,tower_http=debug).
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("surcast_backend=info,tower_http=warn"));
+    tracing_subscriber::fmt().with_env_filter(filter).init();
 
     let config = Config::from_env();
     let pool = db::create_pool(&config.database_url).await;

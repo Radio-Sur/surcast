@@ -11,6 +11,7 @@
   "listeners_now": "Listening now",
   "listeners_by_hour": "Average listeners by hour",
   "listeners_by_weekday": "Average listeners by day",
+  "listeners_avg_hint": "Mean concurrent connections per station in the bucket",
   "listeners_per_station": "Listeners per station",
   "listeners_load_error": "Failed to load listener data."
 }

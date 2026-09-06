@@ -47,6 +47,18 @@ pub async fn create_station(
         return Err(AppError::BadRequest("Station name is required".into()));
     }
 
+    let new_mount = Station::mount_for(&req.name, req.stream_url.as_deref())
+        .trim_start_matches('/')
+        .to_string();
+    for station in repository::find_all_stations(&db).await? {
+        if station.mount().trim_start_matches('/') == new_mount {
+            return Err(AppError::Conflict(format!(
+                "Mount /{new_mount} is already used by station '{}'",
+                station.name
+            )));
+        }
+    }
+
     let station_id = Uuid::new_v4();
     let slug = slugify(&req.name);
     let prebuffer_bytes = req.prebuffer_bytes.unwrap_or(16384);
@@ -93,6 +105,17 @@ pub async fn update_station(
         .ok_or_else(|| AppError::NotFound("Station not found".into()))?;
 
     let name = req.name.as_deref().unwrap_or(&station.name).to_string();
+    let new_mount = Station::mount_for(&name, req.stream_url.as_deref().or(station.stream_url.as_deref()))
+        .trim_start_matches('/')
+        .to_string();
+    for other in repository::find_all_stations(&db).await? {
+        if other.id != id && other.mount().trim_start_matches('/') == new_mount {
+            return Err(AppError::Conflict(format!(
+                "Mount /{new_mount} is already used by station '{}'",
+                other.name
+            )));
+        }
+    }
     let description = req.description.unwrap_or(station.description);
     let slug = slugify(&name);
     let stream_url = req.stream_url.or(station.stream_url);

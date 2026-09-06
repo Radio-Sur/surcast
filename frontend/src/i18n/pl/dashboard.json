@@ -11,6 +11,7 @@
   "listeners_now": "Słuchają teraz",
   "listeners_by_hour": "Średnia liczba słuchaczy według godziny",
   "listeners_by_weekday": "Średnia liczba słuchaczy według dnia",
+  "listeners_avg_hint": "Średnia liczba jednoczesnych połączeń na stację w przedziale",
   "listeners_per_station": "Słuchacze na stację",
   "listeners_load_error": "Nie udało się wczytać danych o słuchaczach."
 }

@@ -312,7 +312,14 @@ impl PendingPipelineAction {
                 }
             }
             (Err(error), None) => {
-                tracing::error!(error = %error, operation = %operation_description, "pipeline operation failed");
+                // A stale plan is an expected race (a handover/skip moved on
+                // while the operation was queued), not a failure — keep it
+                // out of the error log so real pipeline faults stand out.
+                if matches!(error, PipelineError::StalePlan) {
+                    tracing::debug!(operation = %operation_description, "stale playback plan skipped");
+                } else {
+                    tracing::error!(error = %error, operation = %operation_description, "pipeline operation failed");
+                }
                 if let Some(response) = response {
                     send(response, Err(error));
                 }

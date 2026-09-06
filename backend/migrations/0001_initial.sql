@@ -244,6 +244,9 @@ CREATE TABLE IF NOT EXISTS listener_stats (
 
 CREATE INDEX IF NOT EXISTS idx_listener_stats_station_time ON listener_stats(station_id, recorded_at);
 CREATE INDEX IF NOT EXISTS idx_listener_stats_recorded_at ON listener_stats(recorded_at);
+-- One 30s sample per station per timestamp: concurrent pollers writing the
+-- same timestamp are ignored via ON CONFLICT instead of double-counting.
+CREATE UNIQUE INDEX IF NOT EXISTS uniq_listener_stats_station_time ON listener_stats(station_id, recorded_at);
 
 -- ---------------------------------------------------------------
 -- Upload jobs (async upload + analysis progress)

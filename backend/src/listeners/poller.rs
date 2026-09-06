@@ -114,7 +114,7 @@ async fn poll_once(db: &PgPool, state: &Arc<ListenersState>, client: &Client, pe
         }
         Err(e) => {
             tracing::warn!("Icecast stats fetch failed: {e}; marking stations offline");
-            mark_offline(db, state).await;
+            mark_offline(db, state, persist_sample).await;
             return Ok(());
         }
     };
@@ -126,6 +126,7 @@ async fn poll_once(db: &PgPool, state: &Arc<ListenersState>, client: &Client, pe
         .collect();
 
     let stations = find_all_stations(db).await?;
+    warn_on_mount_collisions(&stations);
     let now = Utc::now();
     let mut samples = persist_sample.then(|| Vec::with_capacity(stations.len()));
 
@@ -152,8 +153,31 @@ async fn poll_once(db: &PgPool, state: &Arc<ListenersState>, client: &Client, pe
     Ok(())
 }
 
-/// Marks every station offline (used when Icecast is unreachable).
-async fn mark_offline(db: &PgPool, state: &Arc<ListenersState>) {
+/// Two stations sharing one Icecast mount read the same `<source>` count,
+/// so N real connections show up as 2N in totals and history. Station
+/// create/update rejects such collisions (409); this warns about ones that
+/// predate the check so an admin can fix them instead of silently doubling.
+fn warn_on_mount_collisions(stations: &[crate::stations::models::Station]) {
+    use std::collections::HashMap;
+    let mut seen: HashMap<String, &str> = HashMap::new();
+    for station in stations {
+        let mount = station.mount().trim_start_matches('/').to_string();
+        if let Some(first) = seen.insert(mount.clone(), station.name.as_str()) {
+            tracing::warn!(
+                mount = %mount,
+                stations = ?[first, station.name.as_str()],
+                "Stations share one Icecast mount; listener counts are duplicated for both"
+            );
+        }
+    }
+}
+
+/// Marks every station offline (used when Icecast is unreachable). Live
+/// state flips immediately, but zero samples are persisted only on the
+/// history cadence (`persist_sample`) so outage rows keep the same 30s
+/// spacing as live rows — denser zeros would overweight the outage in
+/// bucket averages. Zeros (instead of gaps) keep averages honest.
+async fn mark_offline(db: &PgPool, state: &Arc<ListenersState>, persist_sample: bool) {
     let stations = match find_all_stations(db).await {
         Ok(s) => s,
         Err(e) => {
@@ -162,7 +186,11 @@ async fn mark_offline(db: &PgPool, state: &Arc<ListenersState>) {
         }
     };
     let now = Utc::now();
+    let mut samples = persist_sample.then(|| Vec::with_capacity(stations.len()));
     for station in stations {
+        if let Some(samples) = samples.as_mut() {
+            samples.push((station.id, 0));
+        }
         state
             .publish(ListenerUpdate {
                 station_id: station.id,
@@ -171,6 +199,11 @@ async fn mark_offline(db: &PgPool, state: &Arc<ListenersState>) {
                 online: false,
             })
             .await;
+    }
+    if let Some(samples) = samples {
+        if let Err(e) = crate::listeners::models::insert_samples(db, &samples, now).await {
+            tracing::warn!("Failed to persist offline listener samples: {e}");
+        }
     }
 }
 

@@ -29,7 +29,14 @@ pub struct Station {
 impl Station {
     /// The Icecast mount point this station streams to.
     pub fn mount(&self) -> String {
-        match self.stream_url.as_deref() {
+        Self::mount_for(&self.name, self.stream_url.as_deref())
+    }
+
+    /// Mount point derived from a name + optional stream URL, without a row.
+    /// Used to reject collisions before insert/update: two stations on one
+    /// mount read the same Icecast `<source>` count, doubling totals.
+    pub fn mount_for(name: &str, stream_url: Option<&str>) -> String {
+        match stream_url {
             Some(raw) if !raw.is_empty() => {
                 if raw.ends_with(".mp3") {
                     raw.to_string()
@@ -37,7 +44,7 @@ impl Station {
                     format!("{raw}.mp3")
                 }
             }
-            _ => format!("{}.mp3", self.name),
+            _ => format!("{name}.mp3"),
         }
     }
 }

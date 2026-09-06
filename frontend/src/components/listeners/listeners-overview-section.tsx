@@ -102,7 +102,10 @@ export function ListenersOverviewSection() {
               </Typography>
             )}
 
-            <Box sx={{ display: "grid", gridTemplateColumns: { xs: "1fr", md: "1fr 1fr" }, gap: 3, mt: 3 }}>
+            <Typography variant="caption" color="text.secondary">
+              {t("dashboard:listeners_avg_hint")}
+            </Typography>
+            <Box sx={{ display: "grid", gridTemplateColumns: { xs: "1fr", md: "1fr 1fr" }, gap: 3, mt: 1 }}>
               <Box>
                 <Typography variant="body2" color="text.secondary" sx={{ fontWeight: 500, mb: 1 }}>
                   {t("dashboard:listeners_by_hour")}

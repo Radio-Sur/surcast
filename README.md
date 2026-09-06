@@ -35,7 +35,7 @@ Copy `.env.example` to `.env` and adjust the values:
 | `SERVER_HOST`         | Backend bind address                          | `0.0.0.0`                   |
 | `SERVER_PORT`         | Backend port                                  | `3001`                      |
 | `UPLOAD_DIR`          | Directory for uploaded audio                  | `./../uploads`              |
-| `RUST_LOG`            | Logging directives                            | `surcast_backend=debug,tower_http=debug` |
+| `RUST_LOG`            | Logging directives (debug opt-in: `surcast_backend=debug,tower_http=debug`) | `surcast_backend=info,tower_http=warn` |
 | `LASTFM_API_KEY`      | Optional Last.fm key                          | –                            |
 | `ICECAST_PUBLIC_URL`  | Public base URL of the Icecast stream         | – (falls back to `<host>:8000`) |
 

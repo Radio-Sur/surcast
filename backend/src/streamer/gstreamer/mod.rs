@@ -180,10 +180,11 @@ impl GStreamerPipeline {
         let (result, current, pending) = self.pipeline.state(gst::ClockTime::from_seconds(5));
         result.map_err(|error| PipelineError::Pipeline(error.to_string()))?;
         if current != target {
-            // Diagnostic for stalled transitions: log bus errors and fakesink state
-            // without spamming StateChanged. The bus sync handler already routes
-            // DecodeFailed/SinkDisconnected, but a stalled transition without
-            // an Error message indicates preroll blocking (e.g. live sink async).
+            // Diagnostic for stalled transitions: log bus errors plus the
+            // elements that never reached the target state, so the next
+            // stall names its blocker (decode branch vs mixer vs sink)
+            // instead of just "stalled at Paused". Only off-target elements
+            // are logged to keep this to a handful of lines.
             if let Some(bus) = self.pipeline.bus() {
                 while let Some(msg) = bus.pop() {
                     if let gst::MessageView::Error(err) = msg.view() {
@@ -195,6 +196,27 @@ impl GStreamerPipeline {
                             msg.src().map(|s| s.path_string().to_string())
                         );
                     }
+                }
+            }
+            let mut elements = self.pipeline.iterate_elements();
+            loop {
+                match elements.next() {
+                    Ok(Some(element)) => {
+                        let (state_result, element_current, element_pending) = element.state(gst::ClockTime::ZERO);
+                        if element_current != target || element_pending != gst::State::VoidPending {
+                            tracing::error!(
+                                "element {} blocking set_state to {:?}: at {:?} with {:?} pending (state query {:?})",
+                                element.name(),
+                                target,
+                                element_current,
+                                element_pending,
+                                state_result
+                            );
+                        }
+                    }
+                    Ok(None) => break,
+                    Err(gst::IteratorError::Resync) => elements.resync(),
+                    Err(gst::IteratorError::Error) => break,
                 }
             }
             return Err(PipelineError::Pipeline(format!(
