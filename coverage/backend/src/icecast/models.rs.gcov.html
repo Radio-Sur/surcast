@@ -37,7 +37,7 @@
           </tr>
           <tr>
             <td class="headerItem">Test Date:</td>
-            <td class="headerValue">2026-09-06 18:18:07</td>
+            <td class="headerValue">2026-09-06 18:41:37</td>
             <td></td>
             <td class="headerItem">Functions:</td>
             <td class="headerCovTableEntryMed">83.3&nbsp;%</td>
@@ -104,24 +104,24 @@
 <span id="L42"><span class="lineNum">      42</span>              :     pub external_admin_pw: Option&lt;String&gt;,</span>
 <span id="L43"><span class="lineNum">      43</span>              : }</span>
 <span id="L44"><span class="lineNum">      44</span>              : </span>
-<span id="L45"><span class="lineNum">      45</span> <span class="tlaGNC tlaBgGNC">          89 : pub async fn get_settings(pool: &amp;PgPool) -&gt; Result&lt;IcecastSettings, AppError&gt; {</span></span>
-<span id="L46"><span class="lineNum">      46</span> <span class="tlaGNC">          89 :     sqlx::query_as::&lt;_, IcecastSettings&gt;(&quot;SELECT * FROM icecast_settings ORDER BY id LIMIT 1&quot;)</span></span>
-<span id="L47"><span class="lineNum">      47</span> <span class="tlaGNC">          89 :         .fetch_one(pool)</span></span>
-<span id="L48"><span class="lineNum">      48</span> <span class="tlaGNC">          89 :         .await</span></span>
-<span id="L49"><span class="lineNum">      49</span> <span class="tlaGNC">          89 :         .db_error(&quot;failed to read icecast settings&quot;)</span></span>
-<span id="L50"><span class="lineNum">      50</span> <span class="tlaGNC">          89 : }</span></span>
+<span id="L45"><span class="lineNum">      45</span> <span class="tlaGNC tlaBgGNC">          88 : pub async fn get_settings(pool: &amp;PgPool) -&gt; Result&lt;IcecastSettings, AppError&gt; {</span></span>
+<span id="L46"><span class="lineNum">      46</span> <span class="tlaGNC">          88 :     sqlx::query_as::&lt;_, IcecastSettings&gt;(&quot;SELECT * FROM icecast_settings ORDER BY id LIMIT 1&quot;)</span></span>
+<span id="L47"><span class="lineNum">      47</span> <span class="tlaGNC">          88 :         .fetch_one(pool)</span></span>
+<span id="L48"><span class="lineNum">      48</span> <span class="tlaGNC">          88 :         .await</span></span>
+<span id="L49"><span class="lineNum">      49</span> <span class="tlaGNC">          88 :         .db_error(&quot;failed to read icecast settings&quot;)</span></span>
+<span id="L50"><span class="lineNum">      50</span> <span class="tlaGNC">          88 : }</span></span>
 <span id="L51"><span class="lineNum">      51</span>              : </span>
-<span id="L52"><span class="lineNum">      52</span> <span class="tlaGNC">          72 : pub async fn get_connection_config(pool: &amp;PgPool) -&gt; Result&lt;(String, String), AppError&gt; {</span></span>
-<span id="L53"><span class="lineNum">      53</span> <span class="tlaGNC">          72 :     let settings = get_settings(pool).await?;</span></span>
-<span id="L54"><span class="lineNum">      54</span> <span class="tlaGNC">          66 :     if settings.mode == IcecastMode::External {</span></span>
+<span id="L52"><span class="lineNum">      52</span> <span class="tlaGNC">          71 : pub async fn get_connection_config(pool: &amp;PgPool) -&gt; Result&lt;(String, String), AppError&gt; {</span></span>
+<span id="L53"><span class="lineNum">      53</span> <span class="tlaGNC">          71 :     let settings = get_settings(pool).await?;</span></span>
+<span id="L54"><span class="lineNum">      54</span> <span class="tlaGNC">          65 :     if settings.mode == IcecastMode::External {</span></span>
 <span id="L55"><span class="lineNum">      55</span> <span class="tlaUNC tlaBgUNC">           0 :         let url = settings.external_url.clone().unwrap_or_default();</span></span>
 <span id="L56"><span class="lineNum">      56</span> <span class="tlaUNC">           0 :         let pw = settings.external_source_pw.clone().unwrap_or(settings.source_password);</span></span>
 <span id="L57"><span class="lineNum">      57</span> <span class="tlaUNC">           0 :         Ok((url, pw))</span></span>
 <span id="L58"><span class="lineNum">      58</span>              :     } else {</span>
-<span id="L59"><span class="lineNum">      59</span> <span class="tlaGNC tlaBgGNC">          66 :         let addr = format!(&quot;127.0.0.1:{}&quot;, settings.port);</span></span>
-<span id="L60"><span class="lineNum">      60</span> <span class="tlaGNC">          66 :         Ok((addr, settings.source_password.clone()))</span></span>
+<span id="L59"><span class="lineNum">      59</span> <span class="tlaGNC tlaBgGNC">          65 :         let addr = format!(&quot;127.0.0.1:{}&quot;, settings.port);</span></span>
+<span id="L60"><span class="lineNum">      60</span> <span class="tlaGNC">          65 :         Ok((addr, settings.source_password.clone()))</span></span>
 <span id="L61"><span class="lineNum">      61</span>              :     }</span>
-<span id="L62"><span class="lineNum">      62</span> <span class="tlaGNC">          72 : }</span></span>
+<span id="L62"><span class="lineNum">      62</span> <span class="tlaGNC">          71 : }</span></span>
 <span id="L63"><span class="lineNum">      63</span>              : </span>
 <span id="L64"><span class="lineNum">      64</span> <span class="tlaGNC">           3 : pub async fn update_settings(pool: &amp;PgPool, update: &amp;IcecastSettingsUpdate) -&gt; Result&lt;IcecastSettings, AppError&gt; {</span></span>
 <span id="L65"><span class="lineNum">      65</span> <span class="tlaGNC">           3 :     let current = get_settings(pool).await?;</span></span>

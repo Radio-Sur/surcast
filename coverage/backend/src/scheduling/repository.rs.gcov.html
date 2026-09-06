@@ -37,7 +37,7 @@
           </tr>
           <tr>
             <td class="headerItem">Test Date:</td>
-            <td class="headerValue">2026-09-06 18:18:07</td>
+            <td class="headerValue">2026-09-06 18:41:37</td>
             <td></td>
             <td class="headerItem">Functions:</td>
             <td class="headerCovTableEntryLo">45.3&nbsp;%</td>
@@ -302,55 +302,55 @@
 <span id="L240"><span class="lineNum">     240</span> <span class="tlaGNC">           8 :     .db_error(&quot;failed to check event overlap&quot;)</span></span>
 <span id="L241"><span class="lineNum">     241</span> <span class="tlaGNC">           8 : }</span></span>
 <span id="L242"><span class="lineNum">     242</span>              : </span>
-<span id="L243"><span class="lineNum">     243</span> <span class="tlaGNC">          97 : pub async fn find_auto_fill_config(db: &amp;PgPool, station_id: Uuid) -&gt; Result&lt;Option&lt;StationAutoFill&gt;, AppError&gt; {</span></span>
-<span id="L244"><span class="lineNum">     244</span> <span class="tlaGNC">          97 :     sqlx::query_as::&lt;_, StationAutoFill&gt;(</span></span>
-<span id="L245"><span class="lineNum">     245</span> <span class="tlaGNC">          97 :         &quot;SELECT station_id, enabled, mode, source_type, source_playlist_id, avoid_artist_repeat, min_song_gap, songs_ahead FROM station_auto_fill WHERE station_id = $1&quot;,</span></span>
-<span id="L246"><span class="lineNum">     246</span> <span class="tlaGNC">          97 :     )</span></span>
-<span id="L247"><span class="lineNum">     247</span> <span class="tlaGNC">          97 :     .bind(station_id)</span></span>
-<span id="L248"><span class="lineNum">     248</span> <span class="tlaGNC">          97 :     .fetch_optional(db)</span></span>
-<span id="L249"><span class="lineNum">     249</span> <span class="tlaGNC">          97 :     .await</span></span>
-<span id="L250"><span class="lineNum">     250</span> <span class="tlaGNC">          97 :     .db_error(&quot;failed to pick from weighted playlist&quot;)</span></span>
-<span id="L251"><span class="lineNum">     251</span> <span class="tlaGNC">          97 : }</span></span>
+<span id="L243"><span class="lineNum">     243</span> <span class="tlaGNC">          93 : pub async fn find_auto_fill_config(db: &amp;PgPool, station_id: Uuid) -&gt; Result&lt;Option&lt;StationAutoFill&gt;, AppError&gt; {</span></span>
+<span id="L244"><span class="lineNum">     244</span> <span class="tlaGNC">          93 :     sqlx::query_as::&lt;_, StationAutoFill&gt;(</span></span>
+<span id="L245"><span class="lineNum">     245</span> <span class="tlaGNC">          93 :         &quot;SELECT station_id, enabled, mode, source_type, source_playlist_id, avoid_artist_repeat, min_song_gap, songs_ahead FROM station_auto_fill WHERE station_id = $1&quot;,</span></span>
+<span id="L246"><span class="lineNum">     246</span> <span class="tlaGNC">          93 :     )</span></span>
+<span id="L247"><span class="lineNum">     247</span> <span class="tlaGNC">          93 :     .bind(station_id)</span></span>
+<span id="L248"><span class="lineNum">     248</span> <span class="tlaGNC">          93 :     .fetch_optional(db)</span></span>
+<span id="L249"><span class="lineNum">     249</span> <span class="tlaGNC">          93 :     .await</span></span>
+<span id="L250"><span class="lineNum">     250</span> <span class="tlaGNC">          93 :     .db_error(&quot;failed to pick from weighted playlist&quot;)</span></span>
+<span id="L251"><span class="lineNum">     251</span> <span class="tlaGNC">          93 : }</span></span>
 <span id="L252"><span class="lineNum">     252</span>              : </span>
-<span id="L253"><span class="lineNum">     253</span> <span class="tlaGNC">          48 : pub async fn upsert_auto_fill_config(</span></span>
-<span id="L254"><span class="lineNum">     254</span> <span class="tlaGNC">          48 :     db: &amp;PgPool,</span></span>
-<span id="L255"><span class="lineNum">     255</span> <span class="tlaGNC">          48 :     station_id: Uuid,</span></span>
-<span id="L256"><span class="lineNum">     256</span> <span class="tlaGNC">          48 :     enabled: bool,</span></span>
-<span id="L257"><span class="lineNum">     257</span> <span class="tlaGNC">          48 :     mode: &amp;AutoDjMode,</span></span>
-<span id="L258"><span class="lineNum">     258</span> <span class="tlaGNC">          48 :     source_type: &amp;SourceType,</span></span>
-<span id="L259"><span class="lineNum">     259</span> <span class="tlaGNC">          48 :     source_playlist_id: Option&lt;Uuid&gt;,</span></span>
-<span id="L260"><span class="lineNum">     260</span> <span class="tlaGNC">          48 :     avoid_artist_repeat: bool,</span></span>
-<span id="L261"><span class="lineNum">     261</span> <span class="tlaGNC">          48 :     min_song_gap: i32,</span></span>
-<span id="L262"><span class="lineNum">     262</span> <span class="tlaGNC">          48 :     songs_ahead: i32,</span></span>
-<span id="L263"><span class="lineNum">     263</span> <span class="tlaGNC">          48 : ) -&gt; Result&lt;(), AppError&gt; {</span></span>
-<span id="L264"><span class="lineNum">     264</span> <span class="tlaGNC">          48 :     sqlx::query(</span></span>
-<span id="L265"><span class="lineNum">     265</span> <span class="tlaGNC">          48 :         &quot;INSERT INTO station_auto_fill (station_id, enabled, mode, source_type, source_playlist_id, avoid_artist_repeat, min_song_gap, songs_ahead)</span></span>
-<span id="L266"><span class="lineNum">     266</span> <span class="tlaGNC">          48 :          VALUES ($1, $2, $3, $4, $5, $6, $7, $8)</span></span>
-<span id="L267"><span class="lineNum">     267</span> <span class="tlaGNC">          48 :          ON CONFLICT (station_id) DO UPDATE SET enabled = $2, mode = $3, source_type = $4, source_playlist_id = $5, avoid_artist_repeat = $6, min_song_gap = $7, songs_ahead = $8&quot;,</span></span>
-<span id="L268"><span class="lineNum">     268</span> <span class="tlaGNC">          48 :     )</span></span>
-<span id="L269"><span class="lineNum">     269</span> <span class="tlaGNC">          48 :     .bind(station_id)</span></span>
-<span id="L270"><span class="lineNum">     270</span> <span class="tlaGNC">          48 :     .bind(enabled)</span></span>
-<span id="L271"><span class="lineNum">     271</span> <span class="tlaGNC">          48 :     .bind(mode)</span></span>
-<span id="L272"><span class="lineNum">     272</span> <span class="tlaGNC">          48 :     .bind(source_type)</span></span>
-<span id="L273"><span class="lineNum">     273</span> <span class="tlaGNC">          48 :     .bind(source_playlist_id)</span></span>
-<span id="L274"><span class="lineNum">     274</span> <span class="tlaGNC">          48 :     .bind(avoid_artist_repeat)</span></span>
-<span id="L275"><span class="lineNum">     275</span> <span class="tlaGNC">          48 :     .bind(min_song_gap)</span></span>
-<span id="L276"><span class="lineNum">     276</span> <span class="tlaGNC">          48 :     .bind(songs_ahead)</span></span>
-<span id="L277"><span class="lineNum">     277</span> <span class="tlaGNC">          48 :     .execute(db)</span></span>
-<span id="L278"><span class="lineNum">     278</span> <span class="tlaGNC">          48 :     .await</span></span>
-<span id="L279"><span class="lineNum">     279</span> <span class="tlaGNC">          48 :     .db_error(&quot;failed to find recent queue entries&quot;)?;</span></span>
-<span id="L280"><span class="lineNum">     280</span> <span class="tlaGNC">          48 :     Ok(())</span></span>
-<span id="L281"><span class="lineNum">     281</span> <span class="tlaGNC">          48 : }</span></span>
+<span id="L253"><span class="lineNum">     253</span> <span class="tlaGNC">          46 : pub async fn upsert_auto_fill_config(</span></span>
+<span id="L254"><span class="lineNum">     254</span> <span class="tlaGNC">          46 :     db: &amp;PgPool,</span></span>
+<span id="L255"><span class="lineNum">     255</span> <span class="tlaGNC">          46 :     station_id: Uuid,</span></span>
+<span id="L256"><span class="lineNum">     256</span> <span class="tlaGNC">          46 :     enabled: bool,</span></span>
+<span id="L257"><span class="lineNum">     257</span> <span class="tlaGNC">          46 :     mode: &amp;AutoDjMode,</span></span>
+<span id="L258"><span class="lineNum">     258</span> <span class="tlaGNC">          46 :     source_type: &amp;SourceType,</span></span>
+<span id="L259"><span class="lineNum">     259</span> <span class="tlaGNC">          46 :     source_playlist_id: Option&lt;Uuid&gt;,</span></span>
+<span id="L260"><span class="lineNum">     260</span> <span class="tlaGNC">          46 :     avoid_artist_repeat: bool,</span></span>
+<span id="L261"><span class="lineNum">     261</span> <span class="tlaGNC">          46 :     min_song_gap: i32,</span></span>
+<span id="L262"><span class="lineNum">     262</span> <span class="tlaGNC">          46 :     songs_ahead: i32,</span></span>
+<span id="L263"><span class="lineNum">     263</span> <span class="tlaGNC">          46 : ) -&gt; Result&lt;(), AppError&gt; {</span></span>
+<span id="L264"><span class="lineNum">     264</span> <span class="tlaGNC">          46 :     sqlx::query(</span></span>
+<span id="L265"><span class="lineNum">     265</span> <span class="tlaGNC">          46 :         &quot;INSERT INTO station_auto_fill (station_id, enabled, mode, source_type, source_playlist_id, avoid_artist_repeat, min_song_gap, songs_ahead)</span></span>
+<span id="L266"><span class="lineNum">     266</span> <span class="tlaGNC">          46 :          VALUES ($1, $2, $3, $4, $5, $6, $7, $8)</span></span>
+<span id="L267"><span class="lineNum">     267</span> <span class="tlaGNC">          46 :          ON CONFLICT (station_id) DO UPDATE SET enabled = $2, mode = $3, source_type = $4, source_playlist_id = $5, avoid_artist_repeat = $6, min_song_gap = $7, songs_ahead = $8&quot;,</span></span>
+<span id="L268"><span class="lineNum">     268</span> <span class="tlaGNC">          46 :     )</span></span>
+<span id="L269"><span class="lineNum">     269</span> <span class="tlaGNC">          46 :     .bind(station_id)</span></span>
+<span id="L270"><span class="lineNum">     270</span> <span class="tlaGNC">          46 :     .bind(enabled)</span></span>
+<span id="L271"><span class="lineNum">     271</span> <span class="tlaGNC">          46 :     .bind(mode)</span></span>
+<span id="L272"><span class="lineNum">     272</span> <span class="tlaGNC">          46 :     .bind(source_type)</span></span>
+<span id="L273"><span class="lineNum">     273</span> <span class="tlaGNC">          46 :     .bind(source_playlist_id)</span></span>
+<span id="L274"><span class="lineNum">     274</span> <span class="tlaGNC">          46 :     .bind(avoid_artist_repeat)</span></span>
+<span id="L275"><span class="lineNum">     275</span> <span class="tlaGNC">          46 :     .bind(min_song_gap)</span></span>
+<span id="L276"><span class="lineNum">     276</span> <span class="tlaGNC">          46 :     .bind(songs_ahead)</span></span>
+<span id="L277"><span class="lineNum">     277</span> <span class="tlaGNC">          46 :     .execute(db)</span></span>
+<span id="L278"><span class="lineNum">     278</span> <span class="tlaGNC">          46 :     .await</span></span>
+<span id="L279"><span class="lineNum">     279</span> <span class="tlaGNC">          46 :     .db_error(&quot;failed to find recent queue entries&quot;)?;</span></span>
+<span id="L280"><span class="lineNum">     280</span> <span class="tlaGNC">          46 :     Ok(())</span></span>
+<span id="L281"><span class="lineNum">     281</span> <span class="tlaGNC">          46 : }</span></span>
 <span id="L282"><span class="lineNum">     282</span>              : </span>
-<span id="L283"><span class="lineNum">     283</span> <span class="tlaGNC">          50 : pub async fn find_auto_fill_playlists(db: &amp;PgPool, station_id: Uuid) -&gt; Result&lt;Vec&lt;StationAutoFillPlaylist&gt;, AppError&gt; {</span></span>
-<span id="L284"><span class="lineNum">     284</span> <span class="tlaGNC">          50 :     sqlx::query_as::&lt;_, StationAutoFillPlaylist&gt;(</span></span>
-<span id="L285"><span class="lineNum">     285</span> <span class="tlaGNC">          50 :         &quot;SELECT safp.id, safp.station_id, safp.playlist_id, safp.weight FROM station_auto_fill_playlists safp WHERE safp.station_id = $1 ORDER BY safp.weight DESC&quot;,</span></span>
-<span id="L286"><span class="lineNum">     286</span> <span class="tlaGNC">          50 :     )</span></span>
-<span id="L287"><span class="lineNum">     287</span> <span class="tlaGNC">          50 :     .bind(station_id)</span></span>
-<span id="L288"><span class="lineNum">     288</span> <span class="tlaGNC">          50 :     .fetch_all(db)</span></span>
-<span id="L289"><span class="lineNum">     289</span> <span class="tlaGNC">          50 :     .await</span></span>
-<span id="L290"><span class="lineNum">     290</span> <span class="tlaGNC">          50 :     .db_error(&quot;failed to find last sequential position&quot;)</span></span>
-<span id="L291"><span class="lineNum">     291</span> <span class="tlaGNC">          50 : }</span></span>
+<span id="L283"><span class="lineNum">     283</span> <span class="tlaGNC">          48 : pub async fn find_auto_fill_playlists(db: &amp;PgPool, station_id: Uuid) -&gt; Result&lt;Vec&lt;StationAutoFillPlaylist&gt;, AppError&gt; {</span></span>
+<span id="L284"><span class="lineNum">     284</span> <span class="tlaGNC">          48 :     sqlx::query_as::&lt;_, StationAutoFillPlaylist&gt;(</span></span>
+<span id="L285"><span class="lineNum">     285</span> <span class="tlaGNC">          48 :         &quot;SELECT safp.id, safp.station_id, safp.playlist_id, safp.weight FROM station_auto_fill_playlists safp WHERE safp.station_id = $1 ORDER BY safp.weight DESC&quot;,</span></span>
+<span id="L286"><span class="lineNum">     286</span> <span class="tlaGNC">          48 :     )</span></span>
+<span id="L287"><span class="lineNum">     287</span> <span class="tlaGNC">          48 :     .bind(station_id)</span></span>
+<span id="L288"><span class="lineNum">     288</span> <span class="tlaGNC">          48 :     .fetch_all(db)</span></span>
+<span id="L289"><span class="lineNum">     289</span> <span class="tlaGNC">          48 :     .await</span></span>
+<span id="L290"><span class="lineNum">     290</span> <span class="tlaGNC">          48 :     .db_error(&quot;failed to find last sequential position&quot;)</span></span>
+<span id="L291"><span class="lineNum">     291</span> <span class="tlaGNC">          48 : }</span></span>
 <span id="L292"><span class="lineNum">     292</span>              : </span>
 <span id="L293"><span class="lineNum">     293</span> <span class="tlaUNC tlaBgUNC">           0 : pub async fn find_playlist_name(db: &amp;PgPool, playlist_id: Uuid) -&gt; Result&lt;Option&lt;String&gt;, AppError&gt; {</span></span>
 <span id="L294"><span class="lineNum">     294</span> <span class="tlaUNC">           0 :     let result: Option&lt;String&gt; = sqlx::query_scalar(&quot;SELECT name FROM playlists WHERE id = $1&quot;)</span></span>

@@ -37,7 +37,7 @@
           </tr>
           <tr>
             <td class="headerItem">Test Date:</td>
-            <td class="headerValue">2026-09-06 18:18:07</td>
+            <td class="headerValue">2026-09-06 18:41:37</td>
             <td></td>
             <td class="headerItem">Functions:</td>
             <td class="headerCovTableEntryMed">84.0&nbsp;%</td>
@@ -81,45 +81,45 @@
 <span id="L19"><span class="lineNum">      19</span> <span class="tlaGNC">         163 :         }</span></span>
 <span id="L20"><span class="lineNum">      20</span> <span class="tlaGNC">         163 :     }</span></span>
 <span id="L21"><span class="lineNum">      21</span>              : </span>
-<span id="L22"><span class="lineNum">      22</span> <span class="tlaGNC">          64 :     pub(crate) fn station_id(&amp;self) -&gt; Uuid {</span></span>
-<span id="L23"><span class="lineNum">      23</span> <span class="tlaGNC">          64 :         self.station_id</span></span>
-<span id="L24"><span class="lineNum">      24</span> <span class="tlaGNC">          64 :     }</span></span>
+<span id="L22"><span class="lineNum">      22</span> <span class="tlaGNC">          63 :     pub(crate) fn station_id(&amp;self) -&gt; Uuid {</span></span>
+<span id="L23"><span class="lineNum">      23</span> <span class="tlaGNC">          63 :         self.station_id</span></span>
+<span id="L24"><span class="lineNum">      24</span> <span class="tlaGNC">          63 :     }</span></span>
 <span id="L25"><span class="lineNum">      25</span>              : </span>
-<span id="L26"><span class="lineNum">      26</span> <span class="tlaGNC">         133 :     pub(crate) async fn load(&amp;self) -&gt; (Vec&lt;SongInfo&gt;, usize) {</span></span>
-<span id="L27"><span class="lineNum">      27</span> <span class="tlaGNC">         133 :         let rows = repository::find_station_song_info(&amp;self.db, self.station_id)</span></span>
-<span id="L28"><span class="lineNum">      28</span> <span class="tlaGNC">         133 :             .await</span></span>
-<span id="L29"><span class="lineNum">      29</span> <span class="tlaGNC">         133 :             .unwrap_or_default();</span></span>
-<span id="L30"><span class="lineNum">      30</span> <span class="tlaGNC">         133 :         let songs = rows</span></span>
-<span id="L31"><span class="lineNum">      31</span> <span class="tlaGNC">         133 :             .into_iter()</span></span>
-<span id="L32"><span class="lineNum">      32</span> <span class="tlaGNC">         133 :             .map(</span></span>
-<span id="L33"><span class="lineNum">      33</span> <span class="tlaGNC">         444 :                 |(file_path, title, artist, duration, queue_item_id, song_id, position, cue_in, cue_out, cross_start_next, analyzed)| {</span></span>
-<span id="L34"><span class="lineNum">      34</span> <span class="tlaGNC">         444 :                     SongInfo {</span></span>
-<span id="L35"><span class="lineNum">      35</span> <span class="tlaGNC">         444 :                         file_path: crate::songs::handlers::resolve_audio_path(&amp;self.upload_dir, &amp;file_path),</span></span>
-<span id="L36"><span class="lineNum">      36</span> <span class="tlaGNC">         444 :                         title,</span></span>
-<span id="L37"><span class="lineNum">      37</span> <span class="tlaGNC">         444 :                         artist,</span></span>
-<span id="L38"><span class="lineNum">      38</span> <span class="tlaGNC">         444 :                         duration,</span></span>
-<span id="L39"><span class="lineNum">      39</span> <span class="tlaGNC">         444 :                         queue_item_id,</span></span>
-<span id="L40"><span class="lineNum">      40</span> <span class="tlaGNC">         444 :                         song_id,</span></span>
-<span id="L41"><span class="lineNum">      41</span> <span class="tlaGNC">         444 :                         position,</span></span>
-<span id="L42"><span class="lineNum">      42</span> <span class="tlaGNC">         444 :                         cue_in,</span></span>
-<span id="L43"><span class="lineNum">      43</span> <span class="tlaGNC">         444 :                         cue_out,</span></span>
-<span id="L44"><span class="lineNum">      44</span> <span class="tlaGNC">         444 :                         cross_start_next,</span></span>
-<span id="L45"><span class="lineNum">      45</span> <span class="tlaGNC">         444 :                         analyzed,</span></span>
-<span id="L46"><span class="lineNum">      46</span> <span class="tlaGNC">         444 :                     }</span></span>
-<span id="L47"><span class="lineNum">      47</span> <span class="tlaGNC">         444 :                 },</span></span>
+<span id="L26"><span class="lineNum">      26</span> <span class="tlaGNC">         135 :     pub(crate) async fn load(&amp;self) -&gt; (Vec&lt;SongInfo&gt;, usize) {</span></span>
+<span id="L27"><span class="lineNum">      27</span> <span class="tlaGNC">         135 :         let rows = repository::find_station_song_info(&amp;self.db, self.station_id)</span></span>
+<span id="L28"><span class="lineNum">      28</span> <span class="tlaGNC">         135 :             .await</span></span>
+<span id="L29"><span class="lineNum">      29</span> <span class="tlaGNC">         135 :             .unwrap_or_default();</span></span>
+<span id="L30"><span class="lineNum">      30</span> <span class="tlaGNC">         135 :         let songs = rows</span></span>
+<span id="L31"><span class="lineNum">      31</span> <span class="tlaGNC">         135 :             .into_iter()</span></span>
+<span id="L32"><span class="lineNum">      32</span> <span class="tlaGNC">         135 :             .map(</span></span>
+<span id="L33"><span class="lineNum">      33</span> <span class="tlaGNC">         467 :                 |(file_path, title, artist, duration, queue_item_id, song_id, position, cue_in, cue_out, cross_start_next, analyzed)| {</span></span>
+<span id="L34"><span class="lineNum">      34</span> <span class="tlaGNC">         467 :                     SongInfo {</span></span>
+<span id="L35"><span class="lineNum">      35</span> <span class="tlaGNC">         467 :                         file_path: crate::songs::handlers::resolve_audio_path(&amp;self.upload_dir, &amp;file_path),</span></span>
+<span id="L36"><span class="lineNum">      36</span> <span class="tlaGNC">         467 :                         title,</span></span>
+<span id="L37"><span class="lineNum">      37</span> <span class="tlaGNC">         467 :                         artist,</span></span>
+<span id="L38"><span class="lineNum">      38</span> <span class="tlaGNC">         467 :                         duration,</span></span>
+<span id="L39"><span class="lineNum">      39</span> <span class="tlaGNC">         467 :                         queue_item_id,</span></span>
+<span id="L40"><span class="lineNum">      40</span> <span class="tlaGNC">         467 :                         song_id,</span></span>
+<span id="L41"><span class="lineNum">      41</span> <span class="tlaGNC">         467 :                         position,</span></span>
+<span id="L42"><span class="lineNum">      42</span> <span class="tlaGNC">         467 :                         cue_in,</span></span>
+<span id="L43"><span class="lineNum">      43</span> <span class="tlaGNC">         467 :                         cue_out,</span></span>
+<span id="L44"><span class="lineNum">      44</span> <span class="tlaGNC">         467 :                         cross_start_next,</span></span>
+<span id="L45"><span class="lineNum">      45</span> <span class="tlaGNC">         467 :                         analyzed,</span></span>
+<span id="L46"><span class="lineNum">      46</span> <span class="tlaGNC">         467 :                     }</span></span>
+<span id="L47"><span class="lineNum">      47</span> <span class="tlaGNC">         467 :                 },</span></span>
 <span id="L48"><span class="lineNum">      48</span>              :             )</span>
-<span id="L49"><span class="lineNum">      49</span> <span class="tlaGNC">         133 :             .collect::&lt;Vec&lt;_&gt;&gt;();</span></span>
-<span id="L50"><span class="lineNum">      50</span> <span class="tlaGNC">         133 :         let saved_index = sqlx::query_scalar::&lt;_, i32&gt;(&quot;SELECT current_song_index FROM stations WHERE id = $1&quot;)</span></span>
-<span id="L51"><span class="lineNum">      51</span> <span class="tlaGNC">         133 :             .bind(self.station_id)</span></span>
-<span id="L52"><span class="lineNum">      52</span> <span class="tlaGNC">         133 :             .fetch_optional(&amp;self.db)</span></span>
-<span id="L53"><span class="lineNum">      53</span> <span class="tlaGNC">         133 :             .await</span></span>
-<span id="L54"><span class="lineNum">      54</span> <span class="tlaGNC">         133 :             .ok()</span></span>
-<span id="L55"><span class="lineNum">      55</span> <span class="tlaGNC">         133 :             .flatten()</span></span>
-<span id="L56"><span class="lineNum">      56</span> <span class="tlaGNC">         133 :             .unwrap_or(0)</span></span>
-<span id="L57"><span class="lineNum">      57</span> <span class="tlaGNC">         133 :             .max(0);</span></span>
-<span id="L58"><span class="lineNum">      58</span> <span class="tlaGNC">         279 :         let current_index = songs.iter().position(|song| song.position &gt;= saved_index).unwrap_or(songs.len());</span></span>
-<span id="L59"><span class="lineNum">      59</span> <span class="tlaGNC">         133 :         (songs, current_index)</span></span>
-<span id="L60"><span class="lineNum">      60</span> <span class="tlaGNC">         133 :     }</span></span>
+<span id="L49"><span class="lineNum">      49</span> <span class="tlaGNC">         135 :             .collect::&lt;Vec&lt;_&gt;&gt;();</span></span>
+<span id="L50"><span class="lineNum">      50</span> <span class="tlaGNC">         135 :         let saved_index = sqlx::query_scalar::&lt;_, i32&gt;(&quot;SELECT current_song_index FROM stations WHERE id = $1&quot;)</span></span>
+<span id="L51"><span class="lineNum">      51</span> <span class="tlaGNC">         135 :             .bind(self.station_id)</span></span>
+<span id="L52"><span class="lineNum">      52</span> <span class="tlaGNC">         135 :             .fetch_optional(&amp;self.db)</span></span>
+<span id="L53"><span class="lineNum">      53</span> <span class="tlaGNC">         135 :             .await</span></span>
+<span id="L54"><span class="lineNum">      54</span> <span class="tlaGNC">         135 :             .ok()</span></span>
+<span id="L55"><span class="lineNum">      55</span> <span class="tlaGNC">         135 :             .flatten()</span></span>
+<span id="L56"><span class="lineNum">      56</span> <span class="tlaGNC">         135 :             .unwrap_or(0)</span></span>
+<span id="L57"><span class="lineNum">      57</span> <span class="tlaGNC">         135 :             .max(0);</span></span>
+<span id="L58"><span class="lineNum">      58</span> <span class="tlaGNC">         296 :         let current_index = songs.iter().position(|song| song.position &gt;= saved_index).unwrap_or(songs.len());</span></span>
+<span id="L59"><span class="lineNum">      59</span> <span class="tlaGNC">         135 :         (songs, current_index)</span></span>
+<span id="L60"><span class="lineNum">      60</span> <span class="tlaGNC">         135 :     }</span></span>
 <span id="L61"><span class="lineNum">      61</span>              : </span>
 <span id="L62"><span class="lineNum">      62</span> <span class="tlaGNC">          18 :     pub(crate) async fn persist_cursor_if_current(</span></span>
 <span id="L63"><span class="lineNum">      63</span> <span class="tlaGNC">          18 :         &amp;self,</span></span>
@@ -172,21 +172,21 @@
 <span id="L110"><span class="lineNum">     110</span>              :         }</span>
 <span id="L111"><span class="lineNum">     111</span> <span class="tlaGNC tlaBgGNC">          18 :     }</span></span>
 <span id="L112"><span class="lineNum">     112</span>              : </span>
-<span id="L113"><span class="lineNum">     113</span> <span class="tlaGNC">          76 :     pub async fn commit_cursor_and_refill(</span></span>
-<span id="L114"><span class="lineNum">     114</span> <span class="tlaGNC">          76 :         &amp;self,</span></span>
-<span id="L115"><span class="lineNum">     115</span> <span class="tlaGNC">          76 :         previous_current_queue_item_id: Option&lt;Uuid&gt;,</span></span>
-<span id="L116"><span class="lineNum">     116</span> <span class="tlaGNC">          76 :         cursor: &amp;QueueCursor,</span></span>
-<span id="L117"><span class="lineNum">     117</span> <span class="tlaGNC">          76 :     ) -&gt; Result&lt;(), sqlx::Error&gt; {</span></span>
+<span id="L113"><span class="lineNum">     113</span> <span class="tlaGNC">          78 :     pub async fn commit_cursor_and_refill(</span></span>
+<span id="L114"><span class="lineNum">     114</span> <span class="tlaGNC">          78 :         &amp;self,</span></span>
+<span id="L115"><span class="lineNum">     115</span> <span class="tlaGNC">          78 :         previous_current_queue_item_id: Option&lt;Uuid&gt;,</span></span>
+<span id="L116"><span class="lineNum">     116</span> <span class="tlaGNC">          78 :         cursor: &amp;QueueCursor,</span></span>
+<span id="L117"><span class="lineNum">     117</span> <span class="tlaGNC">          78 :     ) -&gt; Result&lt;(), sqlx::Error&gt; {</span></span>
 <span id="L118"><span class="lineNum">     118</span>              :         // Retries wrap the whole atomic unit (advisory lock + cursor persist +</span>
 <span id="L119"><span class="lineNum">     119</span>              :         // trim + refill) in a fresh transaction every attempt. A failed</span>
 <span id="L120"><span class="lineNum">     120</span>              :         // statement inside a PostgreSQL transaction aborts it — retrying on</span>
 <span id="L121"><span class="lineNum">     121</span>              :         // the same handle is not a retry at all. Rolling the transaction back</span>
 <span id="L122"><span class="lineNum">     122</span>              :         // also undoes any partial inserts a failed fill already made, so the</span>
 <span id="L123"><span class="lineNum">     123</span>              :         // next attempt starts from a clean state.</span>
-<span id="L124"><span class="lineNum">     124</span> <span class="tlaGNC">          76 :         let mut attempt = 0u32;</span></span>
+<span id="L124"><span class="lineNum">     124</span> <span class="tlaGNC">          78 :         let mut attempt = 0u32;</span></span>
 <span id="L125"><span class="lineNum">     125</span>              :         loop {</span>
-<span id="L126"><span class="lineNum">     126</span> <span class="tlaGNC">         113 :             match self.commit_cursor_and_refill_once(previous_current_queue_item_id, cursor).await {</span></span>
-<span id="L127"><span class="lineNum">     127</span> <span class="tlaGNC">          58 :                 Ok(()) =&gt; return Ok(()),</span></span>
+<span id="L126"><span class="lineNum">     126</span> <span class="tlaGNC">         115 :             match self.commit_cursor_and_refill_once(previous_current_queue_item_id, cursor).await {</span></span>
+<span id="L127"><span class="lineNum">     127</span> <span class="tlaGNC">          60 :                 Ok(()) =&gt; return Ok(()),</span></span>
 <span id="L128"><span class="lineNum">     128</span> <span class="tlaGNC">          55 :                 Err(error) if attempt &lt; 2 =&gt; {</span></span>
 <span id="L129"><span class="lineNum">     129</span> <span class="tlaGNC">          37 :                     attempt += 1;</span></span>
 <span id="L130"><span class="lineNum">     130</span> <span class="tlaGNC">          37 :                     tracing::warn!(station_id = %self.station_id, %error, &quot;queue cursor commit failed; retrying on a fresh transaction&quot;);</span></span>
@@ -195,42 +195,42 @@
 <span id="L133"><span class="lineNum">     133</span> <span class="tlaGNC">          18 :                 Err(error) =&gt; return Err(error),</span></span>
 <span id="L134"><span class="lineNum">     134</span>              :             }</span>
 <span id="L135"><span class="lineNum">     135</span>              :         }</span>
-<span id="L136"><span class="lineNum">     136</span> <span class="tlaGNC">          76 :     }</span></span>
+<span id="L136"><span class="lineNum">     136</span> <span class="tlaGNC">          78 :     }</span></span>
 <span id="L137"><span class="lineNum">     137</span>              : </span>
-<span id="L138"><span class="lineNum">     138</span> <span class="tlaGNC">         113 :     async fn commit_cursor_and_refill_once(</span></span>
-<span id="L139"><span class="lineNum">     139</span> <span class="tlaGNC">         113 :         &amp;self,</span></span>
-<span id="L140"><span class="lineNum">     140</span> <span class="tlaGNC">         113 :         previous_current_queue_item_id: Option&lt;Uuid&gt;,</span></span>
-<span id="L141"><span class="lineNum">     141</span> <span class="tlaGNC">         113 :         cursor: &amp;QueueCursor,</span></span>
-<span id="L142"><span class="lineNum">     142</span> <span class="tlaGNC">         113 :     ) -&gt; Result&lt;(), sqlx::Error&gt; {</span></span>
+<span id="L138"><span class="lineNum">     138</span> <span class="tlaGNC">         115 :     async fn commit_cursor_and_refill_once(</span></span>
+<span id="L139"><span class="lineNum">     139</span> <span class="tlaGNC">         115 :         &amp;self,</span></span>
+<span id="L140"><span class="lineNum">     140</span> <span class="tlaGNC">         115 :         previous_current_queue_item_id: Option&lt;Uuid&gt;,</span></span>
+<span id="L141"><span class="lineNum">     141</span> <span class="tlaGNC">         115 :         cursor: &amp;QueueCursor,</span></span>
+<span id="L142"><span class="lineNum">     142</span> <span class="tlaGNC">         115 :     ) -&gt; Result&lt;(), sqlx::Error&gt; {</span></span>
 <span id="L143"><span class="lineNum">     143</span>              :         // The cursor persist and the AutoDJ refill share one transaction and</span>
 <span id="L144"><span class="lineNum">     144</span>              :         // one advisory lock, so a concurrent fill (manual trigger, idle tick)</span>
 <span id="L145"><span class="lineNum">     145</span>              :         // can never count the upcoming window from a stale cursor state:</span>
 <span id="L146"><span class="lineNum">     146</span>              :         // without the lock the persist could land between another fill's</span>
 <span id="L147"><span class="lineNum">     147</span>              :         // count and insert, over- or under-filling the window.</span>
-<span id="L148"><span class="lineNum">     148</span> <span class="tlaGNC">         113 :         let mut transaction = self.db.begin().await?;</span></span>
-<span id="L149"><span class="lineNum">     149</span> <span class="tlaGNC">          62 :         let outcome: Result&lt;Vec&lt;Uuid&gt;, sqlx::Error&gt; = async {</span></span>
-<span id="L150"><span class="lineNum">     150</span> <span class="tlaGNC">          62 :             crate::scheduling::service::auto_fill::lock_station_queue(&amp;mut transaction, self.station_id)</span></span>
-<span id="L151"><span class="lineNum">     151</span> <span class="tlaGNC">          62 :                 .await</span></span>
-<span id="L152"><span class="lineNum">     152</span> <span class="tlaGNC">          62 :                 .map_err(|error| sqlx::Error::Protocol(error.to_string()))?;</span></span>
-<span id="L153"><span class="lineNum">     153</span> <span class="tlaGNC">          62 :             let result = sqlx::query(</span></span>
-<span id="L154"><span class="lineNum">     154</span> <span class="tlaGNC">          62 :                 &quot;UPDATE stations</span></span>
-<span id="L155"><span class="lineNum">     155</span> <span class="tlaGNC">          62 :                  SET current_queue_item_id = $1,</span></span>
-<span id="L156"><span class="lineNum">     156</span> <span class="tlaGNC">          62 :                      consumed_queue_item_ids = $2,</span></span>
-<span id="L157"><span class="lineNum">     157</span> <span class="tlaGNC">          62 :                      current_song_index = $3,</span></span>
-<span id="L158"><span class="lineNum">     158</span> <span class="tlaGNC">          62 :                      current_queue_cursor_format = 1</span></span>
-<span id="L159"><span class="lineNum">     159</span> <span class="tlaGNC">          62 :                  WHERE id = $4</span></span>
-<span id="L160"><span class="lineNum">     160</span> <span class="tlaGNC">          62 :                    AND (current_queue_cursor_format = 0</span></span>
-<span id="L161"><span class="lineNum">     161</span> <span class="tlaGNC">          62 :                         OR current_queue_item_id IS NOT DISTINCT FROM $5</span></span>
-<span id="L162"><span class="lineNum">     162</span> <span class="tlaGNC">          62 :                         OR current_queue_item_id IS NOT DISTINCT FROM $1)&quot;,</span></span>
-<span id="L163"><span class="lineNum">     163</span> <span class="tlaGNC">          62 :             )</span></span>
-<span id="L164"><span class="lineNum">     164</span> <span class="tlaGNC">          62 :             .bind(cursor.current_queue_item_id)</span></span>
-<span id="L165"><span class="lineNum">     165</span> <span class="tlaGNC">          62 :             .bind(&amp;cursor.consumed_queue_item_ids)</span></span>
-<span id="L166"><span class="lineNum">     166</span> <span class="tlaGNC">          62 :             .bind(cursor.legacy_position)</span></span>
-<span id="L167"><span class="lineNum">     167</span> <span class="tlaGNC">          62 :             .bind(self.station_id)</span></span>
-<span id="L168"><span class="lineNum">     168</span> <span class="tlaGNC">          62 :             .bind(previous_current_queue_item_id)</span></span>
-<span id="L169"><span class="lineNum">     169</span> <span class="tlaGNC">          62 :             .execute(&amp;mut *transaction)</span></span>
-<span id="L170"><span class="lineNum">     170</span> <span class="tlaGNC">          62 :             .await?;</span></span>
-<span id="L171"><span class="lineNum">     171</span> <span class="tlaGNC">          62 :             if result.rows_affected() != 1 {</span></span>
+<span id="L148"><span class="lineNum">     148</span> <span class="tlaGNC">         115 :         let mut transaction = self.db.begin().await?;</span></span>
+<span id="L149"><span class="lineNum">     149</span> <span class="tlaGNC">          64 :         let outcome: Result&lt;Vec&lt;Uuid&gt;, sqlx::Error&gt; = async {</span></span>
+<span id="L150"><span class="lineNum">     150</span> <span class="tlaGNC">          64 :             crate::scheduling::service::auto_fill::lock_station_queue(&amp;mut transaction, self.station_id)</span></span>
+<span id="L151"><span class="lineNum">     151</span> <span class="tlaGNC">          64 :                 .await</span></span>
+<span id="L152"><span class="lineNum">     152</span> <span class="tlaGNC">          64 :                 .map_err(|error| sqlx::Error::Protocol(error.to_string()))?;</span></span>
+<span id="L153"><span class="lineNum">     153</span> <span class="tlaGNC">          64 :             let result = sqlx::query(</span></span>
+<span id="L154"><span class="lineNum">     154</span> <span class="tlaGNC">          64 :                 &quot;UPDATE stations</span></span>
+<span id="L155"><span class="lineNum">     155</span> <span class="tlaGNC">          64 :                  SET current_queue_item_id = $1,</span></span>
+<span id="L156"><span class="lineNum">     156</span> <span class="tlaGNC">          64 :                      consumed_queue_item_ids = $2,</span></span>
+<span id="L157"><span class="lineNum">     157</span> <span class="tlaGNC">          64 :                      current_song_index = $3,</span></span>
+<span id="L158"><span class="lineNum">     158</span> <span class="tlaGNC">          64 :                      current_queue_cursor_format = 1</span></span>
+<span id="L159"><span class="lineNum">     159</span> <span class="tlaGNC">          64 :                  WHERE id = $4</span></span>
+<span id="L160"><span class="lineNum">     160</span> <span class="tlaGNC">          64 :                    AND (current_queue_cursor_format = 0</span></span>
+<span id="L161"><span class="lineNum">     161</span> <span class="tlaGNC">          64 :                         OR current_queue_item_id IS NOT DISTINCT FROM $5</span></span>
+<span id="L162"><span class="lineNum">     162</span> <span class="tlaGNC">          64 :                         OR current_queue_item_id IS NOT DISTINCT FROM $1)&quot;,</span></span>
+<span id="L163"><span class="lineNum">     163</span> <span class="tlaGNC">          64 :             )</span></span>
+<span id="L164"><span class="lineNum">     164</span> <span class="tlaGNC">          64 :             .bind(cursor.current_queue_item_id)</span></span>
+<span id="L165"><span class="lineNum">     165</span> <span class="tlaGNC">          64 :             .bind(&amp;cursor.consumed_queue_item_ids)</span></span>
+<span id="L166"><span class="lineNum">     166</span> <span class="tlaGNC">          64 :             .bind(cursor.legacy_position)</span></span>
+<span id="L167"><span class="lineNum">     167</span> <span class="tlaGNC">          64 :             .bind(self.station_id)</span></span>
+<span id="L168"><span class="lineNum">     168</span> <span class="tlaGNC">          64 :             .bind(previous_current_queue_item_id)</span></span>
+<span id="L169"><span class="lineNum">     169</span> <span class="tlaGNC">          64 :             .execute(&amp;mut *transaction)</span></span>
+<span id="L170"><span class="lineNum">     170</span> <span class="tlaGNC">          64 :             .await?;</span></span>
+<span id="L171"><span class="lineNum">     171</span> <span class="tlaGNC">          64 :             if result.rows_affected() != 1 {</span></span>
 <span id="L172"><span class="lineNum">     172</span>              :                 // The guard failed: the stored cursor references an id that is</span>
 <span id="L173"><span class="lineNum">     173</span>              :                 // gone (queue cleared, song deleted while stopped) or was left</span>
 <span id="L174"><span class="lineNum">     174</span>              :                 // stale by an older session, so no previous/current id matches.</span>
@@ -252,8 +252,8 @@
 <span id="L190"><span class="lineNum">     190</span> <span class="tlaGNC">           2 :                 .bind(self.station_id)</span></span>
 <span id="L191"><span class="lineNum">     191</span> <span class="tlaGNC">           2 :                 .execute(&amp;mut *transaction)</span></span>
 <span id="L192"><span class="lineNum">     192</span> <span class="tlaGNC">           2 :                 .await?;</span></span>
-<span id="L193"><span class="lineNum">     193</span> <span class="tlaGNC">          60 :             }</span></span>
-<span id="L194"><span class="lineNum">     194</span> <span class="tlaGNC">          62 :             self.trim_played_items_on(&amp;mut transaction).await?;</span></span>
+<span id="L193"><span class="lineNum">     193</span> <span class="tlaGNC">          62 :             }</span></span>
+<span id="L194"><span class="lineNum">     194</span> <span class="tlaGNC">          64 :             self.trim_played_items_on(&amp;mut transaction).await?;</span></span>
 <span id="L195"><span class="lineNum">     195</span>              :             // Refill from the locked database state; the in-memory queue can lag</span>
 <span id="L196"><span class="lineNum">     196</span>              :             // rows added or removed by other clients. Runs inside the same</span>
 <span id="L197"><span class="lineNum">     197</span>              :             // transaction so the fill's upcoming count sees the persisted cursor.</span>
@@ -262,18 +262,18 @@
 <span id="L200"><span class="lineNum">     200</span>              :             // commit below (a rolled-back attempt must not analyze songs that</span>
 <span id="L201"><span class="lineNum">     201</span>              :             // never made it into the queue, and a retry must not analyze the</span>
 <span id="L202"><span class="lineNum">     202</span>              :             // same song repeatedly).</span>
-<span id="L203"><span class="lineNum">     203</span> <span class="tlaGNC">          58 :             crate::scheduling::service::fill_queue_from_schedule_locked(&amp;mut transaction, self.station_id)</span></span>
-<span id="L204"><span class="lineNum">     204</span> <span class="tlaGNC">          58 :                 .await</span></span>
-<span id="L205"><span class="lineNum">     205</span> <span class="tlaGNC">          58 :                 .map_err(|error| sqlx::Error::Protocol(error.to_string()))</span></span>
-<span id="L206"><span class="lineNum">     206</span> <span class="tlaGNC">          62 :         }</span></span>
-<span id="L207"><span class="lineNum">     207</span> <span class="tlaGNC">          62 :         .await;</span></span>
-<span id="L208"><span class="lineNum">     208</span> <span class="tlaGNC">          62 :         match outcome {</span></span>
-<span id="L209"><span class="lineNum">     209</span> <span class="tlaGNC">          58 :             Ok(analyze) =&gt; {</span></span>
-<span id="L210"><span class="lineNum">     210</span> <span class="tlaGNC">          58 :                 transaction.commit().await?;</span></span>
-<span id="L211"><span class="lineNum">     211</span> <span class="tlaGNC">          58 :                 for song_id in analyze {</span></span>
-<span id="L212"><span class="lineNum">     212</span> <span class="tlaGNC">          38 :                     crate::songs::analysis::spawn_analysis(&amp;self.db, song_id, self.station_id, &amp;self.upload_dir);</span></span>
-<span id="L213"><span class="lineNum">     213</span> <span class="tlaGNC">          38 :                 }</span></span>
-<span id="L214"><span class="lineNum">     214</span> <span class="tlaGNC">          58 :                 Ok(())</span></span>
+<span id="L203"><span class="lineNum">     203</span> <span class="tlaGNC">          60 :             crate::scheduling::service::fill_queue_from_schedule_locked(&amp;mut transaction, self.station_id)</span></span>
+<span id="L204"><span class="lineNum">     204</span> <span class="tlaGNC">          60 :                 .await</span></span>
+<span id="L205"><span class="lineNum">     205</span> <span class="tlaGNC">          60 :                 .map_err(|error| sqlx::Error::Protocol(error.to_string()))</span></span>
+<span id="L206"><span class="lineNum">     206</span> <span class="tlaGNC">          64 :         }</span></span>
+<span id="L207"><span class="lineNum">     207</span> <span class="tlaGNC">          64 :         .await;</span></span>
+<span id="L208"><span class="lineNum">     208</span> <span class="tlaGNC">          64 :         match outcome {</span></span>
+<span id="L209"><span class="lineNum">     209</span> <span class="tlaGNC">          60 :             Ok(analyze) =&gt; {</span></span>
+<span id="L210"><span class="lineNum">     210</span> <span class="tlaGNC">          60 :                 transaction.commit().await?;</span></span>
+<span id="L211"><span class="lineNum">     211</span> <span class="tlaGNC">          60 :                 for song_id in analyze {</span></span>
+<span id="L212"><span class="lineNum">     212</span> <span class="tlaGNC">          40 :                     crate::songs::analysis::spawn_analysis(&amp;self.db, song_id, self.station_id, &amp;self.upload_dir);</span></span>
+<span id="L213"><span class="lineNum">     213</span> <span class="tlaGNC">          40 :                 }</span></span>
+<span id="L214"><span class="lineNum">     214</span> <span class="tlaGNC">          60 :                 Ok(())</span></span>
 <span id="L215"><span class="lineNum">     215</span>              :             }</span>
 <span id="L216"><span class="lineNum">     216</span> <span class="tlaGNC">           4 :             Err(error) =&gt; {</span></span>
 <span id="L217"><span class="lineNum">     217</span>              :                 // Best effort: the transaction may already be aborted, in</span>
@@ -283,52 +283,52 @@
 <span id="L221"><span class="lineNum">     221</span> <span class="tlaGNC">           4 :                 Err(error)</span></span>
 <span id="L222"><span class="lineNum">     222</span>              :             }</span>
 <span id="L223"><span class="lineNum">     223</span>              :         }</span>
-<span id="L224"><span class="lineNum">     224</span> <span class="tlaGNC">         113 :     }</span></span>
+<span id="L224"><span class="lineNum">     224</span> <span class="tlaGNC">         115 :     }</span></span>
 <span id="L225"><span class="lineNum">     225</span>              : </span>
-<span id="L226"><span class="lineNum">     226</span> <span class="tlaGNC">          62 :     async fn trim_played_items_on(&amp;self, connection: &amp;mut sqlx::PgConnection) -&gt; Result&lt;(), sqlx::Error&gt; {</span></span>
-<span id="L227"><span class="lineNum">     227</span> <span class="tlaGNC">          62 :         let row: Option&lt;(i32, Vec&lt;Uuid&gt;)&gt; = sqlx::query_as(&quot;SELECT played_limit, consumed_queue_item_ids FROM stations WHERE id = $1&quot;)</span></span>
-<span id="L228"><span class="lineNum">     228</span> <span class="tlaGNC">          62 :             .bind(self.station_id)</span></span>
-<span id="L229"><span class="lineNum">     229</span> <span class="tlaGNC">          62 :             .fetch_optional(&amp;mut *connection)</span></span>
-<span id="L230"><span class="lineNum">     230</span> <span class="tlaGNC">          62 :             .await?;</span></span>
-<span id="L231"><span class="lineNum">     231</span> <span class="tlaGNC">          62 :         let Some((played_limit, consumed_queue_item_ids)) = row else {</span></span>
+<span id="L226"><span class="lineNum">     226</span> <span class="tlaGNC">          64 :     async fn trim_played_items_on(&amp;self, connection: &amp;mut sqlx::PgConnection) -&gt; Result&lt;(), sqlx::Error&gt; {</span></span>
+<span id="L227"><span class="lineNum">     227</span> <span class="tlaGNC">          64 :         let row: Option&lt;(i32, Vec&lt;Uuid&gt;)&gt; = sqlx::query_as(&quot;SELECT played_limit, consumed_queue_item_ids FROM stations WHERE id = $1&quot;)</span></span>
+<span id="L228"><span class="lineNum">     228</span> <span class="tlaGNC">          64 :             .bind(self.station_id)</span></span>
+<span id="L229"><span class="lineNum">     229</span> <span class="tlaGNC">          64 :             .fetch_optional(&amp;mut *connection)</span></span>
+<span id="L230"><span class="lineNum">     230</span> <span class="tlaGNC">          64 :             .await?;</span></span>
+<span id="L231"><span class="lineNum">     231</span> <span class="tlaGNC">          64 :         let Some((played_limit, consumed_queue_item_ids)) = row else {</span></span>
 <span id="L232"><span class="lineNum">     232</span> <span class="tlaGNC">           1 :             return Ok(());</span></span>
 <span id="L233"><span class="lineNum">     233</span>              :         };</span>
-<span id="L234"><span class="lineNum">     234</span> <span class="tlaGNC">          61 :         if played_limit &lt;= 0 || consumed_queue_item_ids.is_empty() {</span></span>
+<span id="L234"><span class="lineNum">     234</span> <span class="tlaGNC">          63 :         if played_limit &lt;= 0 || consumed_queue_item_ids.is_empty() {</span></span>
 <span id="L235"><span class="lineNum">     235</span> <span class="tlaUNC tlaBgUNC">           0 :             return Ok(());</span></span>
-<span id="L236"><span class="lineNum">     236</span> <span class="tlaGNC tlaBgGNC">          61 :         }</span></span>
+<span id="L236"><span class="lineNum">     236</span> <span class="tlaGNC tlaBgGNC">          63 :         }</span></span>
 <span id="L237"><span class="lineNum">     237</span>              : </span>
 <span id="L238"><span class="lineNum">     238</span>              :         // Queue positions are mutable: insert, reorder, and playlist removal</span>
 <span id="L239"><span class="lineNum">     239</span>              :         // can all renumber them while a live track is playing. Only durable</span>
 <span id="L240"><span class="lineNum">     240</span>              :         // cursor identities establish that a row has been played.</span>
-<span id="L241"><span class="lineNum">     241</span> <span class="tlaGNC">          61 :         let played_items: Vec&lt;(Uuid, Option&lt;Uuid&gt;)&gt; = sqlx::query_as(</span></span>
-<span id="L242"><span class="lineNum">     242</span> <span class="tlaGNC">          61 :             &quot;SELECT id, origin_playlist_id</span></span>
-<span id="L243"><span class="lineNum">     243</span> <span class="tlaGNC">          61 :                  FROM station_queue</span></span>
-<span id="L244"><span class="lineNum">     244</span> <span class="tlaGNC">          61 :                  WHERE station_id = $1 AND id = ANY($2)</span></span>
-<span id="L245"><span class="lineNum">     245</span> <span class="tlaGNC">          61 :                  ORDER BY position&quot;,</span></span>
-<span id="L246"><span class="lineNum">     246</span> <span class="tlaGNC">          61 :         )</span></span>
-<span id="L247"><span class="lineNum">     247</span> <span class="tlaGNC">          61 :         .bind(self.station_id)</span></span>
-<span id="L248"><span class="lineNum">     248</span> <span class="tlaGNC">          61 :         .bind(&amp;consumed_queue_item_ids)</span></span>
-<span id="L249"><span class="lineNum">     249</span> <span class="tlaGNC">          61 :         .fetch_all(&amp;mut *connection)</span></span>
-<span id="L250"><span class="lineNum">     250</span> <span class="tlaGNC">          61 :         .await?;</span></span>
-<span id="L251"><span class="lineNum">     251</span> <span class="tlaGNC">          61 :         if played_items.is_empty() {</span></span>
+<span id="L241"><span class="lineNum">     241</span> <span class="tlaGNC">          63 :         let played_items: Vec&lt;(Uuid, Option&lt;Uuid&gt;)&gt; = sqlx::query_as(</span></span>
+<span id="L242"><span class="lineNum">     242</span> <span class="tlaGNC">          63 :             &quot;SELECT id, origin_playlist_id</span></span>
+<span id="L243"><span class="lineNum">     243</span> <span class="tlaGNC">          63 :                  FROM station_queue</span></span>
+<span id="L244"><span class="lineNum">     244</span> <span class="tlaGNC">          63 :                  WHERE station_id = $1 AND id = ANY($2)</span></span>
+<span id="L245"><span class="lineNum">     245</span> <span class="tlaGNC">          63 :                  ORDER BY position&quot;,</span></span>
+<span id="L246"><span class="lineNum">     246</span> <span class="tlaGNC">          63 :         )</span></span>
+<span id="L247"><span class="lineNum">     247</span> <span class="tlaGNC">          63 :         .bind(self.station_id)</span></span>
+<span id="L248"><span class="lineNum">     248</span> <span class="tlaGNC">          63 :         .bind(&amp;consumed_queue_item_ids)</span></span>
+<span id="L249"><span class="lineNum">     249</span> <span class="tlaGNC">          63 :         .fetch_all(&amp;mut *connection)</span></span>
+<span id="L250"><span class="lineNum">     250</span> <span class="tlaGNC">          63 :         .await?;</span></span>
+<span id="L251"><span class="lineNum">     251</span> <span class="tlaGNC">          63 :         if played_items.is_empty() {</span></span>
 <span id="L252"><span class="lineNum">     252</span> <span class="tlaGNC">           2 :             return Ok(());</span></span>
-<span id="L253"><span class="lineNum">     253</span> <span class="tlaGNC">          59 :         }</span></span>
+<span id="L253"><span class="lineNum">     253</span> <span class="tlaGNC">          61 :         }</span></span>
 <span id="L254"><span class="lineNum">     254</span>              : </span>
-<span id="L255"><span class="lineNum">     255</span> <span class="tlaGNC">          59 :         let mut visible = 0i32;</span></span>
-<span id="L256"><span class="lineNum">     256</span> <span class="tlaGNC">          59 :         let mut index = 0;</span></span>
-<span id="L257"><span class="lineNum">     257</span> <span class="tlaGNC">         220 :         while index &lt; played_items.len() {</span></span>
-<span id="L258"><span class="lineNum">     258</span> <span class="tlaGNC">         161 :             visible += 1;</span></span>
-<span id="L259"><span class="lineNum">     259</span> <span class="tlaGNC">         161 :             if let Some(playlist_id) = played_items[index].1 {</span></span>
+<span id="L255"><span class="lineNum">     255</span> <span class="tlaGNC">          61 :         let mut visible = 0i32;</span></span>
+<span id="L256"><span class="lineNum">     256</span> <span class="tlaGNC">          61 :         let mut index = 0;</span></span>
+<span id="L257"><span class="lineNum">     257</span> <span class="tlaGNC">         237 :         while index &lt; played_items.len() {</span></span>
+<span id="L258"><span class="lineNum">     258</span> <span class="tlaGNC">         176 :             visible += 1;</span></span>
+<span id="L259"><span class="lineNum">     259</span> <span class="tlaGNC">         176 :             if let Some(playlist_id) = played_items[index].1 {</span></span>
 <span id="L260"><span class="lineNum">     260</span> <span class="tlaUNC tlaBgUNC">           0 :                 index += 1;</span></span>
 <span id="L261"><span class="lineNum">     261</span> <span class="tlaUNC">           0 :                 while index &lt; played_items.len() &amp;&amp; played_items[index].1 == Some(playlist_id) {</span></span>
 <span id="L262"><span class="lineNum">     262</span> <span class="tlaUNC">           0 :                     index += 1;</span></span>
 <span id="L263"><span class="lineNum">     263</span> <span class="tlaUNC">           0 :                 }</span></span>
-<span id="L264"><span class="lineNum">     264</span> <span class="tlaGNC tlaBgGNC">         161 :             } else {</span></span>
-<span id="L265"><span class="lineNum">     265</span> <span class="tlaGNC">         161 :                 index += 1;</span></span>
-<span id="L266"><span class="lineNum">     266</span> <span class="tlaGNC">         161 :             }</span></span>
+<span id="L264"><span class="lineNum">     264</span> <span class="tlaGNC tlaBgGNC">         176 :             } else {</span></span>
+<span id="L265"><span class="lineNum">     265</span> <span class="tlaGNC">         176 :                 index += 1;</span></span>
+<span id="L266"><span class="lineNum">     266</span> <span class="tlaGNC">         176 :             }</span></span>
 <span id="L267"><span class="lineNum">     267</span>              :         }</span>
-<span id="L268"><span class="lineNum">     268</span> <span class="tlaGNC">          59 :         if visible &lt;= played_limit {</span></span>
-<span id="L269"><span class="lineNum">     269</span> <span class="tlaGNC">          54 :             return Ok(());</span></span>
+<span id="L268"><span class="lineNum">     268</span> <span class="tlaGNC">          61 :         if visible &lt;= played_limit {</span></span>
+<span id="L269"><span class="lineNum">     269</span> <span class="tlaGNC">          56 :             return Ok(());</span></span>
 <span id="L270"><span class="lineNum">     270</span> <span class="tlaGNC">           5 :         }</span></span>
 <span id="L271"><span class="lineNum">     271</span>              : </span>
 <span id="L272"><span class="lineNum">     272</span> <span class="tlaGNC">           5 :         let mut removed = 0i32;</span></span>
@@ -374,34 +374,34 @@
 <span id="L312"><span class="lineNum">     312</span> <span class="tlaGNC">           1 :         .execute(&amp;mut *connection)</span></span>
 <span id="L313"><span class="lineNum">     313</span> <span class="tlaGNC">           1 :         .await?;</span></span>
 <span id="L314"><span class="lineNum">     314</span> <span class="tlaGNC">           1 :         Ok(())</span></span>
-<span id="L315"><span class="lineNum">     315</span> <span class="tlaGNC">          62 :     }</span></span>
+<span id="L315"><span class="lineNum">     315</span> <span class="tlaGNC">          64 :     }</span></span>
 <span id="L316"><span class="lineNum">     316</span>              : </span>
 <span id="L317"><span class="lineNum">     317</span>              :     /// Runs the AutoDJ / schedule fill. Returns `true` when the fill call</span>
 <span id="L318"><span class="lineNum">     318</span>              :     /// completed, `false` when it failed (DB error, lock timeout, ...) — a</span>
 <span id="L319"><span class="lineNum">     319</span>              :     /// failed fill must be retried by the caller, an empty successful fill</span>
 <span id="L320"><span class="lineNum">     320</span>              :     /// means AutoDJ genuinely had nothing to add.</span>
-<span id="L321"><span class="lineNum">     321</span> <span class="tlaGNC">         176 :     pub(crate) async fn refill(&amp;self) -&gt; bool {</span></span>
-<span id="L322"><span class="lineNum">     322</span> <span class="tlaGNC">         176 :         match crate::scheduling::service::fill_queue_from_schedule(&amp;self.db, self.station_id, &amp;self.upload_dir).await {</span></span>
-<span id="L323"><span class="lineNum">     323</span> <span class="tlaGNC">          85 :             Ok(()) =&gt; true,</span></span>
+<span id="L321"><span class="lineNum">     321</span> <span class="tlaGNC">         175 :     pub(crate) async fn refill(&amp;self) -&gt; bool {</span></span>
+<span id="L322"><span class="lineNum">     322</span> <span class="tlaGNC">         175 :         match crate::scheduling::service::fill_queue_from_schedule(&amp;self.db, self.station_id, &amp;self.upload_dir).await {</span></span>
+<span id="L323"><span class="lineNum">     323</span> <span class="tlaGNC">          84 :             Ok(()) =&gt; true,</span></span>
 <span id="L324"><span class="lineNum">     324</span> <span class="tlaGNC">          91 :             Err(error) =&gt; {</span></span>
 <span id="L325"><span class="lineNum">     325</span> <span class="tlaGNC">          91 :                 tracing::warn!(station_id = %self.station_id, %error, &quot;AutoDJ successor refill error&quot;);</span></span>
 <span id="L326"><span class="lineNum">     326</span> <span class="tlaGNC">          91 :                 false</span></span>
 <span id="L327"><span class="lineNum">     327</span>              :             }</span>
 <span id="L328"><span class="lineNum">     328</span>              :         }</span>
-<span id="L329"><span class="lineNum">     329</span> <span class="tlaGNC">         176 :     }</span></span>
+<span id="L329"><span class="lineNum">     329</span> <span class="tlaGNC">         175 :     }</span></span>
 <span id="L330"><span class="lineNum">     330</span>              : </span>
-<span id="L331"><span class="lineNum">     331</span> <span class="tlaGNC">          23 :     pub(crate) async fn trim_played_items(&amp;self) {</span></span>
-<span id="L332"><span class="lineNum">     332</span> <span class="tlaGNC">          23 :         let row: Option&lt;(i32, Vec&lt;Uuid&gt;)&gt; = sqlx::query_as(&quot;SELECT played_limit, consumed_queue_item_ids FROM stations WHERE id = $1&quot;)</span></span>
-<span id="L333"><span class="lineNum">     333</span> <span class="tlaGNC">          23 :             .bind(self.station_id)</span></span>
-<span id="L334"><span class="lineNum">     334</span> <span class="tlaGNC">          23 :             .fetch_optional(&amp;self.db)</span></span>
-<span id="L335"><span class="lineNum">     335</span> <span class="tlaGNC">          23 :             .await</span></span>
-<span id="L336"><span class="lineNum">     336</span> <span class="tlaGNC">          23 :             .ok()</span></span>
-<span id="L337"><span class="lineNum">     337</span> <span class="tlaGNC">          23 :             .flatten();</span></span>
-<span id="L338"><span class="lineNum">     338</span> <span class="tlaGNC">          23 :         let Some((played_limit, consumed_queue_item_ids)) = row else {</span></span>
+<span id="L331"><span class="lineNum">     331</span> <span class="tlaGNC">          22 :     pub(crate) async fn trim_played_items(&amp;self) {</span></span>
+<span id="L332"><span class="lineNum">     332</span> <span class="tlaGNC">          22 :         let row: Option&lt;(i32, Vec&lt;Uuid&gt;)&gt; = sqlx::query_as(&quot;SELECT played_limit, consumed_queue_item_ids FROM stations WHERE id = $1&quot;)</span></span>
+<span id="L333"><span class="lineNum">     333</span> <span class="tlaGNC">          22 :             .bind(self.station_id)</span></span>
+<span id="L334"><span class="lineNum">     334</span> <span class="tlaGNC">          22 :             .fetch_optional(&amp;self.db)</span></span>
+<span id="L335"><span class="lineNum">     335</span> <span class="tlaGNC">          22 :             .await</span></span>
+<span id="L336"><span class="lineNum">     336</span> <span class="tlaGNC">          22 :             .ok()</span></span>
+<span id="L337"><span class="lineNum">     337</span> <span class="tlaGNC">          22 :             .flatten();</span></span>
+<span id="L338"><span class="lineNum">     338</span> <span class="tlaGNC">          22 :         let Some((played_limit, consumed_queue_item_ids)) = row else {</span></span>
 <span id="L339"><span class="lineNum">     339</span> <span class="tlaUNC tlaBgUNC">           0 :             return;</span></span>
 <span id="L340"><span class="lineNum">     340</span>              :         };</span>
-<span id="L341"><span class="lineNum">     341</span> <span class="tlaGNC tlaBgGNC">          23 :         if played_limit &lt;= 0 || consumed_queue_item_ids.is_empty() {</span></span>
-<span id="L342"><span class="lineNum">     342</span> <span class="tlaGNC">          12 :             return;</span></span>
+<span id="L341"><span class="lineNum">     341</span> <span class="tlaGNC tlaBgGNC">          22 :         if played_limit &lt;= 0 || consumed_queue_item_ids.is_empty() {</span></span>
+<span id="L342"><span class="lineNum">     342</span> <span class="tlaGNC">          11 :             return;</span></span>
 <span id="L343"><span class="lineNum">     343</span> <span class="tlaGNC">          11 :         }</span></span>
 <span id="L344"><span class="lineNum">     344</span>              : </span>
 <span id="L345"><span class="lineNum">     345</span>              :         // Queue positions are mutable: insert, reorder, and playlist removal</span>
@@ -487,42 +487,42 @@
 <span id="L425"><span class="lineNum">     425</span>              :         {</span>
 <span id="L426"><span class="lineNum">     426</span> <span class="tlaUNC">           0 :             tracing::warn!(station_id = %self.station_id, %error, &quot;failed to discard trimmed queue identities&quot;);</span></span>
 <span id="L427"><span class="lineNum">     427</span> <span class="tlaUNC">           0 :         }</span></span>
-<span id="L428"><span class="lineNum">     428</span> <span class="tlaGNC tlaBgGNC">          23 :     }</span></span>
+<span id="L428"><span class="lineNum">     428</span> <span class="tlaGNC tlaBgGNC">          22 :     }</span></span>
 <span id="L429"><span class="lineNum">     429</span>              : </span>
-<span id="L430"><span class="lineNum">     430</span> <span class="tlaGNC">         254 :     pub(crate) async fn queue_json(&amp;self) -&gt; String {</span></span>
-<span id="L431"><span class="lineNum">     431</span> <span class="tlaGNC">         254 :         let items: Vec&lt;serde_json::Value&gt; = sqlx::query_as::&lt;</span></span>
-<span id="L432"><span class="lineNum">     432</span> <span class="tlaGNC">         254 :             _,</span></span>
-<span id="L433"><span class="lineNum">     433</span> <span class="tlaGNC">         254 :             (</span></span>
-<span id="L434"><span class="lineNum">     434</span> <span class="tlaGNC">         254 :                 Uuid,</span></span>
-<span id="L435"><span class="lineNum">     435</span> <span class="tlaGNC">         254 :                 Uuid,</span></span>
-<span id="L436"><span class="lineNum">     436</span> <span class="tlaGNC">         254 :                 Uuid,</span></span>
-<span id="L437"><span class="lineNum">     437</span> <span class="tlaGNC">         254 :                 i32,</span></span>
-<span id="L438"><span class="lineNum">     438</span> <span class="tlaGNC">         254 :                 String,</span></span>
-<span id="L439"><span class="lineNum">     439</span> <span class="tlaGNC">         254 :                 String,</span></span>
-<span id="L440"><span class="lineNum">     440</span> <span class="tlaGNC">         254 :                 String,</span></span>
-<span id="L441"><span class="lineNum">     441</span> <span class="tlaGNC">         254 :                 i32,</span></span>
-<span id="L442"><span class="lineNum">     442</span> <span class="tlaGNC">         254 :                 String,</span></span>
-<span id="L443"><span class="lineNum">     443</span> <span class="tlaGNC">         254 :                 String,</span></span>
-<span id="L444"><span class="lineNum">     444</span> <span class="tlaGNC">         254 :                 Option&lt;Uuid&gt;,</span></span>
-<span id="L445"><span class="lineNum">     445</span> <span class="tlaGNC">         254 :                 Option&lt;String&gt;,</span></span>
-<span id="L446"><span class="lineNum">     446</span> <span class="tlaGNC">         254 :                 bool,</span></span>
-<span id="L447"><span class="lineNum">     447</span> <span class="tlaGNC">         254 :             ),</span></span>
-<span id="L448"><span class="lineNum">     448</span> <span class="tlaGNC">         254 :         &gt;(</span></span>
-<span id="L449"><span class="lineNum">     449</span> <span class="tlaGNC">         254 :             r#&quot;SELECT sq.id, sq.station_id, sq.song_id, sq.position,</span></span>
-<span id="L450"><span class="lineNum">     450</span> <span class="tlaGNC">         254 :                       s.title, s.artist, s.album, s.duration, s.mime_type, s.cover_path,</span></span>
-<span id="L451"><span class="lineNum">     451</span> <span class="tlaGNC">         254 :                       sq.origin_playlist_id, p.name as playlist_name, sq.is_auto_dj</span></span>
-<span id="L452"><span class="lineNum">     452</span> <span class="tlaGNC">         254 :                FROM station_queue sq</span></span>
-<span id="L453"><span class="lineNum">     453</span> <span class="tlaGNC">         254 :                JOIN songs s ON s.id = sq.song_id</span></span>
-<span id="L454"><span class="lineNum">     454</span> <span class="tlaGNC">         254 :                LEFT JOIN playlists p ON p.id = sq.origin_playlist_id</span></span>
-<span id="L455"><span class="lineNum">     455</span> <span class="tlaGNC">         254 :                WHERE sq.station_id = $1</span></span>
-<span id="L456"><span class="lineNum">     456</span> <span class="tlaGNC">         254 :                ORDER BY sq.position&quot;#,</span></span>
-<span id="L457"><span class="lineNum">     457</span> <span class="tlaGNC">         254 :         )</span></span>
-<span id="L458"><span class="lineNum">     458</span> <span class="tlaGNC">         254 :         .bind(self.station_id)</span></span>
-<span id="L459"><span class="lineNum">     459</span> <span class="tlaGNC">         254 :         .fetch_all(&amp;self.db)</span></span>
-<span id="L460"><span class="lineNum">     460</span> <span class="tlaGNC">         254 :         .await</span></span>
-<span id="L461"><span class="lineNum">     461</span> <span class="tlaGNC">         254 :         .unwrap_or_default()</span></span>
-<span id="L462"><span class="lineNum">     462</span> <span class="tlaGNC">         254 :         .into_iter()</span></span>
-<span id="L463"><span class="lineNum">     463</span> <span class="tlaGNC">         254 :         .map(</span></span>
+<span id="L430"><span class="lineNum">     430</span> <span class="tlaGNC">         255 :     pub(crate) async fn queue_json(&amp;self) -&gt; String {</span></span>
+<span id="L431"><span class="lineNum">     431</span> <span class="tlaGNC">         255 :         let items: Vec&lt;serde_json::Value&gt; = sqlx::query_as::&lt;</span></span>
+<span id="L432"><span class="lineNum">     432</span> <span class="tlaGNC">         255 :             _,</span></span>
+<span id="L433"><span class="lineNum">     433</span> <span class="tlaGNC">         255 :             (</span></span>
+<span id="L434"><span class="lineNum">     434</span> <span class="tlaGNC">         255 :                 Uuid,</span></span>
+<span id="L435"><span class="lineNum">     435</span> <span class="tlaGNC">         255 :                 Uuid,</span></span>
+<span id="L436"><span class="lineNum">     436</span> <span class="tlaGNC">         255 :                 Uuid,</span></span>
+<span id="L437"><span class="lineNum">     437</span> <span class="tlaGNC">         255 :                 i32,</span></span>
+<span id="L438"><span class="lineNum">     438</span> <span class="tlaGNC">         255 :                 String,</span></span>
+<span id="L439"><span class="lineNum">     439</span> <span class="tlaGNC">         255 :                 String,</span></span>
+<span id="L440"><span class="lineNum">     440</span> <span class="tlaGNC">         255 :                 String,</span></span>
+<span id="L441"><span class="lineNum">     441</span> <span class="tlaGNC">         255 :                 i32,</span></span>
+<span id="L442"><span class="lineNum">     442</span> <span class="tlaGNC">         255 :                 String,</span></span>
+<span id="L443"><span class="lineNum">     443</span> <span class="tlaGNC">         255 :                 String,</span></span>
+<span id="L444"><span class="lineNum">     444</span> <span class="tlaGNC">         255 :                 Option&lt;Uuid&gt;,</span></span>
+<span id="L445"><span class="lineNum">     445</span> <span class="tlaGNC">         255 :                 Option&lt;String&gt;,</span></span>
+<span id="L446"><span class="lineNum">     446</span> <span class="tlaGNC">         255 :                 bool,</span></span>
+<span id="L447"><span class="lineNum">     447</span> <span class="tlaGNC">         255 :             ),</span></span>
+<span id="L448"><span class="lineNum">     448</span> <span class="tlaGNC">         255 :         &gt;(</span></span>
+<span id="L449"><span class="lineNum">     449</span> <span class="tlaGNC">         255 :             r#&quot;SELECT sq.id, sq.station_id, sq.song_id, sq.position,</span></span>
+<span id="L450"><span class="lineNum">     450</span> <span class="tlaGNC">         255 :                       s.title, s.artist, s.album, s.duration, s.mime_type, s.cover_path,</span></span>
+<span id="L451"><span class="lineNum">     451</span> <span class="tlaGNC">         255 :                       sq.origin_playlist_id, p.name as playlist_name, sq.is_auto_dj</span></span>
+<span id="L452"><span class="lineNum">     452</span> <span class="tlaGNC">         255 :                FROM station_queue sq</span></span>
+<span id="L453"><span class="lineNum">     453</span> <span class="tlaGNC">         255 :                JOIN songs s ON s.id = sq.song_id</span></span>
+<span id="L454"><span class="lineNum">     454</span> <span class="tlaGNC">         255 :                LEFT JOIN playlists p ON p.id = sq.origin_playlist_id</span></span>
+<span id="L455"><span class="lineNum">     455</span> <span class="tlaGNC">         255 :                WHERE sq.station_id = $1</span></span>
+<span id="L456"><span class="lineNum">     456</span> <span class="tlaGNC">         255 :                ORDER BY sq.position&quot;#,</span></span>
+<span id="L457"><span class="lineNum">     457</span> <span class="tlaGNC">         255 :         )</span></span>
+<span id="L458"><span class="lineNum">     458</span> <span class="tlaGNC">         255 :         .bind(self.station_id)</span></span>
+<span id="L459"><span class="lineNum">     459</span> <span class="tlaGNC">         255 :         .fetch_all(&amp;self.db)</span></span>
+<span id="L460"><span class="lineNum">     460</span> <span class="tlaGNC">         255 :         .await</span></span>
+<span id="L461"><span class="lineNum">     461</span> <span class="tlaGNC">         255 :         .unwrap_or_default()</span></span>
+<span id="L462"><span class="lineNum">     462</span> <span class="tlaGNC">         255 :         .into_iter()</span></span>
+<span id="L463"><span class="lineNum">     463</span> <span class="tlaGNC">         255 :         .map(</span></span>
 <span id="L464"><span class="lineNum">     464</span>              :             |(</span>
 <span id="L465"><span class="lineNum">     465</span>              :                 id,</span>
 <span id="L466"><span class="lineNum">     466</span>              :                 station_id,</span>
@@ -537,27 +537,27 @@
 <span id="L475"><span class="lineNum">     475</span>              :                 origin_playlist_id,</span>
 <span id="L476"><span class="lineNum">     476</span>              :                 playlist_name,</span>
 <span id="L477"><span class="lineNum">     477</span>              :                 is_auto_dj,</span>
-<span id="L478"><span class="lineNum">     478</span> <span class="tlaGNC">         652 :             )| {</span></span>
-<span id="L479"><span class="lineNum">     479</span> <span class="tlaGNC">         652 :                 serde_json::json!({</span></span>
-<span id="L480"><span class="lineNum">     480</span> <span class="tlaGNC">         652 :                     &quot;id&quot;: id,</span></span>
-<span id="L481"><span class="lineNum">     481</span> <span class="tlaGNC">         652 :                     &quot;station_id&quot;: station_id,</span></span>
-<span id="L482"><span class="lineNum">     482</span> <span class="tlaGNC">         652 :                     &quot;song_id&quot;: song_id,</span></span>
-<span id="L483"><span class="lineNum">     483</span> <span class="tlaGNC">         652 :                     &quot;position&quot;: position,</span></span>
-<span id="L484"><span class="lineNum">     484</span> <span class="tlaGNC">         652 :                     &quot;title&quot;: title,</span></span>
-<span id="L485"><span class="lineNum">     485</span> <span class="tlaGNC">         652 :                     &quot;artist&quot;: artist,</span></span>
-<span id="L486"><span class="lineNum">     486</span> <span class="tlaGNC">         652 :                     &quot;album&quot;: album,</span></span>
-<span id="L487"><span class="lineNum">     487</span> <span class="tlaGNC">         652 :                     &quot;duration&quot;: duration,</span></span>
-<span id="L488"><span class="lineNum">     488</span> <span class="tlaGNC">         652 :                     &quot;has_cover&quot;: !cover_path.is_empty(),</span></span>
-<span id="L489"><span class="lineNum">     489</span> <span class="tlaGNC">         652 :                     &quot;mime_type&quot;: mime_type,</span></span>
-<span id="L490"><span class="lineNum">     490</span> <span class="tlaGNC">         652 :                     &quot;origin_playlist_id&quot;: origin_playlist_id,</span></span>
-<span id="L491"><span class="lineNum">     491</span> <span class="tlaGNC">         652 :                     &quot;playlist_name&quot;: playlist_name,</span></span>
-<span id="L492"><span class="lineNum">     492</span> <span class="tlaGNC">         652 :                     &quot;is_auto_dj&quot;: is_auto_dj,</span></span>
+<span id="L478"><span class="lineNum">     478</span> <span class="tlaGNC">         672 :             )| {</span></span>
+<span id="L479"><span class="lineNum">     479</span> <span class="tlaGNC">         672 :                 serde_json::json!({</span></span>
+<span id="L480"><span class="lineNum">     480</span> <span class="tlaGNC">         672 :                     &quot;id&quot;: id,</span></span>
+<span id="L481"><span class="lineNum">     481</span> <span class="tlaGNC">         672 :                     &quot;station_id&quot;: station_id,</span></span>
+<span id="L482"><span class="lineNum">     482</span> <span class="tlaGNC">         672 :                     &quot;song_id&quot;: song_id,</span></span>
+<span id="L483"><span class="lineNum">     483</span> <span class="tlaGNC">         672 :                     &quot;position&quot;: position,</span></span>
+<span id="L484"><span class="lineNum">     484</span> <span class="tlaGNC">         672 :                     &quot;title&quot;: title,</span></span>
+<span id="L485"><span class="lineNum">     485</span> <span class="tlaGNC">         672 :                     &quot;artist&quot;: artist,</span></span>
+<span id="L486"><span class="lineNum">     486</span> <span class="tlaGNC">         672 :                     &quot;album&quot;: album,</span></span>
+<span id="L487"><span class="lineNum">     487</span> <span class="tlaGNC">         672 :                     &quot;duration&quot;: duration,</span></span>
+<span id="L488"><span class="lineNum">     488</span> <span class="tlaGNC">         672 :                     &quot;has_cover&quot;: !cover_path.is_empty(),</span></span>
+<span id="L489"><span class="lineNum">     489</span> <span class="tlaGNC">         672 :                     &quot;mime_type&quot;: mime_type,</span></span>
+<span id="L490"><span class="lineNum">     490</span> <span class="tlaGNC">         672 :                     &quot;origin_playlist_id&quot;: origin_playlist_id,</span></span>
+<span id="L491"><span class="lineNum">     491</span> <span class="tlaGNC">         672 :                     &quot;playlist_name&quot;: playlist_name,</span></span>
+<span id="L492"><span class="lineNum">     492</span> <span class="tlaGNC">         672 :                     &quot;is_auto_dj&quot;: is_auto_dj,</span></span>
 <span id="L493"><span class="lineNum">     493</span>              :                 })</span>
-<span id="L494"><span class="lineNum">     494</span> <span class="tlaGNC">         652 :             },</span></span>
+<span id="L494"><span class="lineNum">     494</span> <span class="tlaGNC">         672 :             },</span></span>
 <span id="L495"><span class="lineNum">     495</span>              :         )</span>
-<span id="L496"><span class="lineNum">     496</span> <span class="tlaGNC">         254 :         .collect();</span></span>
-<span id="L497"><span class="lineNum">     497</span> <span class="tlaGNC">         254 :         serde_json::to_string(&amp;items).unwrap_or_else(|_| &quot;[]&quot;.into())</span></span>
-<span id="L498"><span class="lineNum">     498</span> <span class="tlaGNC">         254 :     }</span></span>
+<span id="L496"><span class="lineNum">     496</span> <span class="tlaGNC">         255 :         .collect();</span></span>
+<span id="L497"><span class="lineNum">     497</span> <span class="tlaGNC">         255 :         serde_json::to_string(&amp;items).unwrap_or_else(|_| &quot;[]&quot;.into())</span></span>
+<span id="L498"><span class="lineNum">     498</span> <span class="tlaGNC">         255 :     }</span></span>
 <span id="L499"><span class="lineNum">     499</span>              : }</span>
         </pre>
               </td>

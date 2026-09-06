@@ -37,7 +37,7 @@
           </tr>
           <tr>
             <td class="headerItem">Test Date:</td>
-            <td class="headerValue">2026-09-06 18:18:07</td>
+            <td class="headerValue">2026-09-06 18:41:37</td>
             <td></td>
             <td class="headerItem">Functions:</td>
             <td class="headerCovTableEntryLo">42.9&nbsp;%</td>
@@ -76,28 +76,28 @@
 <span id="L14"><span class="lineNum">      14</span>              : use crate::stations::handlers::{sync_streamer_songs, StationLifecycleLocks};</span>
 <span id="L15"><span class="lineNum">      15</span>              : use std::sync::Arc;</span>
 <span id="L16"><span class="lineNum">      16</span>              : </span>
-<span id="L17"><span class="lineNum">      17</span> <span class="tlaGNC tlaBgGNC">         142 : pub(super) async fn assign_song_to_stations(db: &amp;PgPool, song_id: Uuid, station_ids: &amp;[Uuid]) -&gt; Result&lt;Vec&lt;Uuid&gt;, AppError&gt; {</span></span>
-<span id="L18"><span class="lineNum">      18</span> <span class="tlaGNC">         142 :     for &amp;sid in station_ids {</span></span>
-<span id="L19"><span class="lineNum">      19</span> <span class="tlaGNC">         120 :         repository::assign_song_to_station(db, sid, song_id).await?;</span></span>
+<span id="L17"><span class="lineNum">      17</span> <span class="tlaGNC tlaBgGNC">         139 : pub(super) async fn assign_song_to_stations(db: &amp;PgPool, song_id: Uuid, station_ids: &amp;[Uuid]) -&gt; Result&lt;Vec&lt;Uuid&gt;, AppError&gt; {</span></span>
+<span id="L18"><span class="lineNum">      18</span> <span class="tlaGNC">         139 :     for &amp;sid in station_ids {</span></span>
+<span id="L19"><span class="lineNum">      19</span> <span class="tlaGNC">         117 :         repository::assign_song_to_station(db, sid, song_id).await?;</span></span>
 <span id="L20"><span class="lineNum">      20</span>              :     }</span>
-<span id="L21"><span class="lineNum">      21</span> <span class="tlaGNC">         142 :     Ok(station_ids.to_vec())</span></span>
-<span id="L22"><span class="lineNum">      22</span> <span class="tlaGNC">         142 : }</span></span>
+<span id="L21"><span class="lineNum">      21</span> <span class="tlaGNC">         139 :     Ok(station_ids.to_vec())</span></span>
+<span id="L22"><span class="lineNum">      22</span> <span class="tlaGNC">         139 : }</span></span>
 <span id="L23"><span class="lineNum">      23</span>              : </span>
-<span id="L24"><span class="lineNum">      24</span> <span class="tlaGNC">         120 : pub async fn add_song_stations(</span></span>
-<span id="L25"><span class="lineNum">      25</span> <span class="tlaGNC">         120 :     Extension(_auth_user): Extension&lt;AuthUser&gt;,</span></span>
-<span id="L26"><span class="lineNum">      26</span> <span class="tlaGNC">         120 :     State(db): State&lt;PgPool&gt;,</span></span>
-<span id="L27"><span class="lineNum">      27</span> <span class="tlaGNC">         120 :     Path(song_id): Path&lt;Uuid&gt;,</span></span>
-<span id="L28"><span class="lineNum">      28</span> <span class="tlaGNC">         120 :     Json(req): Json&lt;AssignStationsRequest&gt;,</span></span>
-<span id="L29"><span class="lineNum">      29</span> <span class="tlaGNC">         120 : ) -&gt; Result&lt;Json&lt;Vec&lt;Uuid&gt;&gt;, AppError&gt; {</span></span>
-<span id="L30"><span class="lineNum">      30</span> <span class="tlaGNC">         120 :     let _song = repository::find_song_by_id(&amp;db, song_id)</span></span>
-<span id="L31"><span class="lineNum">      31</span> <span class="tlaGNC">         120 :         .await?</span></span>
-<span id="L32"><span class="lineNum">      32</span> <span class="tlaGNC">         120 :         .ok_or_else(|| AppError::NotFound(&quot;Song not found&quot;.into()))?;</span></span>
+<span id="L24"><span class="lineNum">      24</span> <span class="tlaGNC">         117 : pub async fn add_song_stations(</span></span>
+<span id="L25"><span class="lineNum">      25</span> <span class="tlaGNC">         117 :     Extension(_auth_user): Extension&lt;AuthUser&gt;,</span></span>
+<span id="L26"><span class="lineNum">      26</span> <span class="tlaGNC">         117 :     State(db): State&lt;PgPool&gt;,</span></span>
+<span id="L27"><span class="lineNum">      27</span> <span class="tlaGNC">         117 :     Path(song_id): Path&lt;Uuid&gt;,</span></span>
+<span id="L28"><span class="lineNum">      28</span> <span class="tlaGNC">         117 :     Json(req): Json&lt;AssignStationsRequest&gt;,</span></span>
+<span id="L29"><span class="lineNum">      29</span> <span class="tlaGNC">         117 : ) -&gt; Result&lt;Json&lt;Vec&lt;Uuid&gt;&gt;, AppError&gt; {</span></span>
+<span id="L30"><span class="lineNum">      30</span> <span class="tlaGNC">         117 :     let _song = repository::find_song_by_id(&amp;db, song_id)</span></span>
+<span id="L31"><span class="lineNum">      31</span> <span class="tlaGNC">         117 :         .await?</span></span>
+<span id="L32"><span class="lineNum">      32</span> <span class="tlaGNC">         117 :         .ok_or_else(|| AppError::NotFound(&quot;Song not found&quot;.into()))?;</span></span>
 <span id="L33"><span class="lineNum">      33</span>              : </span>
-<span id="L34"><span class="lineNum">      34</span> <span class="tlaGNC">         120 :     let _ = _song;</span></span>
+<span id="L34"><span class="lineNum">      34</span> <span class="tlaGNC">         117 :     let _ = _song;</span></span>
 <span id="L35"><span class="lineNum">      35</span>              : </span>
-<span id="L36"><span class="lineNum">      36</span> <span class="tlaGNC">         120 :     let assigned = assign_song_to_stations(&amp;db, song_id, &amp;req.station_ids).await?;</span></span>
-<span id="L37"><span class="lineNum">      37</span> <span class="tlaGNC">         120 :     Ok(Json(assigned))</span></span>
-<span id="L38"><span class="lineNum">      38</span> <span class="tlaGNC">         120 : }</span></span>
+<span id="L36"><span class="lineNum">      36</span> <span class="tlaGNC">         117 :     let assigned = assign_song_to_stations(&amp;db, song_id, &amp;req.station_ids).await?;</span></span>
+<span id="L37"><span class="lineNum">      37</span> <span class="tlaGNC">         117 :     Ok(Json(assigned))</span></span>
+<span id="L38"><span class="lineNum">      38</span> <span class="tlaGNC">         117 : }</span></span>
 <span id="L39"><span class="lineNum">      39</span>              : </span>
 <span id="L40"><span class="lineNum">      40</span> <span class="tlaGNC">           3 : pub async fn remove_song_station(</span></span>
 <span id="L41"><span class="lineNum">      41</span> <span class="tlaGNC">           3 :     Extension(_auth_user): Extension&lt;AuthUser&gt;,</span></span>

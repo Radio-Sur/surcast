@@ -37,7 +37,7 @@
           </tr>
           <tr>
             <td class="headerItem">Test Date:</td>
-            <td class="headerValue">2026-09-06 18:18:07</td>
+            <td class="headerValue">2026-09-06 18:41:37</td>
             <td></td>
             <td class="headerItem">Functions:</td>
             <td class="headerCovTableEntryLo">55.2&nbsp;%</td>
@@ -73,13 +73,13 @@
 <span id="L11"><span class="lineNum">      11</span> <span class="tlaGNC">          11 :         .db_error(&quot;failed to list stations&quot;)</span></span>
 <span id="L12"><span class="lineNum">      12</span> <span class="tlaGNC">          11 : }</span></span>
 <span id="L13"><span class="lineNum">      13</span>              : </span>
-<span id="L14"><span class="lineNum">      14</span> <span class="tlaGNC">         400 : pub async fn find_station_by_id(db: &amp;PgPool, id: Uuid) -&gt; Result&lt;Option&lt;Station&gt;, AppError&gt; {</span></span>
-<span id="L15"><span class="lineNum">      15</span> <span class="tlaGNC">         400 :     sqlx::query_as::&lt;_, Station&gt;(&quot;SELECT * FROM stations WHERE id = $1&quot;)</span></span>
-<span id="L16"><span class="lineNum">      16</span> <span class="tlaGNC">         400 :         .bind(id)</span></span>
-<span id="L17"><span class="lineNum">      17</span> <span class="tlaGNC">         400 :         .fetch_optional(db)</span></span>
-<span id="L18"><span class="lineNum">      18</span> <span class="tlaGNC">         400 :         .await</span></span>
-<span id="L19"><span class="lineNum">      19</span> <span class="tlaGNC">         400 :         .db_error(&quot;failed to find station&quot;)</span></span>
-<span id="L20"><span class="lineNum">      20</span> <span class="tlaGNC">         400 : }</span></span>
+<span id="L14"><span class="lineNum">      14</span> <span class="tlaGNC">         398 : pub async fn find_station_by_id(db: &amp;PgPool, id: Uuid) -&gt; Result&lt;Option&lt;Station&gt;, AppError&gt; {</span></span>
+<span id="L15"><span class="lineNum">      15</span> <span class="tlaGNC">         398 :     sqlx::query_as::&lt;_, Station&gt;(&quot;SELECT * FROM stations WHERE id = $1&quot;)</span></span>
+<span id="L16"><span class="lineNum">      16</span> <span class="tlaGNC">         398 :         .bind(id)</span></span>
+<span id="L17"><span class="lineNum">      17</span> <span class="tlaGNC">         398 :         .fetch_optional(db)</span></span>
+<span id="L18"><span class="lineNum">      18</span> <span class="tlaGNC">         398 :         .await</span></span>
+<span id="L19"><span class="lineNum">      19</span> <span class="tlaGNC">         398 :         .db_error(&quot;failed to find station&quot;)</span></span>
+<span id="L20"><span class="lineNum">      20</span> <span class="tlaGNC">         398 : }</span></span>
 <span id="L21"><span class="lineNum">      21</span>              : </span>
 <span id="L22"><span class="lineNum">      22</span>              : pub struct PlaybackSettings {</span>
 <span id="L23"><span class="lineNum">      23</span>              :     pub transition_mode: String,</span>
@@ -87,20 +87,20 @@
 <span id="L25"><span class="lineNum">      25</span>              :     pub autocue_fade_max_ms: i32,</span>
 <span id="L26"><span class="lineNum">      26</span>              : }</span>
 <span id="L27"><span class="lineNum">      27</span>              : </span>
-<span id="L28"><span class="lineNum">      28</span> <span class="tlaGNC">          64 : pub async fn find_playback_settings(db: &amp;PgPool, station_id: Uuid) -&gt; Result&lt;Option&lt;PlaybackSettings&gt;, AppError&gt; {</span></span>
-<span id="L29"><span class="lineNum">      29</span> <span class="tlaGNC">          64 :     sqlx::query_as::&lt;_, (String, i32, i32)&gt;(&quot;SELECT transition_mode, default_fade_ms, autocue_fade_max_ms FROM stations WHERE id = $1&quot;)</span></span>
-<span id="L30"><span class="lineNum">      30</span> <span class="tlaGNC">          64 :         .bind(station_id)</span></span>
-<span id="L31"><span class="lineNum">      31</span> <span class="tlaGNC">          64 :         .fetch_optional(db)</span></span>
-<span id="L32"><span class="lineNum">      32</span> <span class="tlaGNC">          64 :         .await</span></span>
-<span id="L33"><span class="lineNum">      33</span> <span class="tlaGNC">          64 :         .db_error(&quot;failed to find station playback settings&quot;)</span></span>
-<span id="L34"><span class="lineNum">      34</span> <span class="tlaGNC">          64 :         .map(|settings| {</span></span>
-<span id="L35"><span class="lineNum">      35</span> <span class="tlaGNC">          64 :             settings.map(|(transition_mode, default_fade_ms, autocue_fade_max_ms)| PlaybackSettings {</span></span>
-<span id="L36"><span class="lineNum">      36</span> <span class="tlaGNC">          59 :                 transition_mode,</span></span>
-<span id="L37"><span class="lineNum">      37</span> <span class="tlaGNC">          59 :                 default_fade_ms,</span></span>
-<span id="L38"><span class="lineNum">      38</span> <span class="tlaGNC">          59 :                 autocue_fade_max_ms,</span></span>
-<span id="L39"><span class="lineNum">      39</span> <span class="tlaGNC">          59 :             })</span></span>
-<span id="L40"><span class="lineNum">      40</span> <span class="tlaGNC">          64 :         })</span></span>
-<span id="L41"><span class="lineNum">      41</span> <span class="tlaGNC">          64 : }</span></span>
+<span id="L28"><span class="lineNum">      28</span> <span class="tlaGNC">          63 : pub async fn find_playback_settings(db: &amp;PgPool, station_id: Uuid) -&gt; Result&lt;Option&lt;PlaybackSettings&gt;, AppError&gt; {</span></span>
+<span id="L29"><span class="lineNum">      29</span> <span class="tlaGNC">          63 :     sqlx::query_as::&lt;_, (String, i32, i32)&gt;(&quot;SELECT transition_mode, default_fade_ms, autocue_fade_max_ms FROM stations WHERE id = $1&quot;)</span></span>
+<span id="L30"><span class="lineNum">      30</span> <span class="tlaGNC">          63 :         .bind(station_id)</span></span>
+<span id="L31"><span class="lineNum">      31</span> <span class="tlaGNC">          63 :         .fetch_optional(db)</span></span>
+<span id="L32"><span class="lineNum">      32</span> <span class="tlaGNC">          63 :         .await</span></span>
+<span id="L33"><span class="lineNum">      33</span> <span class="tlaGNC">          63 :         .db_error(&quot;failed to find station playback settings&quot;)</span></span>
+<span id="L34"><span class="lineNum">      34</span> <span class="tlaGNC">          63 :         .map(|settings| {</span></span>
+<span id="L35"><span class="lineNum">      35</span> <span class="tlaGNC">          63 :             settings.map(|(transition_mode, default_fade_ms, autocue_fade_max_ms)| PlaybackSettings {</span></span>
+<span id="L36"><span class="lineNum">      36</span> <span class="tlaGNC">          58 :                 transition_mode,</span></span>
+<span id="L37"><span class="lineNum">      37</span> <span class="tlaGNC">          58 :                 default_fade_ms,</span></span>
+<span id="L38"><span class="lineNum">      38</span> <span class="tlaGNC">          58 :                 autocue_fade_max_ms,</span></span>
+<span id="L39"><span class="lineNum">      39</span> <span class="tlaGNC">          58 :             })</span></span>
+<span id="L40"><span class="lineNum">      40</span> <span class="tlaGNC">          63 :         })</span></span>
+<span id="L41"><span class="lineNum">      41</span> <span class="tlaGNC">          63 : }</span></span>
 <span id="L42"><span class="lineNum">      42</span>              : </span>
 <span id="L43"><span class="lineNum">      43</span>              : pub struct CreateStationParams {</span>
 <span id="L44"><span class="lineNum">      44</span>              :     pub id: Uuid,</span>
@@ -116,35 +116,35 @@
 <span id="L54"><span class="lineNum">      54</span>              :     pub created_by: Uuid,</span>
 <span id="L55"><span class="lineNum">      55</span>              : }</span>
 <span id="L56"><span class="lineNum">      56</span>              : </span>
-<span id="L57"><span class="lineNum">      57</span> <span class="tlaGNC">         117 : pub async fn insert_station(db: &amp;PgPool, params: &amp;CreateStationParams) -&gt; Result&lt;(), AppError&gt; {</span></span>
-<span id="L58"><span class="lineNum">      58</span> <span class="tlaGNC">         117 :     let mut transaction = db.begin().await.db_error(&quot;failed to begin station creation&quot;)?;</span></span>
-<span id="L59"><span class="lineNum">      59</span> <span class="tlaGNC">         117 :     sqlx::query(</span></span>
-<span id="L60"><span class="lineNum">      60</span> <span class="tlaGNC">         117 :         &quot;INSERT INTO stations (id, name, description, slug, stream_url, prebuffer_bytes, played_limit, default_fade_ms, transition_mode, autocue_fade_max_ms, created_by) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)&quot;,</span></span>
-<span id="L61"><span class="lineNum">      61</span> <span class="tlaGNC">         117 :     )</span></span>
-<span id="L62"><span class="lineNum">      62</span> <span class="tlaGNC">         117 :     .bind(params.id)</span></span>
-<span id="L63"><span class="lineNum">      63</span> <span class="tlaGNC">         117 :     .bind(&amp;params.name)</span></span>
-<span id="L64"><span class="lineNum">      64</span> <span class="tlaGNC">         117 :     .bind(&amp;params.description)</span></span>
-<span id="L65"><span class="lineNum">      65</span> <span class="tlaGNC">         117 :     .bind(&amp;params.slug)</span></span>
-<span id="L66"><span class="lineNum">      66</span> <span class="tlaGNC">         117 :     .bind(&amp;params.stream_url)</span></span>
-<span id="L67"><span class="lineNum">      67</span> <span class="tlaGNC">         117 :     .bind(params.prebuffer_bytes)</span></span>
-<span id="L68"><span class="lineNum">      68</span> <span class="tlaGNC">         117 :     .bind(params.played_limit)</span></span>
-<span id="L69"><span class="lineNum">      69</span> <span class="tlaGNC">         117 :     .bind(params.default_fade_ms)</span></span>
-<span id="L70"><span class="lineNum">      70</span> <span class="tlaGNC">         117 :     .bind(&amp;params.transition_mode)</span></span>
-<span id="L71"><span class="lineNum">      71</span> <span class="tlaGNC">         117 :     .bind(params.autocue_fade_max_ms)</span></span>
-<span id="L72"><span class="lineNum">      72</span> <span class="tlaGNC">         117 :     .bind(params.created_by)</span></span>
-<span id="L73"><span class="lineNum">      73</span> <span class="tlaGNC">         117 :     .execute(&amp;mut *transaction)</span></span>
-<span id="L74"><span class="lineNum">      74</span> <span class="tlaGNC">         117 :     .await</span></span>
-<span id="L75"><span class="lineNum">      75</span> <span class="tlaGNC">         117 :     .db_error(&quot;failed to create station&quot;)?;</span></span>
+<span id="L57"><span class="lineNum">      57</span> <span class="tlaGNC">         116 : pub async fn insert_station(db: &amp;PgPool, params: &amp;CreateStationParams) -&gt; Result&lt;(), AppError&gt; {</span></span>
+<span id="L58"><span class="lineNum">      58</span> <span class="tlaGNC">         116 :     let mut transaction = db.begin().await.db_error(&quot;failed to begin station creation&quot;)?;</span></span>
+<span id="L59"><span class="lineNum">      59</span> <span class="tlaGNC">         116 :     sqlx::query(</span></span>
+<span id="L60"><span class="lineNum">      60</span> <span class="tlaGNC">         116 :         &quot;INSERT INTO stations (id, name, description, slug, stream_url, prebuffer_bytes, played_limit, default_fade_ms, transition_mode, autocue_fade_max_ms, created_by) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)&quot;,</span></span>
+<span id="L61"><span class="lineNum">      61</span> <span class="tlaGNC">         116 :     )</span></span>
+<span id="L62"><span class="lineNum">      62</span> <span class="tlaGNC">         116 :     .bind(params.id)</span></span>
+<span id="L63"><span class="lineNum">      63</span> <span class="tlaGNC">         116 :     .bind(&amp;params.name)</span></span>
+<span id="L64"><span class="lineNum">      64</span> <span class="tlaGNC">         116 :     .bind(&amp;params.description)</span></span>
+<span id="L65"><span class="lineNum">      65</span> <span class="tlaGNC">         116 :     .bind(&amp;params.slug)</span></span>
+<span id="L66"><span class="lineNum">      66</span> <span class="tlaGNC">         116 :     .bind(&amp;params.stream_url)</span></span>
+<span id="L67"><span class="lineNum">      67</span> <span class="tlaGNC">         116 :     .bind(params.prebuffer_bytes)</span></span>
+<span id="L68"><span class="lineNum">      68</span> <span class="tlaGNC">         116 :     .bind(params.played_limit)</span></span>
+<span id="L69"><span class="lineNum">      69</span> <span class="tlaGNC">         116 :     .bind(params.default_fade_ms)</span></span>
+<span id="L70"><span class="lineNum">      70</span> <span class="tlaGNC">         116 :     .bind(&amp;params.transition_mode)</span></span>
+<span id="L71"><span class="lineNum">      71</span> <span class="tlaGNC">         116 :     .bind(params.autocue_fade_max_ms)</span></span>
+<span id="L72"><span class="lineNum">      72</span> <span class="tlaGNC">         116 :     .bind(params.created_by)</span></span>
+<span id="L73"><span class="lineNum">      73</span> <span class="tlaGNC">         116 :     .execute(&amp;mut *transaction)</span></span>
+<span id="L74"><span class="lineNum">      74</span> <span class="tlaGNC">         116 :     .await</span></span>
+<span id="L75"><span class="lineNum">      75</span> <span class="tlaGNC">         116 :     .db_error(&quot;failed to create station&quot;)?;</span></span>
 <span id="L76"><span class="lineNum">      76</span>              : </span>
-<span id="L77"><span class="lineNum">      77</span> <span class="tlaGNC">         117 :     sqlx::query(&quot;INSERT INTO station_auto_fill (station_id) VALUES ($1)&quot;)</span></span>
-<span id="L78"><span class="lineNum">      78</span> <span class="tlaGNC">         117 :         .bind(params.id)</span></span>
-<span id="L79"><span class="lineNum">      79</span> <span class="tlaGNC">         117 :         .execute(&amp;mut *transaction)</span></span>
-<span id="L80"><span class="lineNum">      80</span> <span class="tlaGNC">         117 :         .await</span></span>
-<span id="L81"><span class="lineNum">      81</span> <span class="tlaGNC">         117 :         .db_error(&quot;failed to create default AutoDJ configuration&quot;)?;</span></span>
+<span id="L77"><span class="lineNum">      77</span> <span class="tlaGNC">         116 :     sqlx::query(&quot;INSERT INTO station_auto_fill (station_id) VALUES ($1)&quot;)</span></span>
+<span id="L78"><span class="lineNum">      78</span> <span class="tlaGNC">         116 :         .bind(params.id)</span></span>
+<span id="L79"><span class="lineNum">      79</span> <span class="tlaGNC">         116 :         .execute(&amp;mut *transaction)</span></span>
+<span id="L80"><span class="lineNum">      80</span> <span class="tlaGNC">         116 :         .await</span></span>
+<span id="L81"><span class="lineNum">      81</span> <span class="tlaGNC">         116 :         .db_error(&quot;failed to create default AutoDJ configuration&quot;)?;</span></span>
 <span id="L82"><span class="lineNum">      82</span>              : </span>
-<span id="L83"><span class="lineNum">      83</span> <span class="tlaGNC">         117 :     transaction.commit().await.db_error(&quot;failed to create station&quot;)?;</span></span>
-<span id="L84"><span class="lineNum">      84</span> <span class="tlaGNC">         117 :     Ok(())</span></span>
-<span id="L85"><span class="lineNum">      85</span> <span class="tlaGNC">         117 : }</span></span>
+<span id="L83"><span class="lineNum">      83</span> <span class="tlaGNC">         116 :     transaction.commit().await.db_error(&quot;failed to create station&quot;)?;</span></span>
+<span id="L84"><span class="lineNum">      84</span> <span class="tlaGNC">         116 :     Ok(())</span></span>
+<span id="L85"><span class="lineNum">      85</span> <span class="tlaGNC">         116 : }</span></span>
 <span id="L86"><span class="lineNum">      86</span>              : </span>
 <span id="L87"><span class="lineNum">      87</span> <span class="tlaGNC">           7 : pub async fn delete_station(db: &amp;PgPool, id: Uuid) -&gt; Result&lt;(), AppError&gt; {</span></span>
 <span id="L88"><span class="lineNum">      88</span> <span class="tlaGNC">           7 :     sqlx::query(&quot;DELETE FROM stations WHERE id = $1&quot;)</span></span>
@@ -171,26 +171,26 @@
 <span id="L109"><span class="lineNum">     109</span>              : /// Persists the user's desired lifecycle state. Fails with `NotFound` when</span>
 <span id="L110"><span class="lineNum">     110</span>              : /// the station does not exist, so command endpoints keep their 404</span>
 <span id="L111"><span class="lineNum">     111</span>              : /// semantics even for raw UUID paths.</span>
-<span id="L112"><span class="lineNum">     112</span> <span class="tlaGNC">          65 : pub async fn set_station_started(db: &amp;PgPool, id: Uuid, started: bool) -&gt; Result&lt;(), AppError&gt; {</span></span>
-<span id="L113"><span class="lineNum">     113</span> <span class="tlaGNC">          65 :     let result = sqlx::query(&quot;UPDATE stations SET is_started = $1, updated_at = NOW() WHERE id = $2&quot;)</span></span>
-<span id="L114"><span class="lineNum">     114</span> <span class="tlaGNC">          65 :         .bind(started)</span></span>
-<span id="L115"><span class="lineNum">     115</span> <span class="tlaGNC">          65 :         .bind(id)</span></span>
-<span id="L116"><span class="lineNum">     116</span> <span class="tlaGNC">          65 :         .execute(db)</span></span>
-<span id="L117"><span class="lineNum">     117</span> <span class="tlaGNC">          65 :         .await</span></span>
-<span id="L118"><span class="lineNum">     118</span> <span class="tlaGNC">          65 :         .db_error(&quot;failed to update station desired state&quot;)?;</span></span>
-<span id="L119"><span class="lineNum">     119</span> <span class="tlaGNC">          65 :     if result.rows_affected() == 0 {</span></span>
+<span id="L112"><span class="lineNum">     112</span> <span class="tlaGNC">          64 : pub async fn set_station_started(db: &amp;PgPool, id: Uuid, started: bool) -&gt; Result&lt;(), AppError&gt; {</span></span>
+<span id="L113"><span class="lineNum">     113</span> <span class="tlaGNC">          64 :     let result = sqlx::query(&quot;UPDATE stations SET is_started = $1, updated_at = NOW() WHERE id = $2&quot;)</span></span>
+<span id="L114"><span class="lineNum">     114</span> <span class="tlaGNC">          64 :         .bind(started)</span></span>
+<span id="L115"><span class="lineNum">     115</span> <span class="tlaGNC">          64 :         .bind(id)</span></span>
+<span id="L116"><span class="lineNum">     116</span> <span class="tlaGNC">          64 :         .execute(db)</span></span>
+<span id="L117"><span class="lineNum">     117</span> <span class="tlaGNC">          64 :         .await</span></span>
+<span id="L118"><span class="lineNum">     118</span> <span class="tlaGNC">          64 :         .db_error(&quot;failed to update station desired state&quot;)?;</span></span>
+<span id="L119"><span class="lineNum">     119</span> <span class="tlaGNC">          64 :     if result.rows_affected() == 0 {</span></span>
 <span id="L120"><span class="lineNum">     120</span> <span class="tlaUNC tlaBgUNC">           0 :         return Err(AppError::NotFound(&quot;Station not found&quot;.into()));</span></span>
-<span id="L121"><span class="lineNum">     121</span> <span class="tlaGNC tlaBgGNC">          65 :     }</span></span>
-<span id="L122"><span class="lineNum">     122</span> <span class="tlaGNC">          65 :     Ok(())</span></span>
-<span id="L123"><span class="lineNum">     123</span> <span class="tlaGNC">          65 : }</span></span>
+<span id="L121"><span class="lineNum">     121</span> <span class="tlaGNC tlaBgGNC">          64 :     }</span></span>
+<span id="L122"><span class="lineNum">     122</span> <span class="tlaGNC">          64 :     Ok(())</span></span>
+<span id="L123"><span class="lineNum">     123</span> <span class="tlaGNC">          64 : }</span></span>
 <span id="L124"><span class="lineNum">     124</span>              : </span>
 <span id="L125"><span class="lineNum">     125</span>              : /// Stations the user wants broadcasting; used by the startup restore.</span>
-<span id="L126"><span class="lineNum">     126</span> <span class="tlaGNC">          60 : pub async fn find_started_stations(db: &amp;PgPool) -&gt; Result&lt;Vec&lt;Station&gt;, AppError&gt; {</span></span>
-<span id="L127"><span class="lineNum">     127</span> <span class="tlaGNC">          60 :     sqlx::query_as::&lt;_, Station&gt;(&quot;SELECT * FROM stations WHERE is_started = TRUE ORDER BY name&quot;)</span></span>
-<span id="L128"><span class="lineNum">     128</span> <span class="tlaGNC">          60 :         .fetch_all(db)</span></span>
-<span id="L129"><span class="lineNum">     129</span> <span class="tlaGNC">          60 :         .await</span></span>
-<span id="L130"><span class="lineNum">     130</span> <span class="tlaGNC">          60 :         .db_error(&quot;failed to list started stations&quot;)</span></span>
-<span id="L131"><span class="lineNum">     131</span> <span class="tlaGNC">          60 : }</span></span>
+<span id="L126"><span class="lineNum">     126</span> <span class="tlaGNC">          59 : pub async fn find_started_stations(db: &amp;PgPool) -&gt; Result&lt;Vec&lt;Station&gt;, AppError&gt; {</span></span>
+<span id="L127"><span class="lineNum">     127</span> <span class="tlaGNC">          59 :     sqlx::query_as::&lt;_, Station&gt;(&quot;SELECT * FROM stations WHERE is_started = TRUE ORDER BY name&quot;)</span></span>
+<span id="L128"><span class="lineNum">     128</span> <span class="tlaGNC">          59 :         .fetch_all(db)</span></span>
+<span id="L129"><span class="lineNum">     129</span> <span class="tlaGNC">          59 :         .await</span></span>
+<span id="L130"><span class="lineNum">     130</span> <span class="tlaGNC">          59 :         .db_error(&quot;failed to list started stations&quot;)</span></span>
+<span id="L131"><span class="lineNum">     131</span> <span class="tlaGNC">          59 : }</span></span>
 <span id="L132"><span class="lineNum">     132</span>              : </span>
 <span id="L133"><span class="lineNum">     133</span>              : /// The current desired state of one station (`None` when the row no longer</span>
 <span id="L134"><span class="lineNum">     134</span>              : /// exists); the startup restore re-checks it under the per-station lifecycle</span>
@@ -310,15 +310,15 @@
 <span id="L248"><span class="lineNum">     248</span> <span class="tlaGNC">           1 :     Ok(())</span></span>
 <span id="L249"><span class="lineNum">     249</span> <span class="tlaGNC">           1 : }</span></span>
 <span id="L250"><span class="lineNum">     250</span>              : </span>
-<span id="L251"><span class="lineNum">     251</span> <span class="tlaGNC">          90 : pub async fn check_song_in_library(db: &amp;PgPool, station_id: Uuid, song_id: Uuid) -&gt; Result&lt;bool, AppError&gt; {</span></span>
-<span id="L252"><span class="lineNum">     252</span> <span class="tlaGNC">          90 :     let in_library: (bool,) = sqlx::query_as(&quot;SELECT EXISTS(SELECT 1 FROM station_songs WHERE station_id = $1 AND song_id = $2)&quot;)</span></span>
-<span id="L253"><span class="lineNum">     253</span> <span class="tlaGNC">          90 :         .bind(station_id)</span></span>
-<span id="L254"><span class="lineNum">     254</span> <span class="tlaGNC">          90 :         .bind(song_id)</span></span>
-<span id="L255"><span class="lineNum">     255</span> <span class="tlaGNC">          90 :         .fetch_one(db)</span></span>
-<span id="L256"><span class="lineNum">     256</span> <span class="tlaGNC">          90 :         .await</span></span>
-<span id="L257"><span class="lineNum">     257</span> <span class="tlaGNC">          90 :         .db_error(&quot;failed to verify song in library&quot;)?;</span></span>
-<span id="L258"><span class="lineNum">     258</span> <span class="tlaGNC">          90 :     Ok(in_library.0)</span></span>
-<span id="L259"><span class="lineNum">     259</span> <span class="tlaGNC">          90 : }</span></span>
+<span id="L251"><span class="lineNum">     251</span> <span class="tlaGNC">          89 : pub async fn check_song_in_library(db: &amp;PgPool, station_id: Uuid, song_id: Uuid) -&gt; Result&lt;bool, AppError&gt; {</span></span>
+<span id="L252"><span class="lineNum">     252</span> <span class="tlaGNC">          89 :     let in_library: (bool,) = sqlx::query_as(&quot;SELECT EXISTS(SELECT 1 FROM station_songs WHERE station_id = $1 AND song_id = $2)&quot;)</span></span>
+<span id="L253"><span class="lineNum">     253</span> <span class="tlaGNC">          89 :         .bind(station_id)</span></span>
+<span id="L254"><span class="lineNum">     254</span> <span class="tlaGNC">          89 :         .bind(song_id)</span></span>
+<span id="L255"><span class="lineNum">     255</span> <span class="tlaGNC">          89 :         .fetch_one(db)</span></span>
+<span id="L256"><span class="lineNum">     256</span> <span class="tlaGNC">          89 :         .await</span></span>
+<span id="L257"><span class="lineNum">     257</span> <span class="tlaGNC">          89 :         .db_error(&quot;failed to verify song in library&quot;)?;</span></span>
+<span id="L258"><span class="lineNum">     258</span> <span class="tlaGNC">          89 :     Ok(in_library.0)</span></span>
+<span id="L259"><span class="lineNum">     259</span> <span class="tlaGNC">          89 : }</span></span>
 <span id="L260"><span class="lineNum">     260</span>              : </span>
 <span id="L261"><span class="lineNum">     261</span> <span class="tlaGNC">          95 : pub async fn verify_station_exists(db: &amp;PgPool, station_id: Uuid) -&gt; Result&lt;(), AppError&gt; {</span></span>
 <span id="L262"><span class="lineNum">     262</span> <span class="tlaGNC">          95 :     sqlx::query_scalar::&lt;_, bool&gt;(&quot;SELECT EXISTS(SELECT 1 FROM stations WHERE id = $1)&quot;)</span></span>

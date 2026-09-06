@@ -37,7 +37,7 @@
           </tr>
           <tr>
             <td class="headerItem">Test Date:</td>
-            <td class="headerValue">2026-09-06 18:18:07</td>
+            <td class="headerValue">2026-09-06 18:41:37</td>
             <td></td>
             <td class="headerItem">Functions:</td>
             <td class="headerCovTableEntryLo">40.4&nbsp;%</td>
@@ -81,54 +81,54 @@
 <span id="L19"><span class="lineNum">      19</span> <span class="tlaGNC">           3 :     Ok(Json(SetupStatus { setup_complete: count &gt; 0 }))</span></span>
 <span id="L20"><span class="lineNum">      20</span> <span class="tlaGNC">           3 : }</span></span>
 <span id="L21"><span class="lineNum">      21</span>              : </span>
-<span id="L22"><span class="lineNum">      22</span> <span class="tlaGNC">         136 : pub async fn setup_init(</span></span>
-<span id="L23"><span class="lineNum">      23</span> <span class="tlaGNC">         136 :     State(db): State&lt;PgPool&gt;,</span></span>
-<span id="L24"><span class="lineNum">      24</span> <span class="tlaGNC">         136 :     Json(req): Json&lt;SetupRequest&gt;,</span></span>
-<span id="L25"><span class="lineNum">      25</span> <span class="tlaGNC">         136 : ) -&gt; Result&lt;(StatusCode, Json&lt;serde_json::Value&gt;), AppError&gt; {</span></span>
-<span id="L26"><span class="lineNum">      26</span> <span class="tlaGNC">         136 :     if req.username.is_empty() || req.password.is_empty() {</span></span>
+<span id="L22"><span class="lineNum">      22</span> <span class="tlaGNC">         135 : pub async fn setup_init(</span></span>
+<span id="L23"><span class="lineNum">      23</span> <span class="tlaGNC">         135 :     State(db): State&lt;PgPool&gt;,</span></span>
+<span id="L24"><span class="lineNum">      24</span> <span class="tlaGNC">         135 :     Json(req): Json&lt;SetupRequest&gt;,</span></span>
+<span id="L25"><span class="lineNum">      25</span> <span class="tlaGNC">         135 : ) -&gt; Result&lt;(StatusCode, Json&lt;serde_json::Value&gt;), AppError&gt; {</span></span>
+<span id="L26"><span class="lineNum">      26</span> <span class="tlaGNC">         135 :     if req.username.is_empty() || req.password.is_empty() {</span></span>
 <span id="L27"><span class="lineNum">      27</span> <span class="tlaUNC tlaBgUNC">           0 :         return Err(AppError::BadRequest(&quot;Username and password are required&quot;.into()));</span></span>
-<span id="L28"><span class="lineNum">      28</span> <span class="tlaGNC tlaBgGNC">         136 :     }</span></span>
+<span id="L28"><span class="lineNum">      28</span> <span class="tlaGNC tlaBgGNC">         135 :     }</span></span>
 <span id="L29"><span class="lineNum">      29</span>              : </span>
-<span id="L30"><span class="lineNum">      30</span> <span class="tlaGNC">         136 :     let count = repository::count_users(&amp;db).await?;</span></span>
+<span id="L30"><span class="lineNum">      30</span> <span class="tlaGNC">         135 :     let count = repository::count_users(&amp;db).await?;</span></span>
 <span id="L31"><span class="lineNum">      31</span>              : </span>
-<span id="L32"><span class="lineNum">      32</span> <span class="tlaGNC">         136 :     if count &gt; 0 {</span></span>
+<span id="L32"><span class="lineNum">      32</span> <span class="tlaGNC">         135 :     if count &gt; 0 {</span></span>
 <span id="L33"><span class="lineNum">      33</span> <span class="tlaGNC">           1 :         return Err(AppError::BadRequest(&quot;Setup already completed&quot;.into()));</span></span>
-<span id="L34"><span class="lineNum">      34</span> <span class="tlaGNC">         135 :     }</span></span>
+<span id="L34"><span class="lineNum">      34</span> <span class="tlaGNC">         134 :     }</span></span>
 <span id="L35"><span class="lineNum">      35</span>              : </span>
-<span id="L36"><span class="lineNum">      36</span> <span class="tlaGNC">         135 :     let password_hash = hash(&amp;req.password, DEFAULT_COST).db_error(&quot;failed to hash password&quot;)?;</span></span>
+<span id="L36"><span class="lineNum">      36</span> <span class="tlaGNC">         134 :     let password_hash = hash(&amp;req.password, DEFAULT_COST).db_error(&quot;failed to hash password&quot;)?;</span></span>
 <span id="L37"><span class="lineNum">      37</span>              : </span>
-<span id="L38"><span class="lineNum">      38</span> <span class="tlaGNC">         135 :     let user_id = Uuid::new_v4();</span></span>
-<span id="L39"><span class="lineNum">      39</span> <span class="tlaGNC">         135 :     repository::insert_user(&amp;db, user_id, &amp;req.username, &amp;password_hash, &amp;req.username, &amp;Role::Admin).await?;</span></span>
+<span id="L38"><span class="lineNum">      38</span> <span class="tlaGNC">         134 :     let user_id = Uuid::new_v4();</span></span>
+<span id="L39"><span class="lineNum">      39</span> <span class="tlaGNC">         134 :     repository::insert_user(&amp;db, user_id, &amp;req.username, &amp;password_hash, &amp;req.username, &amp;Role::Admin).await?;</span></span>
 <span id="L40"><span class="lineNum">      40</span>              : </span>
-<span id="L41"><span class="lineNum">      41</span> <span class="tlaGNC">         135 :     Ok((</span></span>
-<span id="L42"><span class="lineNum">      42</span> <span class="tlaGNC">         135 :         StatusCode::CREATED,</span></span>
-<span id="L43"><span class="lineNum">      43</span> <span class="tlaGNC">         135 :         Json(serde_json::json!({ &quot;message&quot;: &quot;Admin account created. Please sign in.&quot; })),</span></span>
-<span id="L44"><span class="lineNum">      44</span> <span class="tlaGNC">         135 :     ))</span></span>
-<span id="L45"><span class="lineNum">      45</span> <span class="tlaGNC">         136 : }</span></span>
+<span id="L41"><span class="lineNum">      41</span> <span class="tlaGNC">         134 :     Ok((</span></span>
+<span id="L42"><span class="lineNum">      42</span> <span class="tlaGNC">         134 :         StatusCode::CREATED,</span></span>
+<span id="L43"><span class="lineNum">      43</span> <span class="tlaGNC">         134 :         Json(serde_json::json!({ &quot;message&quot;: &quot;Admin account created. Please sign in.&quot; })),</span></span>
+<span id="L44"><span class="lineNum">      44</span> <span class="tlaGNC">         134 :     ))</span></span>
+<span id="L45"><span class="lineNum">      45</span> <span class="tlaGNC">         135 : }</span></span>
 <span id="L46"><span class="lineNum">      46</span>              : </span>
-<span id="L47"><span class="lineNum">      47</span> <span class="tlaGNC">         139 : pub async fn login(</span></span>
-<span id="L48"><span class="lineNum">      48</span> <span class="tlaGNC">         139 :     State(db): State&lt;PgPool&gt;,</span></span>
-<span id="L49"><span class="lineNum">      49</span> <span class="tlaGNC">         139 :     State(config): State&lt;Config&gt;,</span></span>
-<span id="L50"><span class="lineNum">      50</span> <span class="tlaGNC">         139 :     Json(req): Json&lt;LoginRequest&gt;,</span></span>
-<span id="L51"><span class="lineNum">      51</span> <span class="tlaGNC">         139 : ) -&gt; Result&lt;Json&lt;AuthResponse&gt;, AppError&gt; {</span></span>
-<span id="L52"><span class="lineNum">      52</span> <span class="tlaGNC">         139 :     let user = repository::find_user_by_username(&amp;db, &amp;req.username)</span></span>
-<span id="L53"><span class="lineNum">      53</span> <span class="tlaGNC">         139 :         .await?</span></span>
-<span id="L54"><span class="lineNum">      54</span> <span class="tlaGNC">         139 :         .ok_or_else(|| AppError::Unauthorized(&quot;Invalid username or password&quot;.into()))?;</span></span>
+<span id="L47"><span class="lineNum">      47</span> <span class="tlaGNC">         138 : pub async fn login(</span></span>
+<span id="L48"><span class="lineNum">      48</span> <span class="tlaGNC">         138 :     State(db): State&lt;PgPool&gt;,</span></span>
+<span id="L49"><span class="lineNum">      49</span> <span class="tlaGNC">         138 :     State(config): State&lt;Config&gt;,</span></span>
+<span id="L50"><span class="lineNum">      50</span> <span class="tlaGNC">         138 :     Json(req): Json&lt;LoginRequest&gt;,</span></span>
+<span id="L51"><span class="lineNum">      51</span> <span class="tlaGNC">         138 : ) -&gt; Result&lt;Json&lt;AuthResponse&gt;, AppError&gt; {</span></span>
+<span id="L52"><span class="lineNum">      52</span> <span class="tlaGNC">         138 :     let user = repository::find_user_by_username(&amp;db, &amp;req.username)</span></span>
+<span id="L53"><span class="lineNum">      53</span> <span class="tlaGNC">         138 :         .await?</span></span>
+<span id="L54"><span class="lineNum">      54</span> <span class="tlaGNC">         138 :         .ok_or_else(|| AppError::Unauthorized(&quot;Invalid username or password&quot;.into()))?;</span></span>
 <span id="L55"><span class="lineNum">      55</span>              : </span>
-<span id="L56"><span class="lineNum">      56</span> <span class="tlaGNC">         138 :     let valid = verify(&amp;req.password, &amp;user.password_hash).db_error(&quot;failed to verify password&quot;)?;</span></span>
+<span id="L56"><span class="lineNum">      56</span> <span class="tlaGNC">         137 :     let valid = verify(&amp;req.password, &amp;user.password_hash).db_error(&quot;failed to verify password&quot;)?;</span></span>
 <span id="L57"><span class="lineNum">      57</span>              : </span>
-<span id="L58"><span class="lineNum">      58</span> <span class="tlaGNC">         138 :     if !valid {</span></span>
+<span id="L58"><span class="lineNum">      58</span> <span class="tlaGNC">         137 :     if !valid {</span></span>
 <span id="L59"><span class="lineNum">      59</span> <span class="tlaGNC">           1 :         return Err(AppError::Unauthorized(&quot;Invalid username or password&quot;.into()));</span></span>
-<span id="L60"><span class="lineNum">      60</span> <span class="tlaGNC">         137 :     }</span></span>
+<span id="L60"><span class="lineNum">      60</span> <span class="tlaGNC">         136 :     }</span></span>
 <span id="L61"><span class="lineNum">      61</span>              : </span>
-<span id="L62"><span class="lineNum">      62</span> <span class="tlaGNC">         137 :     let (access_token, refresh_token) = generate_tokens(&amp;user, &amp;config)?;</span></span>
+<span id="L62"><span class="lineNum">      62</span> <span class="tlaGNC">         136 :     let (access_token, refresh_token) = generate_tokens(&amp;user, &amp;config)?;</span></span>
 <span id="L63"><span class="lineNum">      63</span>              : </span>
-<span id="L64"><span class="lineNum">      64</span> <span class="tlaGNC">         137 :     Ok(Json(AuthResponse {</span></span>
-<span id="L65"><span class="lineNum">      65</span> <span class="tlaGNC">         137 :         access_token,</span></span>
-<span id="L66"><span class="lineNum">      66</span> <span class="tlaGNC">         137 :         refresh_token,</span></span>
-<span id="L67"><span class="lineNum">      67</span> <span class="tlaGNC">         137 :         user: user.into(),</span></span>
-<span id="L68"><span class="lineNum">      68</span> <span class="tlaGNC">         137 :     }))</span></span>
-<span id="L69"><span class="lineNum">      69</span> <span class="tlaGNC">         139 : }</span></span>
+<span id="L64"><span class="lineNum">      64</span> <span class="tlaGNC">         136 :     Ok(Json(AuthResponse {</span></span>
+<span id="L65"><span class="lineNum">      65</span> <span class="tlaGNC">         136 :         access_token,</span></span>
+<span id="L66"><span class="lineNum">      66</span> <span class="tlaGNC">         136 :         refresh_token,</span></span>
+<span id="L67"><span class="lineNum">      67</span> <span class="tlaGNC">         136 :         user: user.into(),</span></span>
+<span id="L68"><span class="lineNum">      68</span> <span class="tlaGNC">         136 :     }))</span></span>
+<span id="L69"><span class="lineNum">      69</span> <span class="tlaGNC">         138 : }</span></span>
 <span id="L70"><span class="lineNum">      70</span>              : </span>
 <span id="L71"><span class="lineNum">      71</span> <span class="tlaGNC">           3 : pub async fn refresh(</span></span>
 <span id="L72"><span class="lineNum">      72</span> <span class="tlaGNC">           3 :     State(db): State&lt;PgPool&gt;,</span></span>
@@ -203,37 +203,37 @@
 <span id="L141"><span class="lineNum">     141</span> <span class="tlaGNC">           1 :     Ok(StatusCode::NO_CONTENT)</span></span>
 <span id="L142"><span class="lineNum">     142</span> <span class="tlaGNC">           1 : }</span></span>
 <span id="L143"><span class="lineNum">     143</span>              : </span>
-<span id="L144"><span class="lineNum">     144</span> <span class="tlaGNC">         139 : fn generate_tokens(user: &amp;User, config: &amp;Config) -&gt; Result&lt;(String, String), AppError&gt; {</span></span>
-<span id="L145"><span class="lineNum">     145</span> <span class="tlaGNC">         139 :     let now = Utc::now().timestamp() as usize;</span></span>
+<span id="L144"><span class="lineNum">     144</span> <span class="tlaGNC">         138 : fn generate_tokens(user: &amp;User, config: &amp;Config) -&gt; Result&lt;(String, String), AppError&gt; {</span></span>
+<span id="L145"><span class="lineNum">     145</span> <span class="tlaGNC">         138 :     let now = Utc::now().timestamp() as usize;</span></span>
 <span id="L146"><span class="lineNum">     146</span>              : </span>
-<span id="L147"><span class="lineNum">     147</span> <span class="tlaGNC">         139 :     let access_claims = Claims {</span></span>
-<span id="L148"><span class="lineNum">     148</span> <span class="tlaGNC">         139 :         sub: user.id.to_string(),</span></span>
-<span id="L149"><span class="lineNum">     149</span> <span class="tlaGNC">         139 :         exp: now + config.jwt_access_expiry as usize,</span></span>
-<span id="L150"><span class="lineNum">     150</span> <span class="tlaGNC">         139 :         iat: now,</span></span>
-<span id="L151"><span class="lineNum">     151</span> <span class="tlaGNC">         139 :     };</span></span>
+<span id="L147"><span class="lineNum">     147</span> <span class="tlaGNC">         138 :     let access_claims = Claims {</span></span>
+<span id="L148"><span class="lineNum">     148</span> <span class="tlaGNC">         138 :         sub: user.id.to_string(),</span></span>
+<span id="L149"><span class="lineNum">     149</span> <span class="tlaGNC">         138 :         exp: now + config.jwt_access_expiry as usize,</span></span>
+<span id="L150"><span class="lineNum">     150</span> <span class="tlaGNC">         138 :         iat: now,</span></span>
+<span id="L151"><span class="lineNum">     151</span> <span class="tlaGNC">         138 :     };</span></span>
 <span id="L152"><span class="lineNum">     152</span>              : </span>
-<span id="L153"><span class="lineNum">     153</span> <span class="tlaGNC">         139 :     let refresh_claims = Claims {</span></span>
-<span id="L154"><span class="lineNum">     154</span> <span class="tlaGNC">         139 :         sub: user.id.to_string(),</span></span>
-<span id="L155"><span class="lineNum">     155</span> <span class="tlaGNC">         139 :         exp: now + config.jwt_refresh_expiry as usize,</span></span>
-<span id="L156"><span class="lineNum">     156</span> <span class="tlaGNC">         139 :         iat: now,</span></span>
-<span id="L157"><span class="lineNum">     157</span> <span class="tlaGNC">         139 :     };</span></span>
+<span id="L153"><span class="lineNum">     153</span> <span class="tlaGNC">         138 :     let refresh_claims = Claims {</span></span>
+<span id="L154"><span class="lineNum">     154</span> <span class="tlaGNC">         138 :         sub: user.id.to_string(),</span></span>
+<span id="L155"><span class="lineNum">     155</span> <span class="tlaGNC">         138 :         exp: now + config.jwt_refresh_expiry as usize,</span></span>
+<span id="L156"><span class="lineNum">     156</span> <span class="tlaGNC">         138 :         iat: now,</span></span>
+<span id="L157"><span class="lineNum">     157</span> <span class="tlaGNC">         138 :     };</span></span>
 <span id="L158"><span class="lineNum">     158</span>              : </span>
-<span id="L159"><span class="lineNum">     159</span> <span class="tlaGNC">         139 :     let access_token = encode(</span></span>
-<span id="L160"><span class="lineNum">     160</span> <span class="tlaGNC">         139 :         &amp;Header::default(),</span></span>
-<span id="L161"><span class="lineNum">     161</span> <span class="tlaGNC">         139 :         &amp;access_claims,</span></span>
-<span id="L162"><span class="lineNum">     162</span> <span class="tlaGNC">         139 :         &amp;EncodingKey::from_secret(config.jwt_secret.as_bytes()),</span></span>
+<span id="L159"><span class="lineNum">     159</span> <span class="tlaGNC">         138 :     let access_token = encode(</span></span>
+<span id="L160"><span class="lineNum">     160</span> <span class="tlaGNC">         138 :         &amp;Header::default(),</span></span>
+<span id="L161"><span class="lineNum">     161</span> <span class="tlaGNC">         138 :         &amp;access_claims,</span></span>
+<span id="L162"><span class="lineNum">     162</span> <span class="tlaGNC">         138 :         &amp;EncodingKey::from_secret(config.jwt_secret.as_bytes()),</span></span>
 <span id="L163"><span class="lineNum">     163</span>              :     )</span>
-<span id="L164"><span class="lineNum">     164</span> <span class="tlaGNC">         139 :     .db_error(&quot;failed to sign access token&quot;)?;</span></span>
+<span id="L164"><span class="lineNum">     164</span> <span class="tlaGNC">         138 :     .db_error(&quot;failed to sign access token&quot;)?;</span></span>
 <span id="L165"><span class="lineNum">     165</span>              : </span>
-<span id="L166"><span class="lineNum">     166</span> <span class="tlaGNC">         139 :     let refresh_token = encode(</span></span>
-<span id="L167"><span class="lineNum">     167</span> <span class="tlaGNC">         139 :         &amp;Header::default(),</span></span>
-<span id="L168"><span class="lineNum">     168</span> <span class="tlaGNC">         139 :         &amp;refresh_claims,</span></span>
-<span id="L169"><span class="lineNum">     169</span> <span class="tlaGNC">         139 :         &amp;EncodingKey::from_secret(config.jwt_secret.as_bytes()),</span></span>
+<span id="L166"><span class="lineNum">     166</span> <span class="tlaGNC">         138 :     let refresh_token = encode(</span></span>
+<span id="L167"><span class="lineNum">     167</span> <span class="tlaGNC">         138 :         &amp;Header::default(),</span></span>
+<span id="L168"><span class="lineNum">     168</span> <span class="tlaGNC">         138 :         &amp;refresh_claims,</span></span>
+<span id="L169"><span class="lineNum">     169</span> <span class="tlaGNC">         138 :         &amp;EncodingKey::from_secret(config.jwt_secret.as_bytes()),</span></span>
 <span id="L170"><span class="lineNum">     170</span>              :     )</span>
-<span id="L171"><span class="lineNum">     171</span> <span class="tlaGNC">         139 :     .db_error(&quot;failed to sign refresh token&quot;)?;</span></span>
+<span id="L171"><span class="lineNum">     171</span> <span class="tlaGNC">         138 :     .db_error(&quot;failed to sign refresh token&quot;)?;</span></span>
 <span id="L172"><span class="lineNum">     172</span>              : </span>
-<span id="L173"><span class="lineNum">     173</span> <span class="tlaGNC">         139 :     Ok((access_token, refresh_token))</span></span>
-<span id="L174"><span class="lineNum">     174</span> <span class="tlaGNC">         139 : }</span></span>
+<span id="L173"><span class="lineNum">     173</span> <span class="tlaGNC">         138 :     Ok((access_token, refresh_token))</span></span>
+<span id="L174"><span class="lineNum">     174</span> <span class="tlaGNC">         138 : }</span></span>
         </pre>
               </td>
             </tr>
