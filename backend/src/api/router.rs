@@ -311,7 +311,7 @@ async fn fallback_handler(uri: Uri) -> impl axum::response::IntoResponse {
     if path.starts_with("/api/") {
         (
             StatusCode::NOT_FOUND,
-            axum::Json(serde_json::json!({ "error": format!("Route not found: {path}") })),
+            axum::Json(serde_json::json!({ "error": format!("Route not found: {path}"), "code": "NOT_FOUND", "category": "not_found" })),
         )
             .into_response()
     } else if path.contains("..") {

@@ -1,7 +1,6 @@
 import Add from "@mui/icons-material/Add";
 import Delete from "@mui/icons-material/Delete";
 import PlaylistPlay from "@mui/icons-material/PlaylistPlay";
-import Alert from "@mui/material/Alert";
 import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
 import Card from "@mui/material/Card";
@@ -14,10 +13,13 @@ import DialogTitle from "@mui/material/DialogTitle";
 import Typography from "@mui/material/Typography";
 import { useCallback, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { ErrorDetails } from "@/components/error-details";
 import { isGroupId, playlistIdFromGroupId } from "@/components/queue";
 import { NowPlaying } from "@/components/queue/now-playing";
 import { ScheduleInfoBanner } from "@/components/schedule/schedule-info-banner";
 import { useSchedules } from "@/hooks/use-schedules";
+import { isHttpError, serverMessage } from "@/lib/is-http-error";
+import { reportHttpError } from "@/lib/report-error";
 import { useSnackbar } from "@/providers/snackbar-provider";
 import type { LiveListeners, PlaylistGroup, QueueItem, StreamStatus } from "@/types";
 import { PlayedQueue } from "./played-queue";
@@ -27,6 +29,7 @@ interface QueueSectionProps {
   stationId: string;
   queueSections: { played: QueueItem[]; nowPlaying: QueueItem | null; upcoming: QueueItem[] };
   streamStatus: StreamStatus | null;
+  playing: boolean;
   connected: boolean;
   elapsed: number;
   listeners?: LiveListeners | null;
@@ -85,11 +88,12 @@ function useNowPlayingGroup(queueSections: {
 
 export function QueueSection(props: QueueSectionProps) {
   const { t } = useTranslation();
-  const { showSnackbar } = useSnackbar();
+  const { showSnackbar, showError } = useSnackbar();
   const {
     stationId,
     queueSections,
     streamStatus,
+    playing,
     connected,
     elapsed,
     listeners,
@@ -101,7 +105,12 @@ export function QueueSection(props: QueueSectionProps) {
     setQueueAddOpen,
   } = props;
 
-  const { data: schedules, isLoading: schedulesLoading, isError: schedulesError } = useSchedules(stationId);
+  const {
+    data: schedules,
+    isLoading: schedulesLoading,
+    isError: schedulesError,
+    error: schedulesLoadError,
+  } = useSchedules(stationId);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
 
@@ -158,8 +167,7 @@ export function QueueSection(props: QueueSectionProps) {
           full.map((s) => s.id),
           {
             onError: (err: unknown) => {
-              console.error("Failed to reorder queue", err);
-              showSnackbar("Failed to reorder queue", "error");
+              reportHttpError(showError, err, "Failed to reorder queue");
             },
           },
         );
@@ -179,15 +187,14 @@ export function QueueSection(props: QueueSectionProps) {
           full.map((s) => s.id),
           {
             onError: (err: unknown) => {
-              console.error("Failed to reorder queue", err);
-              showSnackbar("Failed to reorder queue", "error");
+              reportHttpError(showError, err, "Failed to reorder queue");
             },
           },
         );
       }
       setSelectedIds(new Set());
     },
-    [queueSections, reorderQueue, showSnackbar],
+    [queueSections, reorderQueue, showError],
   );
 
   return (
@@ -203,9 +210,14 @@ export function QueueSection(props: QueueSectionProps) {
         {queueSections.nowPlaying || queueSections.upcoming.length > 0 || queueSections.played.length > 0 ? (
           <>
             {schedulesError ? (
-              <Alert severity="error" sx={{ mb: 2 }}>
-                Failed to load schedule data
-              </Alert>
+              <Box sx={{ mb: 2 }}>
+                {(() => {
+                  const info = isHttpError(schedulesLoadError);
+                  const server = serverMessage(schedulesLoadError);
+                  const title = server ?? "Failed to load schedule data";
+                  return <ErrorDetails title={title} details={{ ...info, message: title }} />;
+                })()}
+              </Box>
             ) : (
               <ScheduleInfoBanner
                 schedules={schedules}
@@ -220,13 +232,14 @@ export function QueueSection(props: QueueSectionProps) {
               <NowPlaying
                 item={nowPlayingGroup}
                 streamStatus={streamStatus}
+                playing={playing}
                 connected={connected}
                 elapsed={elapsed}
                 listeners={listeners}
                 onSkip={() =>
                   httpSkip.mutate(undefined, {
                     onError: (err: unknown) => {
-                      console.error("Failed to skip track", err);
+                      reportHttpError(showError, err, "Failed to skip track");
                     },
                   })
                 }
@@ -245,7 +258,7 @@ export function QueueSection(props: QueueSectionProps) {
               handleRemoveFromQueue={handleRemoveFromQueue}
               handleMoveToTop={handleMoveToTop}
               handleToggleSelect={handleToggleSelect}
-              showSnackbar={showSnackbar}
+              showError={showError}
             />
 
             {selectedIds.size > 0 && (

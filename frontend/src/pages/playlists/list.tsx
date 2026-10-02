@@ -23,12 +23,15 @@ import Typography from "@mui/material/Typography";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
+import { ErrorDetails } from "@/components/error-details";
 import { useCreatePlaylist, useDeletePlaylist, usePlaylists } from "@/hooks/use-playlists";
+import { isHttpError, serverMessage } from "@/lib/is-http-error";
+import { reportHttpError } from "@/lib/report-error";
 import { useSnackbar } from "@/providers/snackbar-provider";
 
 export function PlaylistsListPage() {
   const { t } = useTranslation();
-  const { showSnackbar } = useSnackbar();
+  const { showError } = useSnackbar();
   const { data: playlists, isLoading, isError, error } = usePlaylists();
   const createPlaylist = useCreatePlaylist();
   const deletePlaylist = useDeletePlaylist();
@@ -48,8 +51,7 @@ export function PlaylistsListPage() {
       setNewName("");
       setNewDesc("");
     } catch (err) {
-      console.error("Failed to create playlist", err);
-      showSnackbar("Failed to create playlist", "error");
+      reportHttpError(showError, err, "Failed to create playlist");
     }
   };
 
@@ -59,8 +61,7 @@ export function PlaylistsListPage() {
         await deletePlaylist.mutateAsync(deleteId);
         setDeleteId(null);
       } catch (err) {
-        console.error("Failed to delete playlist", err);
-        showSnackbar("Failed to delete playlist", "error");
+        reportHttpError(showError, err, "Failed to delete playlist");
       }
     }
   };
@@ -77,7 +78,18 @@ export function PlaylistsListPage() {
   if (isError) {
     return (
       <Box sx={{ display: "flex", flexDirection: "column", gap: 2 }}>
-        <Alert severity="error">{error instanceof Error ? error.message : "Failed to load playlists"}</Alert>
+        <Alert severity="error">
+          {(() => {
+            const info = isHttpError(error);
+            const server = serverMessage(error);
+            return (
+              <ErrorDetails
+                title={server ?? "Failed to load playlists"}
+                details={{ ...info, message: server ?? "Failed to load playlists" }}
+              />
+            );
+          })()}
+        </Alert>
       </Box>
     );
   }

@@ -303,7 +303,7 @@ async fn get_or_create_streamer(
             // the database; reload it so playback resumes with the current rows.
             existing.reload_songs(songs, false).await.map_err(|error| {
                 tracing::error!(station_id = %station_id, %error, "stream queue reload failed");
-                AppError::Internal("Stream queue reload failed".into())
+                AppError::from_pipeline(&error, "Stream queue reload failed".to_string())
             })?;
         }
         return Ok(existing);
@@ -320,7 +320,7 @@ async fn get_or_create_streamer(
     .await
     .map_err(|error| {
         tracing::error!(station_id = %station_id, error = %error, "GStreamer pipeline initialization failed");
-        AppError::Internal("Stream initialization failed".into())
+        AppError::from_pipeline(&error, "Stream initialization failed".to_string())
     })?;
     let winner = {
         let mut map = streamers.lock().unwrap_or_else(|e| e.into_inner());
@@ -394,7 +394,7 @@ pub(crate) async fn sync_streamer_songs(
         streamer
             .reload_songs(songs, align_next)
             .await
-            .map_err(|_| AppError::Internal("Stream reload failed".into()))?;
+            .map_err(|_| AppError::stream("Stream reload failed".to_string()).with_code("STREAM_SYNC_FAILED"))?;
     }
     if let Some(streamer) = {
         let map = streamers.lock().unwrap_or_else(|e| e.into_inner());
@@ -402,11 +402,11 @@ pub(crate) async fn sync_streamer_songs(
     } {
         streamer.trim_played_items().await.map_err(|error| {
             tracing::error!(station_id = %station_id, %error, "stream queue trim failed");
-            AppError::Internal("Stream queue sync failed".into())
+            AppError::from_pipeline(&error, "Stream queue sync failed".to_string())
         })?;
         streamer.push_queue_update().await.map_err(|error| {
             tracing::error!(station_id = %station_id, %error, "stream queue push failed");
-            AppError::Internal("Stream queue sync failed".into())
+            AppError::from_pipeline(&error, "Stream queue sync failed".to_string())
         })?;
     }
     Ok(())
@@ -462,11 +462,11 @@ pub(crate) async fn sync_streamer_playback_config(streamers: &StreamersMap, stat
     )
     .map_err(|error| {
         tracing::error!(station_id = %station.id, %error, "invalid persisted playback configuration");
-        AppError::Internal("Stream configuration failed".into())
+        AppError::from_pipeline(&error, "Stream configuration failed".to_string())
     })?;
     streamer.update_config(config).await.map_err(|error| {
         tracing::error!(station_id = %station.id, %error, "stream configuration update failed");
-        AppError::Internal("Stream configuration failed".into())
+        AppError::from_pipeline(&error, "Stream configuration failed".to_string())
     })
 }
 
@@ -478,7 +478,7 @@ pub(crate) async fn get_or_create_streamer_for_station(
 ) -> Result<Arc<StationStreamer>, AppError> {
     let station = repository::find_station_by_id(db, station_id)
         .await?
-        .ok_or_else(|| AppError::NotFound("Station not found".into()))?;
+        .ok_or_else(|| AppError::not_found("Station not found".into()))?;
 
     let rows = repository::find_station_song_info(db, station_id).await?;
     let songs: Vec<SongInfo> = rows
@@ -507,7 +507,7 @@ pub(crate) async fn get_or_create_streamer_for_station(
             // database even when an (idle) streamer already exists.
             existing.reload_songs(songs, false).await.map_err(|error| {
                 tracing::error!(station_id = %station_id, %error, "stream queue reload failed");
-                AppError::Internal("Stream queue reload failed".into())
+                AppError::from_pipeline(&error, "Stream queue reload failed".to_string())
             })?;
         }
         return Ok(existing);
@@ -550,7 +550,7 @@ pub(crate) async fn start_station(
     let operation = tokio::spawn(run_committed_start(db, streamers, lifecycle, upload_dir, station_id, guard));
     operation.await.map_err(|error| {
         tracing::error!(station_id = %station_id, %error, "committed play task failed");
-        AppError::Internal("Stream start task failed".into())
+        AppError::stream("Stream start task failed".to_string()).with_code("STREAM_TASK_FAILED")
     })?
 }
 
@@ -603,7 +603,7 @@ async fn start_station_runtime(
     let streamer = get_or_create_streamer_for_station(db, streamers, upload_dir, station_id).await?;
     streamer.play().await.map_err(|error| {
         tracing::error!(station_id = %station_id, %error, "stream playback failed");
-        AppError::Internal("Stream playback failed".into())
+        AppError::from_pipeline(&error, "Stream playback failed".to_string())
     })?;
     Ok(streamer)
 }
@@ -673,12 +673,12 @@ async fn finish_admitted_shutdown(
             // the result), so this is the only place the GStreamer reason
             // survives. The caller-facing error stays generic.
             tracing::error!(station_id = %station_id, %error, "stream pipeline stop failed");
-            Err(AppError::Internal("Stream stop failed".into()))
+            Err(AppError::from_pipeline(&error, "Stream stop failed".to_string()))
         }
         Ok(Ok(())) => Ok(()),
         Err(_) => {
             tracing::error!(station_id = %station_id, "stream stop completion channel closed");
-            Err(AppError::Internal("Stream stop failed".into()))
+            Err(AppError::stream("Stream stop failed".to_string()).with_code("STREAM_STOP_FAILED"))
         }
     };
     remove_streamer_if_same(streamers, station_id, streamer);
@@ -700,7 +700,7 @@ async fn run_terminal_shutdown(streamers: &StreamersMap, station_id: Uuid, strea
             // cause is logged here; the caller-facing error stays generic.
             tracing::error!(station_id = %station_id, %error, "stream stop command send failed");
             remove_streamer_if_same(streamers, station_id, &streamer);
-            Err(AppError::Internal("Stream stop failed".into()))
+            Err(AppError::stream("Stream stop failed".to_string()).with_code("STREAM_STOP_FAILED"))
         }
     }
 }
@@ -799,7 +799,7 @@ async fn begin_runtime_shutdown_locked(
         Err(error) => {
             tracing::error!(station_id = %station_id, %error, "stream stop command send failed");
             remove_streamer_if_same(streamers, station_id, &streamer);
-            return Err(AppError::Internal("Stream stop failed".into()));
+            return Err(AppError::stream("Stream stop failed".to_string()).with_code("STREAM_STOP_FAILED"));
         }
     };
     Ok(RuntimeShutdown::Admitted { guard, streamer, receiver })
@@ -833,7 +833,7 @@ pub(crate) async fn stop_station(
     let operation = tokio::spawn(run_committed_stop(db, streamers, lifecycle, station_id, guard));
     operation.await.map_err(|error| {
         tracing::error!(station_id = %station_id, %error, "committed stop task failed");
-        AppError::Internal("Stream stop task failed".into())
+        AppError::stream("Stream stop task failed".to_string()).with_code("STREAM_TASK_FAILED")
     })?
 }
 
@@ -875,7 +875,7 @@ pub(crate) async fn restart_station(
             let operation = tokio::spawn(run_committed_start(db, streamers, lifecycle, upload_dir, station_id, guard));
             operation.await.map_err(|error| {
                 tracing::error!(station_id = %station_id, %error, "committed start task failed");
-                AppError::Internal("Stream start task failed".into())
+                AppError::stream("Stream start task failed".to_string()).with_code("STREAM_TASK_FAILED")
             })?
         }
         RuntimeShutdown::Admitted { guard, streamer, receiver } => {
@@ -896,7 +896,7 @@ pub(crate) async fn restart_station(
             });
             operation.await.map_err(|error| {
                 tracing::error!(station_id = %station_id, %error, "committed restart task failed");
-                AppError::Internal("Stream restart task failed".into())
+                AppError::stream("Stream restart task failed".to_string()).with_code("STREAM_TASK_FAILED")
             })?
         }
     }
@@ -935,7 +935,7 @@ pub(crate) async fn delete_station_lifecycle(
             let operation = tokio::spawn(run_committed_delete(db, lifecycle, station_id, guard));
             operation.await.map_err(|error| {
                 tracing::error!(station_id = %station_id, %error, "committed delete task failed");
-                AppError::Internal("Stream delete task failed".into())
+                AppError::stream("Stream delete task failed".to_string()).with_code("STREAM_TASK_FAILED")
             })?
         }
         RuntimeShutdown::Admitted { guard, streamer, receiver } => {
@@ -955,7 +955,7 @@ pub(crate) async fn delete_station_lifecycle(
             });
             operation.await.map_err(|error| {
                 tracing::error!(station_id = %station_id, %error, "committed delete task failed");
-                AppError::Internal("Stream delete task failed".into())
+                AppError::stream("Stream delete task failed".to_string()).with_code("STREAM_TASK_FAILED")
             })?
         }
     }
@@ -1046,10 +1046,13 @@ pub async fn stream_skip(
         map.get(&station_id).cloned()
     };
     if let Some(streamer) = streamer {
-        streamer.skip().await.map_err(|_| AppError::Internal("Stream skip failed".into()))?;
+        streamer
+            .skip()
+            .await
+            .map_err(|error| AppError::from_pipeline(&error, "Stream skip failed".to_string()))?;
         Ok(Json(serde_json::json!({ "ok": true, "song_index": streamer.current_song_index() })))
     } else {
-        Err(AppError::BadRequest("No active stream".into()))
+        Err(AppError::not_found("No active stream".to_string()).with_code("STREAM_NOT_PLAYING"))
     }
 }
 
@@ -1079,10 +1082,10 @@ pub async fn stream_pause(
         streamer
             .pause()
             .await
-            .map_err(|_| AppError::Internal("Stream pause failed".into()))?;
+            .map_err(|error| AppError::from_pipeline(&error, "Stream pause failed".to_string()))?;
         Ok(Json(serde_json::json!({ "ok": true })))
     } else {
-        Err(AppError::BadRequest("No active stream".into()))
+        Err(AppError::not_found("No active stream".to_string()).with_code("STREAM_NOT_PLAYING"))
     }
 }
 
@@ -1124,7 +1127,7 @@ pub async fn stream_status(
     if let Some(streamer) = streamer {
         let status = streamer.status_json().await.map_err(|error| {
             tracing::error!(station_id = %station_id, %error, "stream status failed");
-            AppError::Internal("Stream status failed".into())
+            AppError::from_pipeline(&error, "Stream status failed".to_string())
         })?;
         Ok(Json(status))
     } else {
@@ -1407,7 +1410,7 @@ mod tests {
                                 (stop_result, guard)
                             })
                             .await
-                            .map_err(|_| AppError::Internal("Stream stop task failed".into()))?;
+                            .map_err(|_| AppError::stream("Stream stop task failed".to_string()).with_code("STREAM_TASK_FAILED"))?;
                             stop_result
                         }
                         RuntimeShutdown::NoRuntime { .. } => Ok(()),

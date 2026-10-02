@@ -28,11 +28,14 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { EditSongDialog } from "@/components/edit-song-dialog";
+import { ErrorDetails } from "@/components/error-details";
 import { fmt } from "@/components/queue";
 import { SongCover } from "@/components/song-cover";
 import { UploadSongDialog } from "@/components/upload-song-dialog";
 import { useDeleteSong, useDeleteSongsBatch, useSongs, useUpdateSong } from "@/hooks/use-songs";
 import { useStations } from "@/hooks/use-stations";
+import { isHttpError, serverMessage } from "@/lib/is-http-error";
+import { reportHttpError } from "@/lib/report-error";
 import { useSnackbar } from "@/providers/snackbar-provider";
 
 function useSongSearch(search: string) {
@@ -50,7 +53,7 @@ function useSongSearch(search: string) {
 
 export function SongsPage() {
   const { t } = useTranslation();
-  const { showSnackbar } = useSnackbar();
+  const { showSnackbar, showError } = useSnackbar();
   const { data: stations } = useStations();
   const queryClient = useQueryClient();
   const deleteSong = useDeleteSong();
@@ -81,8 +84,7 @@ export function SongsPage() {
         await deleteSong.mutateAsync(deleteId);
         setDeleteId(null);
       } catch (err) {
-        console.error("Failed to delete song", err);
-        showSnackbar("Failed to delete song", "error");
+        reportHttpError(showError, err, "Failed to delete song");
       }
     }
   };
@@ -109,15 +111,25 @@ export function SongsPage() {
       setSelectedIds(new Set());
       showSnackbar(`Deleted ${selectedIds.size} song(s)`, "success");
     } catch (err) {
-      console.error("Failed to batch delete songs", err);
-      showSnackbar("Failed to delete songs", "error");
+      reportHttpError(showError, err, "Failed to delete songs");
     }
   };
 
   if (isError) {
     return (
       <Box sx={{ display: "flex", flexDirection: "column", gap: 2 }}>
-        <Alert severity="error">{error instanceof Error ? error.message : "Failed to load songs"}</Alert>
+        <Alert severity="error">
+          {(() => {
+            const info = isHttpError(error);
+            const server = serverMessage(error);
+            return (
+              <ErrorDetails
+                title={server ?? "Failed to load songs"}
+                details={{ ...info, message: server ?? "Failed to load songs" }}
+              />
+            );
+          })()}
+        </Alert>
       </Box>
     );
   }
@@ -322,8 +334,7 @@ export function SongsPage() {
             },
             {
               onError: (err) => {
-                console.error("Failed to update song", err);
-                showSnackbar("Failed to update song", "error");
+                reportHttpError(showError, err, "Failed to update song");
               },
             },
           )

@@ -23,14 +23,18 @@ const mockPlaylist = {
 
 describe("Playlist Detail Page", () => {
   it("shows not found when playlist does not exist", async () => {
-    server.use(http.get("/api/playlists/playlist-1", () => HttpResponse.json({ error: "Not found" }, { status: 404 })));
+    server.use(
+      http.get("/api/playlists/playlist-1", () =>
+        HttpResponse.json({ error: "Not found", code: "NOT_FOUND", category: "not_found" }, { status: 404 }),
+      ),
+    );
     render(
       <Routes>
         <Route path="/playlists/:id" element={<PlaylistDetailPage />} />
       </Routes>,
       { route: "/playlists/playlist-1" },
     );
-    await waitFor(() => expect(screen.getByText(/Request failed/)).toBeInTheDocument(), { timeout: 5000 });
+    await waitFor(() => expect(screen.getByText("Not found")).toBeInTheDocument(), { timeout: 5000 });
   });
 
   it("renders playlist name description and songs", async () => {

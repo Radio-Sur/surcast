@@ -8,9 +8,11 @@ import Grid from "@mui/material/Grid";
 import Skeleton from "@mui/material/Skeleton";
 import Typography from "@mui/material/Typography";
 import { useTranslation } from "react-i18next";
+import { ErrorDetails } from "@/components/error-details";
 import { ListenersOverviewSection } from "@/components/listeners/listeners-overview-section";
 import { useAuth } from "@/hooks/use-auth";
 import { useStations } from "@/hooks/use-stations";
+import { isHttpError, serverMessage } from "@/lib/is-http-error";
 
 export function DashboardPage() {
   const { t } = useTranslation();
@@ -33,7 +35,18 @@ export function DashboardPage() {
   if (isError) {
     return (
       <Box sx={{ display: "flex", flexDirection: "column", gap: 2 }}>
-        <Alert severity="error">{error instanceof Error ? error.message : "Failed to load stations"}</Alert>
+        <Alert severity="error">
+          {(() => {
+            const info = isHttpError(error);
+            const server = serverMessage(error);
+            return (
+              <ErrorDetails
+                title={server ?? "Failed to load stations"}
+                details={{ ...info, message: server ?? "Failed to load stations" }}
+              />
+            );
+          })()}
+        </Alert>
       </Box>
     );
   }

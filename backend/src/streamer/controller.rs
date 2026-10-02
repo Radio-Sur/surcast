@@ -1418,6 +1418,10 @@ impl StationController {
                 self.last_failed_play = None;
                 self.resolved_play_success = if was_resolved_by_skip { None } else { Some(attempt_id) };
                 self.state = PipelineState::Playing;
+                // A fresh initial replace starts the track from the
+                // beginning: announce it so live panels resync their clocks
+                // instead of ticking on from a stale pre-start timestamp.
+                self.publish_song_change();
             }
             Err(error) => {
                 tracing::warn!(station_id = %self.station_id, %error, "initial play replace failed; controller remains stopped");

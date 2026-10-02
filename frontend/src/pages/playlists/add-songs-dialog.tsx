@@ -3,6 +3,7 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { AddSongsDialog } from "@/components/add-songs-dialog";
 import { useAddPlaylistSongs, usePlaylistSongsAll } from "@/hooks/use-playlists";
+import { reportHttpError } from "@/lib/report-error";
 import { useSnackbar } from "@/providers/snackbar-provider";
 
 export function AddSongsToPlaylistDialog({
@@ -15,7 +16,7 @@ export function AddSongsToPlaylistDialog({
   onClose: () => void;
 }) {
   const { t } = useTranslation();
-  const { showSnackbar } = useSnackbar();
+  const { showSnackbar, showError } = useSnackbar();
   const queryClient = useQueryClient();
   const addSongs = useAddPlaylistSongs(playlistId);
   const { data: allData } = usePlaylistSongsAll(playlistId);
@@ -61,8 +62,7 @@ export function AddSongsToPlaylistDialog({
           }
         } catch (err) {
           setIsRefetching(false);
-          console.error("Failed to add songs to playlist", err);
-          showSnackbar("Failed to add songs to playlist", "error");
+          reportHttpError(showError, err, "Failed to add songs to playlist");
         }
       }}
       isPending={addSongs.isPending || isRefetching}

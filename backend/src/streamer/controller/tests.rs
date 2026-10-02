@@ -2980,6 +2980,9 @@ async fn failed_skip_keeps_queue_db_and_generation_on_the_old_track() {
 
         runtime.play().await.unwrap();
         assert_eq!(pipeline.count(Call::Replace), 1);
+        // A successful initial play announces the activated track, so the
+        // channel holds A's SongChange before the skip below runs.
+        expect_song_change(&mut status_rx, "A").await;
         assert_eq!(
             persisted_cursor(&db.pool, station_id).await,
             Some(songs[0].queue_item_id),
@@ -3046,6 +3049,9 @@ async fn skip_commits_only_after_the_pipeline_replacement_finished() {
         // Play: its replace is the only one that may consume the gate
         // permit — wait for it to enter, then let it through.
         play_through_gate(&runtime, &gate).await;
+        // The successful initial play announced A; drain it so the
+        // in-flight assertions below observe only skip-time events.
+        expect_song_change(&mut status_rx, "A").await;
 
         // The skip's replacement blocks inside the gate: the permit is
         // gone, so `count == 2` means the replace entered the gate and
@@ -3129,6 +3135,9 @@ async fn skip_while_a_replacement_is_in_flight_is_refused_without_blocking_the_l
         let gate = pipeline.replace_gate().expect("gated pipeline");
 
         play_through_gate(&runtime, &gate).await;
+        // Drain the initial play's SongChange so later assertions observe
+        // only skip-time events.
+        expect_song_change(&mut status_rx, "A").await;
 
         // The skip's replacement blocks inside the gate.
         let skip = tokio::spawn({
@@ -3178,6 +3187,9 @@ async fn failed_eos_skip_retries_through_the_runtime_loop() {
 
         runtime.play().await.unwrap();
         assert_eq!(pipeline.count(Call::Replace), 1);
+        // Drain the initial play's SongChange so later assertions observe
+        // only skip-time events.
+        expect_song_change(&mut status_rx, "A").await;
 
         // The EOS-driven replacement fails once; the terminal condition
         // is re-resolved and the retry succeeds.
@@ -3218,6 +3230,9 @@ async fn skip_realigns_a_changed_queue_successor_instead_of_claiming_it() {
         let d_key = StationController::track(d.clone()).key;
 
         play_through_gate(&runtime, &gate).await;
+        // Drain the initial play's SongChange so later assertions observe
+        // only skip-time events.
+        expect_song_change(&mut status_rx, "A").await;
 
         // The skip prepares with C staged — but while its replacement is
         // in flight the persisted queue changes: C is removed and D

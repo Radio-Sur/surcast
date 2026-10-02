@@ -1,4 +1,3 @@
-import Alert from "@mui/material/Alert";
 import Button from "@mui/material/Button";
 import Dialog from "@mui/material/Dialog";
 import DialogActions from "@mui/material/DialogActions";
@@ -7,22 +6,23 @@ import DialogTitle from "@mui/material/DialogTitle";
 import TextField from "@mui/material/TextField";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
+import { ErrorDetails } from "@/components/error-details";
 import { useCreateStation } from "@/hooks/use-stations";
-import { isHttpError } from "@/lib/is-http-error";
+import { type HttpErrorInfo, isHttpError } from "@/lib/is-http-error";
 
 export function CreateStationDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { t } = useTranslation();
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [streamUrl, setStreamUrl] = useState("");
-  const [error, setError] = useState("");
+  const [error, setError] = useState<HttpErrorInfo | null>(null);
   const createStation = useCreateStation();
 
   const resetForm = () => {
     setName("");
     setDescription("");
     setStreamUrl("");
-    setError("");
+    setError(null);
   };
 
   const handleClose = () => {
@@ -31,7 +31,7 @@ export function CreateStationDialog({ open, onClose }: { open: boolean; onClose:
   };
 
   const handleSubmit = async () => {
-    setError("");
+    setError(null);
 
     try {
       await createStation.mutateAsync({
@@ -41,7 +41,8 @@ export function CreateStationDialog({ open, onClose }: { open: boolean; onClose:
       });
       handleClose();
     } catch (err: unknown) {
-      setError(isHttpError(err)?.message || t("errors:station_create"));
+      const info = isHttpError(err);
+      setError({ ...info, message: info.message || t("errors:station_create") });
     }
   };
 
@@ -64,7 +65,7 @@ export function CreateStationDialog({ open, onClose }: { open: boolean; onClose:
           gap: 2.5,
         }}
       >
-        {error && <Alert severity="error">{error}</Alert>}
+        {error && <ErrorDetails title={error.message} details={error} onClose={() => setError(null)} />}
 
         <TextField
           label={t("stations:name_label")}

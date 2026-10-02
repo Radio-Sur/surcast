@@ -10,7 +10,10 @@ import {
 } from "@mui/material";
 import { useCallback, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { ErrorDetails } from "@/components/error-details";
 import { useDeleteScheduleEvent, useScheduleEvents } from "@/hooks/use-schedule-events";
+import { isHttpError, serverMessage } from "@/lib/is-http-error";
+import { reportHttpError } from "@/lib/report-error";
 import { useSnackbar } from "@/providers/snackbar-provider";
 import type { Playlist, ScheduleEvent } from "@/types";
 import { ScheduleCalendar } from "./schedule-calendar";
@@ -42,7 +45,7 @@ export function ScheduleSection({
   const [defaultDate, setDefaultDate] = useState<string>("");
   const [defaultStartTime, setDefaultStartTime] = useState<string>("09:00");
   const [dialogKey, setDialogKey] = useState(0);
-  const { showSnackbar } = useSnackbar();
+  const { showError } = useSnackbar();
   const { t, i18n } = useTranslation();
 
   const deleteEvent = useDeleteScheduleEvent(stationId);
@@ -90,15 +93,25 @@ export function ScheduleSection({
       await deleteEvent.mutateAsync(deleteConfirm.id);
       setDeleteConfirm(null);
     } catch (err) {
-      console.error("Failed to delete schedule event:", err);
-      showSnackbar("Failed to delete event", "error");
+      reportHttpError(showError, err, "Failed to delete event");
     }
-  }, [deleteConfirm, deleteEvent, showSnackbar]);
+  }, [deleteConfirm, deleteEvent, showError]);
 
   if (isError) {
     return (
       <Box sx={{ display: "flex", flexDirection: "column", gap: 2 }}>
-        <Alert severity="error">{error instanceof Error ? error.message : "Failed to load schedule events"}</Alert>
+        <Alert severity="error">
+          {(() => {
+            const info = isHttpError(error);
+            const server = serverMessage(error);
+            return (
+              <ErrorDetails
+                title={server ?? "Failed to load schedule events"}
+                details={{ ...info, message: server ?? "Failed to load schedule events" }}
+              />
+            );
+          })()}
+        </Alert>
       </Box>
     );
   }

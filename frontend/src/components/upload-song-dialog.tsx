@@ -22,6 +22,7 @@ import TextField from "@mui/material/TextField";
 import Typography from "@mui/material/Typography";
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { reportHttpError } from "@/lib/report-error";
 import { uploadsService } from "@/lib/services/uploads";
 import { useSnackbar } from "@/providers/snackbar-provider";
 import type { Station, UploadJobStatus } from "@/types";
@@ -64,7 +65,7 @@ export function UploadSongDialog({
   const [jobId, setJobId] = useState<string | null>(null);
   const [jobStatus, setJobStatus] = useState<UploadJobStatus | null>(null);
   const { t } = useTranslation();
-  const { showSnackbar } = useSnackbar();
+  const { showSnackbar, showError } = useSnackbar();
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const zipInputRef = useRef<HTMLInputElement>(null);
@@ -80,6 +81,7 @@ export function UploadSongDialog({
   const onFinishedRef = useRef(onFinished);
   const onCloseRef = useRef(onClose);
   const showSnackbarRef = useRef(showSnackbar);
+  const showErrorRef = useRef(showError);
   const tRef = useRef(t);
 
   useEffect(() => {
@@ -100,7 +102,7 @@ export function UploadSongDialog({
         } else if (status.status === "error") {
           setStarting(false);
           setJobId(null);
-          showSnackbarRef.current(status.error || tRef.current("songs:upload_failed"), "error");
+          reportHttpError(showErrorRef.current, status.error, tRef.current("songs:upload_failed"));
         }
       } catch (err) {
         if (!cancelled) {
@@ -192,6 +194,7 @@ export function UploadSongDialog({
   onFinishedRef.current = onFinished;
   onCloseRef.current = onClose;
   showSnackbarRef.current = showSnackbar;
+  showErrorRef.current = showError;
   tRef.current = t;
 
   const handleClose = () => {
@@ -233,9 +236,8 @@ export function UploadSongDialog({
       const created = await uploadsService.createJob(formData);
       setJobId(created.job_id);
     } catch (err) {
-      console.error("Failed to start upload", err);
       setStarting(false);
-      showSnackbar(t("songs:upload_failed"), "error");
+      reportHttpError(showError, err, t("songs:upload_failed"));
     }
   };
 

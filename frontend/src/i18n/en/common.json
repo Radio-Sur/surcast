@@ -29,6 +29,7 @@
   "duration_unknown": "--:--",
   "hide": "Hide",
   "show": "Show",
+  "close": "Close",
   "label_artist": "Artist",
   "label_album": "Album",
   "label_song": "Song",

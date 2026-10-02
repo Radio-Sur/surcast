@@ -24,13 +24,13 @@ pub async fn setup_init(
     Json(req): Json<SetupRequest>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), AppError> {
     if req.username.is_empty() || req.password.is_empty() {
-        return Err(AppError::BadRequest("Username and password are required".into()));
+        return Err(AppError::bad_request("Username and password are required".into()));
     }
 
     let count = repository::count_users(&db).await?;
 
     if count > 0 {
-        return Err(AppError::BadRequest("Setup already completed".into()));
+        return Err(AppError::bad_request("Setup already completed".into()));
     }
 
     let password_hash = hash(&req.password, DEFAULT_COST).db_error("failed to hash password")?;
@@ -51,12 +51,12 @@ pub async fn login(
 ) -> Result<Json<AuthResponse>, AppError> {
     let user = repository::find_user_by_username(&db, &req.username)
         .await?
-        .ok_or_else(|| AppError::Unauthorized("Invalid username or password".into()))?;
+        .ok_or_else(|| AppError::unauthorized("Invalid username or password".into()))?;
 
     let valid = verify(&req.password, &user.password_hash).db_error("failed to verify password")?;
 
     if !valid {
-        return Err(AppError::Unauthorized("Invalid username or password".into()));
+        return Err(AppError::unauthorized("Invalid username or password".into()));
     }
 
     let (access_token, refresh_token) = generate_tokens(&user, &config)?;
@@ -76,20 +76,20 @@ pub async fn refresh(
     let refresh_token = body
         .get("refresh_token")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| AppError::BadRequest("refresh_token required".into()))?;
+        .ok_or_else(|| AppError::bad_request("refresh_token required".into()))?;
 
     let token_data = decode::<Claims>(
         refresh_token,
         &DecodingKey::from_secret(config.jwt_secret.as_bytes()),
         &Validation::default(),
     )
-    .map_err(|_| AppError::Unauthorized("Invalid refresh token".into()))?;
+    .map_err(|_| AppError::unauthorized("Invalid refresh token".into()))?;
 
-    let user_id = Uuid::parse_str(&token_data.claims.sub).map_err(|_| AppError::Unauthorized("Invalid token".into()))?;
+    let user_id = Uuid::parse_str(&token_data.claims.sub).map_err(|_| AppError::unauthorized("Invalid token".into()))?;
 
     let user = repository::find_user_by_id(&db, user_id)
         .await?
-        .ok_or_else(|| AppError::Unauthorized("User not found".into()))?;
+        .ok_or_else(|| AppError::unauthorized("User not found".into()))?;
 
     let (access_token, new_refresh_token) = generate_tokens(&user, &config)?;
 
@@ -103,7 +103,7 @@ pub async fn refresh(
 pub async fn me(Extension(auth_user): Extension<AuthUser>, State(db): State<PgPool>) -> Result<Json<UserResponse>, AppError> {
     let user = repository::find_user_by_id(&db, auth_user.id)
         .await?
-        .ok_or_else(|| AppError::NotFound("User not found".into()))?;
+        .ok_or_else(|| AppError::not_found("User not found".into()))?;
 
     Ok(Json(user.into()))
 }
@@ -121,7 +121,7 @@ pub async fn update_user(
 ) -> Result<Json<UserResponse>, AppError> {
     let user = repository::find_user_by_id(&db, id)
         .await?
-        .ok_or_else(|| AppError::NotFound("User not found".into()))?;
+        .ok_or_else(|| AppError::not_found("User not found".into()))?;
 
     let name = req.name.unwrap_or(user.name);
     let role = req.role.unwrap_or(user.role);
@@ -135,7 +135,7 @@ pub async fn delete_user(State(db): State<PgPool>, axum::extract::Path(id): axum
     let affected = repository::delete_user(&db, id).await?;
 
     if affected == 0 {
-        return Err(AppError::NotFound("User not found".into()));
+        return Err(AppError::not_found("User not found".into()));
     }
 
     Ok(StatusCode::NO_CONTENT)

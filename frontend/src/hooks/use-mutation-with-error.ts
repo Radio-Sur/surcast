@@ -1,6 +1,7 @@
 import type { DefaultError, MutationKey, MutationOptions } from "@tanstack/react-query";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { isHttpError } from "@/lib/is-http-error";
+import { reportHttpError } from "@/lib/report-error";
 import { useSnackbar } from "@/providers/snackbar-provider";
 
 export function useMutationWithError<TData = unknown, TError = DefaultError, TVariables = void, TContext = unknown>(
@@ -10,15 +11,15 @@ export function useMutationWithError<TData = unknown, TError = DefaultError, TVa
     invalidateKeys?: MutationKey[];
   },
 ) {
-  const { showSnackbar } = useSnackbar();
+  const { showSnackbar, showError } = useSnackbar();
   const queryClient = useQueryClient();
   const { errorMessage, successMessage, invalidateKeys, ...mutationOptions } = options;
 
   return useMutation({
     ...mutationOptions,
     onError(error: TError, variables: TVariables, context: TContext | undefined) {
-      console.error("Mutation failed:", error);
-      showSnackbar(errorMessage || isHttpError(error).message || "Operation failed", "error");
+      const info = isHttpError(error);
+      reportHttpError(showError, error, errorMessage || info.message || "Operation failed");
       (
         mutationOptions.onError as
           | ((error: TError, variables: TVariables, context: TContext | undefined) => void)

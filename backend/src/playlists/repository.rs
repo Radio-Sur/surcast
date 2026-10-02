@@ -34,7 +34,7 @@ pub async fn resolve_playlist_id(db: &PgPool, id_or_slug: &str) -> Result<Uuid, 
     find_playlist_by_slug(db, id_or_slug)
         .await?
         .map(|p| p.id)
-        .ok_or_else(|| AppError::NotFound("Playlist not found".into()))
+        .ok_or_else(|| AppError::not_found("Playlist not found".into()))
 }
 
 pub async fn insert_playlist(db: &PgPool, id: Uuid, name: &str, description: &str, slug: &str, created_by: Uuid) -> Result<(), AppError> {

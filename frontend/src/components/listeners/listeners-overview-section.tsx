@@ -10,7 +10,9 @@ import { BarChart } from "@mui/x-charts/BarChart";
 import { LineChart } from "@mui/x-charts/LineChart";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
+import { ErrorDetails } from "@/components/error-details";
 import { useListenersOverview } from "@/hooks/use-listeners";
+import { isHttpError, serverMessage } from "@/lib/is-http-error";
 import type { ListenerRange } from "@/types";
 
 const RANGES: ListenerRange[] = ["24h", "7d", "30d"];
@@ -28,7 +30,7 @@ function formatTime(value: number | Date) {
 export function ListenersOverviewSection() {
   const { t } = useTranslation();
   const [range, setRange] = useState<ListenerRange>("7d");
-  const { data, isLoading, isError } = useListenersOverview(range);
+  const { data, isLoading, isError, error } = useListenersOverview(range);
 
   const series = (data?.series ?? []).map((p) => ({
     time: new Date(p.time).getTime(),
@@ -71,7 +73,16 @@ export function ListenersOverviewSection() {
             <CircularProgress />
           </Box>
         ) : isError ? (
-          <Typography color="error">{t("dashboard:listeners_load_error")}</Typography>
+          (() => {
+            const info = isHttpError(error);
+            const server = serverMessage(error);
+            return (
+              <ErrorDetails
+                title={server ?? "Failed to load listener data"}
+                details={{ ...info, message: server ?? "Failed to load listener data" }}
+              />
+            );
+          })()
         ) : (
           <>
             <Box sx={{ mb: 2 }}>

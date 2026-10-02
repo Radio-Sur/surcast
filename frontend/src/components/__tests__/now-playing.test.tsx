@@ -75,3 +75,23 @@ describe("NowPlaying", () => {
     expect(screen.getByText("Bohemian Rhapsody")).toBeInTheDocument();
   });
 });
+
+describe("NowPlaying stopped state", () => {
+  it("shows stopped chip and hides progress when not playing", () => {
+    render(<NowPlaying item={mockSong} streamStatus={null} connected={false} elapsed={83} playing={false} />);
+    expect(screen.getByText(/STOPPED|ZATRZYMANA/)).toBeInTheDocument();
+  });
+
+  it("forces stopped look via override even with a playing status", () => {
+    render(
+      <NowPlaying
+        item={mockSong}
+        streamStatus={{ playing: true, song_index: 0, total: 1, elapsed: 83, title: "T", artist: "A", duration: 200 }}
+        connected={true}
+        elapsed={83}
+        playing={false}
+      />,
+    );
+    expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
+  });
+});

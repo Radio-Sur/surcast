@@ -117,7 +117,7 @@ pub async fn set_station_started(db: &PgPool, id: Uuid, started: bool) -> Result
         .await
         .db_error("failed to update station desired state")?;
     if result.rows_affected() == 0 {
-        return Err(AppError::NotFound("Station not found".into()));
+        return Err(AppError::not_found("Station not found".into()));
     }
     Ok(())
 }
@@ -265,7 +265,7 @@ pub async fn verify_station_exists(db: &PgPool, station_id: Uuid) -> Result<(), 
         .await
         .db_error("failed to verify station existence")?
         .then_some(())
-        .ok_or_else(|| AppError::NotFound("Station not found".into()))
+        .ok_or_else(|| AppError::not_found("Station not found".into()))
 }
 
 pub async fn find_station_song_info(
@@ -293,7 +293,7 @@ pub async fn resolve_station_id_from_slug(db: &PgPool, slug: &str) -> Result<Uui
         .fetch_optional(db)
         .await
         .db_error("failed to resolve station ID")?
-        .ok_or_else(|| AppError::NotFound("Station not found".into()))
+        .ok_or_else(|| AppError::not_found("Station not found".into()))
 }
 
 pub async fn insert_station_songs_by_artist(conn: &mut PgConnection, station_id: Uuid, artist: &str) -> Result<i32, AppError> {

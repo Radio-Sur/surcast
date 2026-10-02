@@ -16,6 +16,7 @@ import {
   TextField,
 } from "@mui/material";
 import { useTranslation } from "react-i18next";
+import { ErrorDetails } from "@/components/error-details";
 import { AutoDJFormFields } from "@/components/schedule/auto-dj-form-fields";
 import { RecurrencePicker } from "@/pages/stations/recurrence-picker";
 import type { Playlist, ScheduleEvent, ScheduleSourceType } from "@/types";
@@ -51,6 +52,7 @@ export function ScheduleEventDialog({
     form,
     setForm,
     error,
+    errorDetails,
     setError,
     selectedPlaylist,
     endTimeAutoCalc,
@@ -248,9 +250,11 @@ export function ScheduleEventDialog({
           )}
 
           {error && (
-            <Alert severity="error" onClose={() => setError(null)}>
-              {error}
-            </Alert>
+            <ErrorDetails
+              title={error}
+              details={errorDetails ? { ...errorDetails, message: error } : null}
+              onClose={() => setError(null)}
+            />
           )}
         </Box>
       </DialogContent>

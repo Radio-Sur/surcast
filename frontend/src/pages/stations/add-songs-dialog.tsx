@@ -3,6 +3,7 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { AddSongsDialog } from "@/components/add-songs-dialog";
 import { useAddStationSongs, useStationSongsAll } from "@/hooks/use-station-library";
+import { reportHttpError } from "@/lib/report-error";
 import { useSnackbar } from "@/providers/snackbar-provider";
 
 export function AddSongsToStationDialog({
@@ -15,7 +16,7 @@ export function AddSongsToStationDialog({
   onClose: () => void;
 }) {
   const { t } = useTranslation();
-  const { showSnackbar } = useSnackbar();
+  const { showSnackbar, showError } = useSnackbar();
   const queryClient = useQueryClient();
   const addSongs = useAddStationSongs(stationId);
   const { data: allData } = useStationSongsAll(stationId);
@@ -61,8 +62,7 @@ export function AddSongsToStationDialog({
           }
         } catch (err) {
           setIsRefetching(false);
-          console.error("Failed to add songs to station library", err);
-          showSnackbar("Failed to add songs to station library", "error");
+          reportHttpError(showError, err, "Failed to add songs to station library");
         }
       }}
       isPending={addSongs.isPending || isRefetching}

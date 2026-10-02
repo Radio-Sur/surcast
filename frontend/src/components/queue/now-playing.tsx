@@ -1,4 +1,5 @@
 import Box from "@mui/material/Box";
+import Chip from "@mui/material/Chip";
 import LinearProgress from "@mui/material/LinearProgress";
 import Typography from "@mui/material/Typography";
 import { useTranslation } from "react-i18next";
@@ -17,6 +18,7 @@ export function NowPlaying({
   onSkip,
   isSkipping,
   listeners,
+  playing,
 }: {
   item: QueueItem | PlaylistGroup;
   streamStatus: StreamStatus | null;
@@ -25,24 +27,34 @@ export function NowPlaying({
   onSkip?: () => void;
   isSkipping?: boolean;
   listeners?: LiveListeners | null;
+  /** Display override: false forces the stopped look even if the last
+   * known status still says playing (e.g. pause acknowledged locally
+   * before the backend status catches up). Defaults to the status flag. */
+  playing?: boolean;
 }) {
   const { t } = useTranslation();
+  const isPlaying = playing ?? streamStatus?.playing ?? false;
 
   return (
     <Box
       sx={{
         mb: 2,
         borderRadius: 2,
-        bgcolor: "primary.main",
-        color: "primary.contrastText",
+        bgcolor: isPlaying ? "primary.main" : "action.disabledBackground",
+        color: isPlaying ? "primary.contrastText" : "text.secondary",
         overflow: "hidden",
       }}
     >
       <Box sx={{ p: 2, pb: isPlaylistGroup(item) ? 0 : 2 }}>
         <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-          <Typography variant="caption" sx={{ opacity: 0.7, fontWeight: 600, letterSpacing: 1 }}>
-            {isPlaylistGroup(item) ? t("stations:queue_now_playing_playlist") : t("stations:queue_now_playing")}
-          </Typography>
+          <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+            <Typography variant="caption" sx={{ opacity: 0.7, fontWeight: 600, letterSpacing: 1 }}>
+              {isPlaylistGroup(item) ? t("stations:queue_now_playing_playlist") : t("stations:queue_now_playing")}
+            </Typography>
+            {!isPlaying && (
+              <Chip label={t("stations:stream_status_stopped")} size="small" variant="outlined" sx={{ height: 20 }} />
+            )}
+          </Box>
           {listeners && (
             <Box sx={{ opacity: 0.9 }}>
               <LiveListenersBadge listeners={listeners} />
@@ -63,7 +75,7 @@ export function NowPlaying({
         )}
       </Box>
 
-      {streamStatus && (
+      {streamStatus && isPlaying && (
         <Box sx={{ px: 2, pb: 2 }}>
           <LinearProgress
             variant={isSkipping ? "indeterminate" : streamStatus.duration > 0 ? "determinate" : "indeterminate"}

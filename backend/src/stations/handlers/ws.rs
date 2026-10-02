@@ -80,7 +80,7 @@ pub async fn global_ws(
     Query(query): Query<WsQuery>,
 ) -> Result<impl IntoResponse, AppError> {
     if let Some(ref token) = query.token {
-        crate::auth::middleware::verify_token(token, &config.jwt_secret).map_err(|_| AppError::Unauthorized("Invalid token".into()))?;
+        crate::auth::middleware::verify_token(token, &config.jwt_secret).map_err(|_| AppError::unauthorized("Invalid token".into()))?;
     }
 
     let upload_dir = config.upload_dir.clone();

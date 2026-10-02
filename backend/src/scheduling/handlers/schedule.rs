@@ -60,15 +60,15 @@ fn validate_schedule_input(
     playlist_id: Option<Uuid>,
 ) -> Result<(), AppError> {
     if !(0..=6).contains(&day_of_week) {
-        return Err(AppError::BadRequest("day_of_week must be 0-6".into()));
+        return Err(AppError::bad_request("day_of_week must be 0-6".into()));
     }
 
     if end_time == start_time {
-        return Err(AppError::BadRequest("end_time must differ from start_time".into()));
+        return Err(AppError::bad_request("end_time must differ from start_time".into()));
     }
 
     if *source_type == SourceType::Playlist && playlist_id.is_none() {
-        return Err(AppError::BadRequest("playlist_id is required when source_type is playlist".into()));
+        return Err(AppError::bad_request("playlist_id is required when source_type is playlist".into()));
     }
 
     Ok(())
@@ -119,10 +119,10 @@ pub async fn create_schedule(
     Json(req): Json<CreateScheduleRequest>,
 ) -> Result<(StatusCode, Json<ScheduleResponse>), AppError> {
     let start_time = NaiveTime::parse_from_str(&req.start_time, "%H:%M")
-        .map_err(|_| AppError::BadRequest("Invalid start_time format, use HH:MM".into()))?;
+        .map_err(|_| AppError::bad_request("Invalid start_time format, use HH:MM".into()))?;
 
-    let end_time =
-        NaiveTime::parse_from_str(&req.end_time, "%H:%M").map_err(|_| AppError::BadRequest("Invalid end_time format, use HH:MM".into()))?;
+    let end_time = NaiveTime::parse_from_str(&req.end_time, "%H:%M")
+        .map_err(|_| AppError::bad_request("Invalid end_time format, use HH:MM".into()))?;
 
     let source_type = req.source_type.unwrap_or(SourceType::Playlist);
     validate_schedule_input(req.day_of_week, start_time, end_time, &source_type, req.playlist_id)?;
@@ -137,7 +137,7 @@ pub async fn create_schedule(
                     .unwrap_or_else(|| s.source_type.to_string())
             })
             .collect();
-        return Err(AppError::Conflict(format!(
+        return Err(AppError::conflict(format!(
             "Time range overlaps with existing schedule(s): {}",
             names.join(", ")
         )));
@@ -169,18 +169,18 @@ pub async fn update_schedule(
 ) -> Result<Json<ScheduleResponse>, AppError> {
     let existing = repository::find_schedule_by_id(&db, schedule_id)
         .await?
-        .ok_or_else(|| AppError::NotFound("Schedule not found".into()))?;
+        .ok_or_else(|| AppError::not_found("Schedule not found".into()))?;
 
     let day_of_week = req.day_of_week.unwrap_or(existing.day_of_week);
     let start_time = match req.start_time {
         Some(ref t) => {
-            NaiveTime::parse_from_str(t, "%H:%M").map_err(|_| AppError::BadRequest("Invalid start_time format, use HH:MM".into()))?
+            NaiveTime::parse_from_str(t, "%H:%M").map_err(|_| AppError::bad_request("Invalid start_time format, use HH:MM".into()))?
         }
         None => existing.start_time,
     };
     let end_time = match req.end_time {
         Some(ref t) => {
-            NaiveTime::parse_from_str(t, "%H:%M").map_err(|_| AppError::BadRequest("Invalid end_time format, use HH:MM".into()))?
+            NaiveTime::parse_from_str(t, "%H:%M").map_err(|_| AppError::bad_request("Invalid end_time format, use HH:MM".into()))?
         }
         None => existing.end_time,
     };
@@ -198,7 +198,7 @@ pub async fn update_schedule(
                     .unwrap_or_else(|| s.source_type.to_string())
             })
             .collect();
-        return Err(AppError::Conflict(format!(
+        return Err(AppError::conflict(format!(
             "Time range overlaps with existing schedule(s): {}",
             names.join(", ")
         )));
@@ -235,7 +235,7 @@ pub async fn delete_schedule(
     let affected = repository::delete_schedule(&db, schedule_id).await?;
 
     if affected == 0 {
-        return Err(AppError::NotFound("Schedule not found".into()));
+        return Err(AppError::not_found("Schedule not found".into()));
     }
 
     Ok(StatusCode::NO_CONTENT)

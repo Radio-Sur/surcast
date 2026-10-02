@@ -73,6 +73,48 @@ describe("useElapsedTimer", () => {
     expect(result.current).toBe(0);
   });
 
+  it("resyncs when the backend clock jumps backwards on the same track", () => {
+    const { result, rerender } = renderHook(({ status }) => useElapsedTimer(status), {
+      initialProps: { status: makeStatus({ playing: true, elapsed: 83, song_index: 2 }) },
+    });
+    expect(result.current).toBe(83);
+
+    // Restart rebuilds the pipeline on the same cursor: fresh 0 must win
+    // over the ticking stale timestamp instead of playing from 83.
+    rerender({ status: makeStatus({ playing: true, elapsed: 0, song_index: 2 }) });
+    expect(result.current).toBe(0);
+  });
+
+  it("resyncs on stopped to playing transition with the same track", () => {
+    const { result, rerender } = renderHook(({ status }) => useElapsedTimer(status), {
+      initialProps: { status: makeStatus({ playing: false, elapsed: 0, song_index: 1 }) },
+    });
+    expect(result.current).toBe(0);
+
+    rerender({ status: makeStatus({ playing: true, elapsed: 0, song_index: 1 }) });
+    expect(result.current).toBe(0);
+
+    act(() => {
+      vi.advanceTimersByTime(2000);
+    });
+    expect(result.current).toBe(2);
+  });
+
+  it("ignores lagging duplicate statuses jumping forward", () => {
+    const { result, rerender } = renderHook(({ status }) => useElapsedTimer(status), {
+      initialProps: { status: makeStatus({ playing: true, elapsed: 5, song_index: 0 }) },
+    });
+
+    act(() => {
+      vi.advanceTimersByTime(1000);
+    });
+    expect(result.current).toBe(6);
+
+    // A stale duplicate claiming elapsed 40 must not fast-forward the clock.
+    rerender({ status: makeStatus({ playing: true, elapsed: 40, song_index: 0 }) });
+    expect(result.current).toBe(6);
+  });
+
   it("stops incrementing when not playing", () => {
     const { result, rerender } = renderHook(({ status }) => useElapsedTimer(status), {
       initialProps: { status: makeStatus({ playing: true, elapsed: 0 }) },

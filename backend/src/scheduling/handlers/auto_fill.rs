@@ -166,7 +166,7 @@ pub async fn update_auto_fill_playlist(
 ) -> Result<Json<AutoFillPlaylistResponse>, AppError> {
     let row = repository::update_auto_fill_playlist_weight(&db, playlist_id, req.weight.unwrap_or(1))
         .await?
-        .ok_or_else(|| AppError::NotFound("Auto-fill playlist not found".into()))?;
+        .ok_or_else(|| AppError::not_found("Auto-fill playlist not found".into()))?;
 
     let playlist_name = repository::find_playlist_name_string(&db, row.playlist_id).await?;
 
@@ -186,7 +186,7 @@ pub async fn delete_auto_fill_playlist(
     let affected = repository::delete_auto_fill_playlist(&db, playlist_id).await?;
 
     if affected == 0 {
-        return Err(AppError::NotFound("Auto-fill playlist not found".into()));
+        return Err(AppError::not_found("Auto-fill playlist not found".into()));
     }
 
     Ok(StatusCode::NO_CONTENT)
@@ -200,7 +200,7 @@ pub async fn trigger_auto_fill(
     State(lifecycle): State<Arc<StationLifecycleLocks>>,
     Path(station_id): Path<String>,
 ) -> Result<Json<Value>, AppError> {
-    let sid: Uuid = station_id.parse().map_err(|_| AppError::BadRequest("Invalid station ID".into()))?;
+    let sid: Uuid = station_id.parse().map_err(|_| AppError::bad_request("Invalid station ID".into()))?;
     fill_queue_from_schedule(&db, sid, &config.upload_dir).await?;
     // The refill above writes rows straight into the DB; a live streamer keeps
     // its own in-memory queue copy, so reload it or the new tracks are never

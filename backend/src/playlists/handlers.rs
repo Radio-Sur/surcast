@@ -62,7 +62,7 @@ pub async fn create_playlist(
 
     let playlist = repository::find_playlist_by_id(&db, id).await?.ok_or_else(|| {
         tracing::error!("Insert succeeded but fetch returned None");
-        AppError::Internal("".into())
+        AppError::internal("".into())
     })?;
 
     Ok((StatusCode::CREATED, Json(build_response(&playlist, 0, 0))))
@@ -77,7 +77,7 @@ pub async fn get_playlist(
 
     let playlist = repository::find_playlist_by_id(&db, id)
         .await?
-        .ok_or_else(|| AppError::NotFound("Playlist not found".into()))?;
+        .ok_or_else(|| AppError::not_found("Playlist not found".into()))?;
 
     let (count, total_dur) = repository::playlist_song_stats(&db, playlist.id).await?;
 
@@ -94,7 +94,7 @@ pub async fn update_playlist(
 
     let playlist = repository::find_playlist_by_id(&db, id)
         .await?
-        .ok_or_else(|| AppError::NotFound("Playlist not found".into()))?;
+        .ok_or_else(|| AppError::not_found("Playlist not found".into()))?;
 
     let name = req.name.unwrap_or(playlist.name);
     let description = req.description.unwrap_or(playlist.description);
@@ -104,7 +104,7 @@ pub async fn update_playlist(
 
     let updated = repository::find_playlist_by_id(&db, id).await?.ok_or_else(|| {
         tracing::error!("Update succeeded but fetch returned None");
-        AppError::Internal("".into())
+        AppError::internal("".into())
     })?;
 
     let (count, total_dur) = repository::playlist_song_stats(&db, updated.id).await?;
@@ -122,7 +122,7 @@ pub async fn delete_playlist(
     let affected = repository::delete_playlist(&db, id).await?;
 
     if affected == 0 {
-        return Err(AppError::NotFound("Playlist not found".into()));
+        return Err(AppError::not_found("Playlist not found".into()));
     }
 
     Ok(StatusCode::NO_CONTENT)
@@ -153,14 +153,14 @@ pub async fn list_playlist_songs(
 
     let exists = repository::playlist_exists(&db, id).await?;
     if !exists {
-        return Err(AppError::NotFound("Playlist not found".into()));
+        return Err(AppError::not_found("Playlist not found".into()));
     }
 
     let page = params.page.unwrap_or(1).max(1);
     let per_page = params.per_page.unwrap_or(10000).clamp(1, 100000);
     let offset = (page - 1) * per_page;
 
-    let mut conn = db.acquire().await.map_err(|e| AppError::Internal(e.to_string()))?;
+    let mut conn = db.acquire().await.map_err(|e| AppError::internal(e.to_string()))?;
     let songs = repository::find_playlist_songs_with_details_paginated(&mut conn, id, per_page, offset).await?;
     let total = repository::count_playlist_songs(&mut conn, id).await?;
     let songs = songs.into_iter().map(build_playlist_song).collect();
@@ -183,10 +183,10 @@ pub async fn add_playlist_songs(
 
     let exists = repository::playlist_exists(&db, id).await?;
     if !exists {
-        return Err(AppError::NotFound("Playlist not found".into()));
+        return Err(AppError::not_found("Playlist not found".into()));
     }
 
-    let mut tx = db.begin().await.map_err(|e| AppError::Internal(e.to_string()))?;
+    let mut tx = db.begin().await.map_err(|e| AppError::internal(e.to_string()))?;
 
     let mut pos = repository::compute_max_playlist_position(&mut tx, id).await?;
 
@@ -208,7 +208,7 @@ pub async fn add_playlist_songs(
     let songs = repository::find_playlist_songs_with_details(&mut tx, id).await?;
     let songs = songs.into_iter().map(build_playlist_song).collect();
 
-    tx.commit().await.map_err(|e| AppError::Internal(e.to_string()))?;
+    tx.commit().await.map_err(|e| AppError::internal(e.to_string()))?;
 
     Ok((StatusCode::CREATED, Json(songs)))
 }
@@ -220,7 +220,7 @@ pub async fn remove_playlist_song(
 ) -> Result<StatusCode, AppError> {
     let id = repository::resolve_playlist_id(&db, &id_or_slug).await?;
 
-    let mut conn = db.acquire().await.map_err(|e| AppError::Internal(e.to_string()))?;
+    let mut conn = db.acquire().await.map_err(|e| AppError::internal(e.to_string()))?;
     repository::delete_playlist_song(&mut conn, id, song_id).await?;
 
     Ok(StatusCode::NO_CONTENT)
@@ -234,7 +234,7 @@ pub async fn remove_playlist_songs_batch(
 ) -> Result<StatusCode, AppError> {
     let id = repository::resolve_playlist_id(&db, &id_or_slug).await?;
 
-    let mut conn = db.acquire().await.map_err(|e| AppError::Internal(e.to_string()))?;
+    let mut conn = db.acquire().await.map_err(|e| AppError::internal(e.to_string()))?;
     repository::delete_playlist_songs_batch(&mut conn, id, &req.song_ids).await?;
 
     Ok(StatusCode::NO_CONTENT)
@@ -248,14 +248,14 @@ pub async fn reorder_playlist_songs(
 ) -> Result<Json<Vec<PlaylistSongResponse>>, AppError> {
     let id = repository::resolve_playlist_id(&db, &id_or_slug).await?;
 
-    let mut tx = db.begin().await.map_err(|e| AppError::Internal(e.to_string()))?;
+    let mut tx = db.begin().await.map_err(|e| AppError::internal(e.to_string()))?;
 
     repository::reorder_playlist_songs(&mut tx, id, &req.song_ids).await?;
 
     let songs = repository::find_playlist_songs_with_details(&mut tx, id).await?;
     let songs = songs.into_iter().map(build_playlist_song).collect();
 
-    tx.commit().await.map_err(|e| AppError::Internal(e.to_string()))?;
+    tx.commit().await.map_err(|e| AppError::internal(e.to_string()))?;
 
     Ok(Json(songs))
 }
@@ -272,7 +272,7 @@ pub async fn add_playlist_to_queue(
     let station_id = crate::stations::handlers::resolve_station_id(&db, &station_id).await?;
     let exists = repository::playlist_exists(&db, playlist_id).await?;
     if !exists {
-        return Err(AppError::NotFound("Playlist not found".into()));
+        return Err(AppError::not_found("Playlist not found".into()));
     }
 
     let song_ids = repository::find_playlist_song_ids(&db, playlist_id).await?;

@@ -47,7 +47,7 @@ pub async fn start_upload(
     while let Some(field) = multipart
         .next_field()
         .await
-        .map_err(|e| AppError::BadRequest(format!("Invalid multipart: {e}")))?
+        .map_err(|e| AppError::bad_request(format!("Invalid multipart: {e}")))?
     {
         match field.name().unwrap_or("") {
             "file" => {
@@ -55,7 +55,7 @@ pub async fn start_upload(
                 let bytes = field
                     .bytes()
                     .await
-                    .map_err(|e| AppError::BadRequest(format!("Failed to read file: {e}")))?
+                    .map_err(|e| AppError::bad_request(format!("Failed to read file: {e}")))?
                     .to_vec();
                 files.push((name, bytes));
             }
@@ -67,7 +67,7 @@ pub async fn start_upload(
                 let text = field.text().await.unwrap_or_default();
                 if !text.is_empty() {
                     station_ids =
-                        serde_json::from_str(&text).map_err(|e| AppError::BadRequest(format!("Invalid station_ids JSON: {e}")))?;
+                        serde_json::from_str(&text).map_err(|e| AppError::bad_request(format!("Invalid station_ids JSON: {e}")))?;
                 }
             }
             _ => {}
@@ -75,13 +75,13 @@ pub async fn start_upload(
     }
 
     if files.is_empty() {
-        return Err(AppError::BadRequest("No files provided".into()));
+        return Err(AppError::bad_request("No files provided".into()));
     }
 
     let entries = expand_files(files)?;
 
     if entries.is_empty() {
-        return Err(AppError::BadRequest("No audio files found".into()));
+        return Err(AppError::bad_request("No audio files found".into()));
     }
 
     if assign_to_all {
@@ -147,11 +147,11 @@ pub async fn get_upload_job(
     .db_error("failed to query upload job")?;
 
     let Some((id, owner_id, status, total, processed, failed, current_file, error, song_ids)) = row else {
-        return Err(AppError::NotFound("Upload job not found".into()));
+        return Err(AppError::not_found("Upload job not found".into()));
     };
 
     if owner_id != auth_user.id {
-        return Err(AppError::NotFound("Upload job not found".into()));
+        return Err(AppError::not_found("Upload job not found".into()));
     }
 
     let song_ids: Vec<Uuid> = song_ids.and_then(|v| serde_json::from_value(v).ok()).unwrap_or_default();
@@ -176,7 +176,7 @@ fn expand_files(files: Vec<(String, Vec<u8>)>) -> Result<Vec<(String, Vec<u8>)>,
 
         if is_zip {
             let cursor = std::io::Cursor::new(bytes);
-            let mut archive = zip::ZipArchive::new(cursor).map_err(|e| AppError::BadRequest(format!("Invalid zip archive: {e}")))?;
+            let mut archive = zip::ZipArchive::new(cursor).map_err(|e| AppError::bad_request(format!("Invalid zip archive: {e}")))?;
 
             for i in 0..archive.len() {
                 let mut entry = archive.by_index(i).db_error("failed to process uploaded file")?;

@@ -45,7 +45,7 @@ pub async fn create_api_key(
     Json(req): Json<CreateApiKeyRequest>,
 ) -> Result<(StatusCode, Json<ApiKeyCreatedResponse>), AppError> {
     if req.name.is_empty() {
-        return Err(AppError::BadRequest("API key name is required".into()));
+        return Err(AppError::bad_request("API key name is required".into()));
     }
 
     let key_id = Uuid::new_v4();
@@ -88,7 +88,7 @@ pub async fn update_api_key(
         .fetch_optional(&db)
         .await
         .db_error("failed to find API key for update")?
-        .ok_or_else(|| AppError::NotFound("API key not found".into()))?;
+        .ok_or_else(|| AppError::not_found("API key not found".into()))?;
 
     let name = req.name.unwrap_or(key.name);
     let is_active = req.is_active.unwrap_or(key.is_active);
@@ -123,7 +123,7 @@ pub async fn delete_api_key(
         .db_error("failed to delete API key")?;
 
     if result.rows_affected() == 0 {
-        return Err(AppError::NotFound("API key not found".into()));
+        return Err(AppError::not_found("API key not found".into()));
     }
 
     Ok(StatusCode::NO_CONTENT)

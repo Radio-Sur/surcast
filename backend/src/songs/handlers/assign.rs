@@ -29,7 +29,7 @@ pub async fn add_song_stations(
 ) -> Result<Json<Vec<Uuid>>, AppError> {
     let _song = repository::find_song_by_id(&db, song_id)
         .await?
-        .ok_or_else(|| AppError::NotFound("Song not found".into()))?;
+        .ok_or_else(|| AppError::not_found("Song not found".into()))?;
 
     let _ = _song;
 

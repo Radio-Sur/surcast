@@ -23,12 +23,15 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 import { CreateStationDialog } from "@/components/create-station-dialog";
+import { ErrorDetails } from "@/components/error-details";
 import { useDeleteStation, useStations } from "@/hooks/use-stations";
+import { isHttpError, serverMessage } from "@/lib/is-http-error";
+import { reportHttpError } from "@/lib/report-error";
 import { useSnackbar } from "@/providers/snackbar-provider";
 
 export function StationsListPage() {
   const { t } = useTranslation();
-  const { showSnackbar } = useSnackbar();
+  const { showError } = useSnackbar();
   const { data: stations, isLoading, isError, error } = useStations();
   const deleteStation = useDeleteStation();
   const navigate = useNavigate();
@@ -43,8 +46,7 @@ export function StationsListPage() {
         await deleteStation.mutateAsync(deleteId);
         setDeleteId(null);
       } catch (err) {
-        console.error("Failed to delete station", err);
-        showSnackbar("Failed to delete station", "error");
+        reportHttpError(showError, err, "Failed to delete station");
       }
     }
   };
@@ -61,7 +63,18 @@ export function StationsListPage() {
   if (isError) {
     return (
       <Box sx={{ display: "flex", flexDirection: "column", gap: 2 }}>
-        <Alert severity="error">{error instanceof Error ? error.message : "Failed to load stations"}</Alert>
+        <Alert severity="error">
+          {(() => {
+            const info = isHttpError(error);
+            const server = serverMessage(error);
+            return (
+              <ErrorDetails
+                title={server ?? "Failed to load stations"}
+                details={{ ...info, message: server ?? "Failed to load stations" }}
+              />
+            );
+          })()}
+        </Alert>
       </Box>
     );
   }

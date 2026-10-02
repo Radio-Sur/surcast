@@ -198,20 +198,18 @@ impl GStreamerPipeline {
                     }
                 }
             }
+            // Element names/states carry no secrets, so they travel inside
+            // the error itself (client `details`), not only the server log.
+            let mut blockers = Vec::new();
             let mut elements = self.pipeline.iterate_elements();
             loop {
                 match elements.next() {
                     Ok(Some(element)) => {
                         let (state_result, element_current, element_pending) = element.state(gst::ClockTime::ZERO);
                         if element_current != target || element_pending != gst::State::VoidPending {
-                            tracing::error!(
-                                "element {} blocking set_state to {:?}: at {:?} with {:?} pending (state query {:?})",
-                                element.name(),
-                                target,
-                                element_current,
-                                element_pending,
-                                state_result
-                            );
+                            let line = format!("{} at {:?} with {:?} pending", element.name(), element_current, element_pending);
+                            tracing::error!("element {line} blocking set_state to {target:?} (state query {state_result:?})");
+                            blockers.push(line);
                         }
                     }
                     Ok(None) => break,
@@ -219,9 +217,12 @@ impl GStreamerPipeline {
                     Err(gst::IteratorError::Error) => break,
                 }
             }
-            return Err(PipelineError::Pipeline(format!(
-                "state transition to {target:?} stalled at {current:?} with {pending:?} pending"
-            )));
+            let mut message = format!("state transition to {target:?} stalled at {current:?} with {pending:?} pending");
+            if !blockers.is_empty() {
+                message.push_str("; blocking elements: ");
+                message.push_str(&blockers.join(", "));
+            }
+            return Err(PipelineError::Pipeline(message));
         }
         let mut snapshot = self.snapshot.lock().unwrap_or_else(|error| error.into_inner());
         snapshot.state = state;

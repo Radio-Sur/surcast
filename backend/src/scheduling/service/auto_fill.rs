@@ -220,7 +220,7 @@ async fn apply_mode_to_candidates(
     station_id: Uuid,
 ) -> Result<Uuid, AppError> {
     if candidates.is_empty() {
-        return Err(AppError::BadRequest("No songs available for selection".into()));
+        return Err(AppError::bad_request("No songs available for selection".into()));
     }
     let mut rng = rand::make_rng::<rand::rngs::StdRng>();
     let selected = match mode {

@@ -31,6 +31,8 @@ import { PlaylistGroupCard } from "@/components/queue/playlist-group-card";
 import { QueueEndSentinel } from "@/components/queue/queue-end-sentinel";
 import { QueueRow } from "@/components/queue/queue-row";
 import { SongCover } from "@/components/song-cover";
+import { reportHttpError } from "@/lib/report-error";
+import type { ShowErrorOptions } from "@/providers/snackbar-provider";
 import { isPlaylistGroup, type PlaylistGroup, type QueueItem } from "@/types";
 import { getDropTargetIndex, UPCOMING_KEY } from "./queue-section-utils";
 
@@ -43,7 +45,7 @@ export function UpcomingQueue({
   handleRemoveFromQueue,
   handleMoveToTop,
   handleToggleSelect,
-  showSnackbar,
+  showError,
 }: {
   stationId: string;
   queueSections: { played: QueueItem[]; nowPlaying: QueueItem | null; upcoming: QueueItem[] };
@@ -59,7 +61,7 @@ export function UpcomingQueue({
   handleRemoveFromQueue: (itemId: string) => void;
   handleMoveToTop: (itemId: string) => void;
   handleToggleSelect: (id: string) => void;
-  showSnackbar: (msg: string, severity: "error" | "success") => void;
+  showError: (options: ShowErrorOptions) => void;
 }) {
   const { t } = useTranslation();
   const [upcomingOpen, setUpcomingOpen] = useState(
@@ -115,13 +117,12 @@ export function UpcomingQueue({
         full.map((s) => s.id),
         {
           onError: (err) => {
-            console.error("Failed to reorder queue", err);
-            showSnackbar("Failed to reorder queue", "error");
+            reportHttpError(showError, err, "Failed to reorder queue");
           },
         },
       );
     },
-    [queueSections, reorderQueue, showSnackbar],
+    [queueSections, reorderQueue, showError],
   );
 
   const handleDragEnd = useCallback(
@@ -159,8 +160,7 @@ export function UpcomingQueue({
           full.map((s) => s.id),
           {
             onError: (err) => {
-              console.error("Failed to reorder queue", err);
-              showSnackbar("Failed to reorder queue", "error");
+              reportHttpError(showError, err, "Failed to reorder queue");
             },
           },
         );
@@ -181,14 +181,13 @@ export function UpcomingQueue({
           full.map((s) => s.id),
           {
             onError: (err) => {
-              console.error("Failed to reorder queue", err);
-              showSnackbar("Failed to reorder queue", "error");
+              reportHttpError(showError, err, "Failed to reorder queue");
             },
           },
         );
       }
     },
-    [queueSections, reorderQueue, showSnackbar],
+    [queueSections, reorderQueue, showError],
   );
 
   const renderItem = (g: PlaylistGroup | QueueItem, gi: number) => {

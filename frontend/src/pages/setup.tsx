@@ -1,4 +1,3 @@
-import Alert from "@mui/material/Alert";
 import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
 import Card from "@mui/material/Card";
@@ -9,15 +8,16 @@ import Typography from "@mui/material/Typography";
 import { useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Navigate, useNavigate } from "react-router-dom";
+import { ErrorDetails } from "@/components/error-details";
 import { useAuth } from "@/hooks/use-auth";
 import { httpClient } from "@/lib/api";
-import { isHttpError } from "@/lib/is-http-error";
+import { type HttpErrorInfo, isHttpError } from "@/lib/is-http-error";
 
 export function SetupPage() {
   const { t } = useTranslation();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
-  const [error, setError] = useState("");
+  const [error, setError] = useState<HttpErrorInfo | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [success, setSuccess] = useState(false);
   const navigate = useNavigate();
@@ -47,7 +47,7 @@ export function SetupPage() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setError("");
+    setError(null);
     setSubmitting(true);
 
     try {
@@ -55,7 +55,8 @@ export function SetupPage() {
       await refreshSetupStatus();
       setSuccess(true);
     } catch (err: unknown) {
-      setError(isHttpError(err)?.message || t("errors:setup"));
+      const info = isHttpError(err);
+      setError({ ...info, message: info.message || t("errors:setup") });
     } finally {
       setSubmitting(false);
     }
@@ -137,7 +138,7 @@ export function SetupPage() {
             onSubmit={handleSubmit}
             sx={{ display: "flex", flexDirection: "column", gap: 2.5 }}
           >
-            {error && <Alert severity="error">{error}</Alert>}
+            {error && <ErrorDetails title={error.message} details={error} onClose={() => setError(null)} />}
 
             <TextField
               label={t("auth:username")}

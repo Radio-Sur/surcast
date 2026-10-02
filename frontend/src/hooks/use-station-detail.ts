@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { useAppConfig } from "@/hooks/use-config";
 import { useElapsedTimer } from "@/hooks/use-elapsed-timer";
 import { usePlaylists } from "@/hooks/use-playlists";
@@ -11,12 +12,13 @@ import {
 } from "@/hooks/use-station-queue";
 import { useStation, useUpdateStation } from "@/hooks/use-stations";
 import { useStreamPause, useStreamPlay, useStreamRestart, useStreamSkip } from "@/hooks/use-stream";
-import { isHttpError } from "@/lib/is-http-error";
+import { reportHttpError } from "@/lib/report-error";
 import { useLiveStation } from "@/providers/live-provider";
 import { useSnackbar } from "@/providers/snackbar-provider";
 
 export function useStationDetail(id: string | undefined) {
-  const { showSnackbar } = useSnackbar();
+  const { t } = useTranslation();
+  const { showSnackbar, showError } = useSnackbar();
   const safeId = id ?? "";
 
   const {
@@ -94,9 +96,30 @@ export function useStationDetail(id: string | undefined) {
     return `${h}:${m}`;
   }, [queueSections]);
 
+  // Local pause flag: the backend publishes no status on manual pause, so
+  // without this the panel would keep ticking as if still playing. Cleared
+  // on play/restart success; resume continues from the kept backend
+  // position, which the frozen elapsed value already represents.
+  const [pausedOverride, setPausedOverride] = useState(false);
+  const playing = (streamStatus?.playing ?? false) && !pausedOverride;
+
   const handleMutationError = (err: unknown, label: string) => {
-    console.error(`Failed to ${label}:`, err);
-    showSnackbar(isHttpError(err).message || `Failed to ${label}`, "error");
+    reportHttpError(showError, err, `Failed to ${label}`);
+  };
+
+  const handleStreamPlaySuccess = () => {
+    setPausedOverride(false);
+    showSnackbar(t("stations:stream_started"), "success");
+  };
+
+  const handleStreamPauseSuccess = () => {
+    setPausedOverride(true);
+    showSnackbar(t("stations:stream_paused"), "success");
+  };
+
+  const handleStreamRestartSuccess = () => {
+    setPausedOverride(false);
+    showSnackbar(t("stations:stream_restarted"), "success");
   };
 
   const handleAddToQueue = async (songIds: string[]) => {
@@ -160,6 +183,12 @@ export function useStationDetail(id: string | undefined) {
     confirmAction,
     setConfirmAction,
     streamStatus,
+    playing,
+    pausedOverride,
+    setPausedOverride,
+    handleStreamPlaySuccess,
+    handleStreamPauseSuccess,
+    handleStreamRestartSuccess,
     connected,
     liveListeners,
     streamUrl,

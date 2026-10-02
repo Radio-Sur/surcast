@@ -32,7 +32,7 @@ pub async fn upload_song(
     while let Some(field) = multipart
         .next_field()
         .await
-        .map_err(|e| AppError::BadRequest(format!("Invalid multipart: {e}")))?
+        .map_err(|e| AppError::bad_request(format!("Invalid multipart: {e}")))?
     {
         let name = field.name().unwrap_or("").to_string();
         match name.as_str() {
@@ -42,7 +42,7 @@ pub async fn upload_song(
                     field
                         .bytes()
                         .await
-                        .map_err(|e| AppError::BadRequest(format!("Failed to read file: {e}")))?
+                        .map_err(|e| AppError::bad_request(format!("Failed to read file: {e}")))?
                         .to_vec(),
                 );
             }
@@ -54,14 +54,14 @@ pub async fn upload_song(
                 let text = field.text().await.unwrap_or_default();
                 if !text.is_empty() {
                     station_ids =
-                        serde_json::from_str(&text).map_err(|e| AppError::BadRequest(format!("Invalid station_ids JSON: {e}")))?;
+                        serde_json::from_str(&text).map_err(|e| AppError::bad_request(format!("Invalid station_ids JSON: {e}")))?;
                 }
             }
             _ => {}
         }
     }
 
-    let bytes = file_bytes.ok_or_else(|| AppError::BadRequest("No file provided".into()))?;
+    let bytes = file_bytes.ok_or_else(|| AppError::bad_request("No file provided".into()))?;
 
     let title_override = if title.is_empty() { None } else { Some(title.as_str()) };
     let artist_override = if artist.is_empty() { None } else { Some(artist.as_str()) };
@@ -92,7 +92,7 @@ pub async fn upload_song(
 
     let song = repository::find_song_by_id(&db, processed.id).await?.ok_or_else(|| {
         tracing::error!("Insert succeeded but fetch returned None");
-        AppError::Internal("".into())
+        AppError::internal("".into())
     })?;
 
     Ok((StatusCode::CREATED, Json(SongResponse::from((song, assigned)))))
@@ -111,7 +111,7 @@ pub async fn upload_zip(
     while let Some(field) = multipart
         .next_field()
         .await
-        .map_err(|e| AppError::BadRequest(format!("Invalid multipart: {e}")))?
+        .map_err(|e| AppError::bad_request(format!("Invalid multipart: {e}")))?
     {
         let name = field.name().unwrap_or("").to_string();
         match name.as_str() {
@@ -120,7 +120,7 @@ pub async fn upload_zip(
                     field
                         .bytes()
                         .await
-                        .map_err(|e| AppError::BadRequest(format!("Failed to read zip: {e}")))?
+                        .map_err(|e| AppError::bad_request(format!("Failed to read zip: {e}")))?
                         .to_vec(),
                 );
             }
@@ -129,14 +129,14 @@ pub async fn upload_zip(
                 let text = field.text().await.unwrap_or_default();
                 if !text.is_empty() {
                     station_ids =
-                        serde_json::from_str(&text).map_err(|e| AppError::BadRequest(format!("Invalid station_ids JSON: {e}")))?;
+                        serde_json::from_str(&text).map_err(|e| AppError::bad_request(format!("Invalid station_ids JSON: {e}")))?;
                 }
             }
             _ => {}
         }
     }
 
-    let bytes = zip_bytes.ok_or_else(|| AppError::BadRequest("No zip file provided".into()))?;
+    let bytes = zip_bytes.ok_or_else(|| AppError::bad_request("No zip file provided".into()))?;
 
     if assign_to_all {
         station_ids = crate::stations::repository::find_all_station_ids(&db)
@@ -147,7 +147,7 @@ pub async fn upload_zip(
     }
 
     let cursor = std::io::Cursor::new(bytes);
-    let mut archive = zip::ZipArchive::new(cursor).map_err(|e| AppError::BadRequest(format!("Invalid zip archive: {e}")))?;
+    let mut archive = zip::ZipArchive::new(cursor).map_err(|e| AppError::bad_request(format!("Invalid zip archive: {e}")))?;
 
     let entries: Vec<(String, Vec<u8>)> = {
         let mut result = Vec::new();
@@ -168,7 +168,7 @@ pub async fn upload_zip(
     };
 
     if entries.is_empty() {
-        return Err(AppError::BadRequest("No audio files found in archive".into()));
+        return Err(AppError::bad_request("No audio files found in archive".into()));
     }
 
     let mut created: Vec<SongResponse> = Vec::with_capacity(entries.len());
@@ -196,7 +196,7 @@ pub async fn upload_zip(
 
         let song = repository::find_song_by_id(&db, processed.id).await?.ok_or_else(|| {
             tracing::error!("Insert succeeded but fetch returned None");
-            AppError::Internal("".into())
+            AppError::internal("".into())
         })?;
 
         created.push(SongResponse::from((song, assigned)));

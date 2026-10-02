@@ -91,7 +91,7 @@ pub async fn add_songs_to_queue(
     for &song_id in &req.song_ids {
         let in_library = repository::check_song_in_library(&db, station_id, song_id).await?;
         if !in_library {
-            return Err(AppError::BadRequest(format!("Song {song_id} is not in this station's library")));
+            return Err(AppError::bad_request(format!("Song {song_id} is not in this station's library")));
         }
     }
 
@@ -160,12 +160,12 @@ pub async fn insert_song_at_queue_position(
     let station_id = resolve_station_id(&db, &station_id).await?;
 
     if req.position < 0 {
-        return Err(AppError::BadRequest("Position must be non-negative".into()));
+        return Err(AppError::bad_request("Position must be non-negative".into()));
     }
 
     let in_library = repository::check_song_in_library(&db, station_id, req.song_id).await?;
     if !in_library {
-        return Err(AppError::BadRequest(format!(
+        return Err(AppError::bad_request(format!(
             "Song {} is not in this station's library",
             req.song_id
         )));

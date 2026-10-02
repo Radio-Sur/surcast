@@ -372,5 +372,5 @@ async fn test_resolve_station_id_from_slug(db: PgPool) {
     let err = repository::resolve_station_id_from_slug(&db, "nonexistent")
         .await
         .expect_err("should error");
-    assert!(matches!(err, surcast_backend::errors::AppError::NotFound(_)));
+    assert!(matches!(err, surcast_backend::errors::AppError::NotFound { .. }));
 }

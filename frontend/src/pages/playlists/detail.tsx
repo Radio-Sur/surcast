@@ -36,6 +36,7 @@ import Typography from "@mui/material/Typography";
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate, useParams } from "react-router-dom";
+import { ErrorDetails } from "@/components/error-details";
 import { fmt, GripDots } from "@/components/queue";
 import { SongCover } from "@/components/song-cover";
 import {
@@ -48,6 +49,8 @@ import {
   useUpdatePlaylist,
 } from "@/hooks/use-playlists";
 import { useStations } from "@/hooks/use-stations";
+import { isHttpError, serverMessage } from "@/lib/is-http-error";
+import { reportHttpError } from "@/lib/report-error";
 import { useSnackbar } from "@/providers/snackbar-provider";
 import type { PlaylistSong } from "@/types";
 import { AddSongsToPlaylistDialog } from "./add-songs-dialog";
@@ -131,7 +134,7 @@ function SortablePlaylistSongRow({
 
 export function PlaylistDetailPage() {
   const { t } = useTranslation();
-  const { showSnackbar } = useSnackbar();
+  const { showSnackbar, showError } = useSnackbar();
   const { id: unsafeId } = useParams<{ id: string }>();
   const id = unsafeId!;
   const navigate = useNavigate();
@@ -202,8 +205,7 @@ export function PlaylistDetailPage() {
       setSelectedIds(new Set());
       showSnackbar(`Removed ${selectedIds.size} song(s) from playlist`, "success");
     } catch (err) {
-      console.error("Failed to remove songs from playlist", err);
-      showSnackbar("Failed to remove songs", "error");
+      reportHttpError(showError, err, "Failed to remove songs");
     }
   };
 
@@ -230,8 +232,7 @@ export function PlaylistDetailPage() {
       await addToQueue.mutateAsync({ playlist_id: id, station_id: stationId });
       setQueueDialogOpen(false);
     } catch (err) {
-      console.error("Failed to add playlist to queue", err);
-      showSnackbar("Failed to add playlist to queue", "error");
+      reportHttpError(showError, err, "Failed to add playlist to queue");
     }
   };
 
@@ -250,7 +251,16 @@ export function PlaylistDetailPage() {
     return (
       <Box sx={{ display: "flex", flexDirection: "column", gap: 2 }}>
         <Alert severity="error">
-          {playlistLoadError instanceof Error ? playlistLoadError.message : "Failed to load playlist"}
+          {(() => {
+            const info = isHttpError(playlistLoadError);
+            const server = serverMessage(playlistLoadError);
+            return (
+              <ErrorDetails
+                title={server ?? "Failed to load playlist"}
+                details={{ ...info, message: server ?? "Failed to load playlist" }}
+              />
+            );
+          })()}
         </Alert>
       </Box>
     );
@@ -260,7 +270,16 @@ export function PlaylistDetailPage() {
     return (
       <Box sx={{ display: "flex", flexDirection: "column", gap: 2 }}>
         <Alert severity="error">
-          {songsLoadError instanceof Error ? songsLoadError.message : "Failed to load playlist songs"}
+          {(() => {
+            const info = isHttpError(songsLoadError);
+            const server = serverMessage(songsLoadError);
+            return (
+              <ErrorDetails
+                title={server ?? "Failed to load playlist songs"}
+                details={{ ...info, message: server ?? "Failed to load playlist songs" }}
+              />
+            );
+          })()}
         </Alert>
       </Box>
     );
@@ -385,8 +404,7 @@ export function PlaylistDetailPage() {
                           onRemove={() =>
                             removeSong.mutate(s.song_id, {
                               onError: (err) => {
-                                console.error("Failed to remove song from playlist", err);
-                                showSnackbar("Failed to remove song from playlist", "error");
+                                reportHttpError(showError, err, "Failed to remove song from playlist");
                               },
                             })
                           }
@@ -430,8 +448,7 @@ export function PlaylistDetailPage() {
             { name, description: description.trim() || undefined },
             {
               onError: (err) => {
-                console.error("Failed to update playlist", err);
-                showSnackbar("Failed to update playlist", "error");
+                reportHttpError(showError, err, "Failed to update playlist");
               },
             },
           );

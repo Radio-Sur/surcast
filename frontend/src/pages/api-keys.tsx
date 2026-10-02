@@ -23,12 +23,15 @@ import TextField from "@mui/material/TextField";
 import Typography from "@mui/material/Typography";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
+import { ErrorDetails } from "@/components/error-details";
 import { useApiKeys, useCreateApiKey, useDeleteApiKey, useUpdateApiKey } from "@/hooks/use-api-keys";
+import { isHttpError, serverMessage } from "@/lib/is-http-error";
+import { reportHttpError } from "@/lib/report-error";
 import { useSnackbar } from "@/providers/snackbar-provider";
 
 export function ApiKeysPage() {
   const { t } = useTranslation();
-  const { showSnackbar } = useSnackbar();
+  const { showError } = useSnackbar();
   const { data: keys, isLoading, isError, error } = useApiKeys();
   const createKey = useCreateApiKey();
   const updateKey = useUpdateApiKey();
@@ -51,8 +54,7 @@ export function ApiKeysPage() {
       setExpiresAt("");
       setCreateOpen(false);
     } catch (err) {
-      console.error("Failed to create API key", err);
-      showSnackbar("Failed to create API key", "error");
+      reportHttpError(showError, err, "Failed to create API key");
     }
   };
 
@@ -62,8 +64,7 @@ export function ApiKeysPage() {
         await deleteKey.mutateAsync(deleteId);
         setDeleteId(null);
       } catch (err) {
-        console.error("Failed to delete API key", err);
-        showSnackbar("Failed to delete API key", "error");
+        reportHttpError(showError, err, "Failed to delete API key");
       }
     }
   };
@@ -80,7 +81,18 @@ export function ApiKeysPage() {
   if (isError) {
     return (
       <Box sx={{ display: "flex", flexDirection: "column", gap: 2 }}>
-        <Alert severity="error">{error instanceof Error ? error.message : "Failed to load API keys"}</Alert>
+        <Alert severity="error">
+          {(() => {
+            const info = isHttpError(error);
+            const server = serverMessage(error);
+            return (
+              <ErrorDetails
+                title={server ?? "Failed to load API keys"}
+                details={{ ...info, message: server ?? "Failed to load API keys" }}
+              />
+            );
+          })()}
+        </Alert>
       </Box>
     );
   }

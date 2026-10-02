@@ -90,17 +90,19 @@ pub struct AuthUser {
     pub role: Role,
 }
 
+/// Error response in the shared `{error, code, category}` envelope so the
+/// frontend can categorize auth failures like any other API error.
+fn auth_error(status: StatusCode, code: &str, message: &str) -> Response {
+    (status, Json(json!({ "error": message, "code": code, "category": "auth" }))).into_response()
+}
+
 pub async fn auth_middleware(State(state): State<AppState>, mut req: Request<axum::body::Body>, next: Next) -> Response {
     let Some(auth_header) = req.headers().get("Authorization").and_then(|v| v.to_str().ok()) else {
-        return (StatusCode::UNAUTHORIZED, Json(json!({ "error": "Missing Authorization header" }))).into_response();
+        return auth_error(StatusCode::UNAUTHORIZED, "AUTH_MISSING", "Missing Authorization header");
     };
 
     let Some(token) = auth_header.strip_prefix("Bearer ") else {
-        return (
-            StatusCode::UNAUTHORIZED,
-            Json(json!({ "error": "Invalid Authorization header format" })),
-        )
-            .into_response();
+        return auth_error(StatusCode::UNAUTHORIZED, "AUTH_MALFORMED", "Invalid Authorization header format");
     };
 
     if token.starts_with("sur_") {
@@ -113,15 +115,11 @@ pub async fn auth_middleware(State(state): State<AppState>, mut req: Request<axu
         .fetch_optional(&state.db)
         .await
         else {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": "Database error" })),
-            )
-                .into_response();
+            return auth_error(StatusCode::INTERNAL_SERVER_ERROR, "DB_ERROR", "Database error");
         };
 
         let Some(key_row) = key_row else {
-            return (StatusCode::UNAUTHORIZED, Json(json!({ "error": "Invalid or inactive API key" }))).into_response();
+            return auth_error(StatusCode::UNAUTHORIZED, "AUTH_INVALID_KEY", "Invalid or inactive API key");
         };
 
         let (_key_id, user_id, role) = key_row;
@@ -143,11 +141,11 @@ pub async fn auth_middleware(State(state): State<AppState>, mut req: Request<axu
             &DecodingKey::from_secret(state.config.jwt_secret.as_bytes()),
             &Validation::default(),
         ) else {
-            return (StatusCode::UNAUTHORIZED, Json(json!({ "error": "Invalid or expired token" }))).into_response();
+            return auth_error(StatusCode::UNAUTHORIZED, "AUTH_EXPIRED", "Invalid or expired token");
         };
 
         let Ok(user_id) = Uuid::parse_str(&token_data.claims.sub) else {
-            return (StatusCode::UNAUTHORIZED, Json(json!({ "error": "Invalid token payload" }))).into_response();
+            return auth_error(StatusCode::UNAUTHORIZED, "AUTH_INVALID", "Invalid token payload");
         };
 
         let Ok(user_opt) = sqlx::query_as::<_, (Uuid, Role)>("SELECT id, role FROM users WHERE id = $1")
@@ -155,11 +153,11 @@ pub async fn auth_middleware(State(state): State<AppState>, mut req: Request<axu
             .fetch_optional(&state.db)
             .await
         else {
-            return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": "Database error" }))).into_response();
+            return auth_error(StatusCode::INTERNAL_SERVER_ERROR, "DB_ERROR", "Database error");
         };
 
         let Some(user) = user_opt else {
-            return (StatusCode::UNAUTHORIZED, Json(json!({ "error": "User not found" }))).into_response();
+            return auth_error(StatusCode::UNAUTHORIZED, "AUTH_UNKNOWN_USER", "User not found");
         };
 
         let (id, role) = user;
@@ -172,7 +170,7 @@ pub async fn auth_middleware(State(state): State<AppState>, mut req: Request<axu
 
 pub async fn require_admin(Extension(user): Extension<AuthUser>, req: Request<axum::body::Body>, next: Next) -> Response {
     if user.role != Role::Admin {
-        return (StatusCode::FORBIDDEN, Json(json!({ "error": "Admin access required" }))).into_response();
+        return auth_error(StatusCode::FORBIDDEN, "FORBIDDEN", "Admin access required");
     }
     next.run(req).await
 }

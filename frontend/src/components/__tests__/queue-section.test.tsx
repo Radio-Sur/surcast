@@ -31,6 +31,7 @@ describe("QueueSection", () => {
         stationId="s1"
         queueSections={{ played: [], nowPlaying: null, upcoming: [] }}
         streamStatus={null}
+        playing={false}
         connected={false}
         elapsed={0}
         httpSkip={{ isPending: false, mutate: vi.fn() }}
@@ -59,6 +60,7 @@ describe("QueueSection", () => {
           duration: 200,
         }}
         connected={true}
+        playing={true}
         elapsed={30}
         httpSkip={{ isPending: false, mutate: vi.fn() }}
         reorderQueue={{ isPending: false, mutate: vi.fn() }}
@@ -78,6 +80,7 @@ describe("QueueSection", () => {
         stationId="s1"
         queueSections={{ played: [], nowPlaying: baseQueueItem, upcoming: [baseQueueItem] }}
         streamStatus={null}
+        playing={false}
         connected={false}
         elapsed={0}
         httpSkip={{ isPending: false, mutate: vi.fn() }}

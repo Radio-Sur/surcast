@@ -19,7 +19,7 @@ use super::stream::StationLifecycleLocks;
 fn normalize_transition_mode(value: Option<String>) -> Result<TransitionMode, AppError> {
     let mode = value.unwrap_or_else(|| TransitionMode::Crossfade.as_str().to_owned());
     TransitionMode::parse(&mode).ok_or_else(|| {
-        AppError::BadRequest(format!(
+        AppError::bad_request(format!(
             "Invalid transition_mode '{mode}', expected one of: crossfade, autocue, off"
         ))
     })
@@ -34,7 +34,7 @@ pub async fn get_station(State(db): State<PgPool>, Path(id): Path<String>) -> Re
     let id = resolve_station_id(&db, &id).await?;
     let station = repository::find_station_by_id(&db, id)
         .await?
-        .ok_or_else(|| AppError::NotFound("Station not found".into()))?;
+        .ok_or_else(|| AppError::not_found("Station not found".into()))?;
     Ok(Json(station.into()))
 }
 
@@ -44,7 +44,7 @@ pub async fn create_station(
     Json(req): Json<CreateStationRequest>,
 ) -> Result<(StatusCode, Json<StationResponse>), AppError> {
     if req.name.is_empty() {
-        return Err(AppError::BadRequest("Station name is required".into()));
+        return Err(AppError::bad_request("Station name is required".into()));
     }
 
     let new_mount = Station::mount_for(&req.name, req.stream_url.as_deref())
@@ -52,7 +52,7 @@ pub async fn create_station(
         .to_string();
     for station in repository::find_all_stations(&db).await? {
         if station.mount().trim_start_matches('/') == new_mount {
-            return Err(AppError::Conflict(format!(
+            return Err(AppError::conflict(format!(
                 "Mount /{new_mount} is already used by station '{}'",
                 station.name
             )));
@@ -86,7 +86,7 @@ pub async fn create_station(
 
     let station = repository::find_station_by_id(&db, station_id).await?.ok_or_else(|| {
         tracing::error!("Insert succeeded but fetch returned None");
-        AppError::Internal("".into())
+        AppError::internal("".into())
     })?;
 
     Ok((StatusCode::CREATED, Json(station.into())))
@@ -102,7 +102,7 @@ pub async fn update_station(
     let id = resolve_station_id(&db, &id).await?;
     let station = repository::find_station_by_id(&db, id)
         .await?
-        .ok_or_else(|| AppError::NotFound("Station not found".into()))?;
+        .ok_or_else(|| AppError::not_found("Station not found".into()))?;
 
     let name = req.name.as_deref().unwrap_or(&station.name).to_string();
     let new_mount = Station::mount_for(&name, req.stream_url.as_deref().or(station.stream_url.as_deref()))
@@ -110,7 +110,7 @@ pub async fn update_station(
         .to_string();
     for other in repository::find_all_stations(&db).await? {
         if other.id != id && other.mount().trim_start_matches('/') == new_mount {
-            return Err(AppError::Conflict(format!(
+            return Err(AppError::conflict(format!(
                 "Mount /{new_mount} is already used by station '{}'",
                 other.name
             )));
@@ -144,7 +144,7 @@ pub async fn update_station(
 
     let updated = repository::find_station_by_id(&db, id).await?.ok_or_else(|| {
         tracing::error!("Update succeeded but fetch returned None");
-        AppError::Internal("".into())
+        AppError::internal("".into())
     })?;
     super::stream::sync_streamer_playback_config(&streamers, &updated).await?;
 
@@ -173,13 +173,13 @@ pub async fn get_station_playlist_m3u(
     let station_id = resolve_station_id(&db, &station_id).await?;
     let station = repository::find_station_by_id(&db, station_id)
         .await?
-        .ok_or_else(|| AppError::NotFound("Station not found".into()))?;
+        .ok_or_else(|| AppError::not_found("Station not found".into()))?;
 
     let (addr, _) = crate::icecast::models::get_connection_config(&db).await.map_err(|e| {
         tracing::error!("Failed to get icecast config: {e:?}");
         {
             tracing::error!("Failed to connect to stream server");
-            AppError::Internal("".into())
+            AppError::internal("".into())
         }
     })?;
     let mut playlist = String::from("#EXTM3U\n");
@@ -199,7 +199,7 @@ mod tests {
         assert_eq!(normalize_transition_mode(Some("autocue".to_owned())).unwrap().as_str(), "autocue");
         assert!(matches!(
             normalize_transition_mode(Some("unsupported".to_owned())),
-            Err(AppError::BadRequest(message)) if message.contains("transition_mode")
+            Err(AppError::BadRequest { message, .. }) if message.contains("transition_mode")
         ));
     }
 }

@@ -13,7 +13,9 @@ import {
   Typography,
 } from "@mui/material";
 import { useTranslation } from "react-i18next";
+import { ErrorDetails } from "@/components/error-details";
 import { WeightedPlaylistsEditor } from "@/components/weighted-playlists-editor";
+import { isHttpError, serverMessage } from "@/lib/is-http-error";
 import type { Playlist } from "@/types";
 import { useAutoDjConfig } from "./use-auto-dj-config";
 
@@ -51,7 +53,16 @@ export function AutoDJSection({ stationId, playlists }: { stationId: string; pla
     return (
       <Box sx={{ display: "flex", flexDirection: "column", gap: 2 }}>
         <Alert severity="error">
-          {error instanceof Error ? error.message : "Failed to load auto-DJ configuration"}
+          {(() => {
+            const info = isHttpError(error);
+            const server = serverMessage(error);
+            return (
+              <ErrorDetails
+                title={server ?? "Failed to load auto-DJ configuration"}
+                details={{ ...info, message: server ?? "Failed to load auto-DJ configuration" }}
+              />
+            );
+          })()}
         </Alert>
       </Box>
     );

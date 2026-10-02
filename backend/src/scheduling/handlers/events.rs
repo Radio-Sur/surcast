@@ -36,11 +36,11 @@ fn validate_event_input(
     _recurrence_type: &RecurrenceType,
 ) -> Result<(), AppError> {
     if end_time == start_time {
-        return Err(AppError::BadRequest("end_time must differ from start_time".into()));
+        return Err(AppError::bad_request("end_time must differ from start_time".into()));
     }
 
     if *source_type == SourceType::Playlist && playlist_id.is_none() {
-        return Err(AppError::BadRequest("playlist_id is required when source_type is playlist".into()));
+        return Err(AppError::bad_request("playlist_id is required when source_type is playlist".into()));
     }
 
     Ok(())
@@ -103,7 +103,7 @@ async fn check_event_overlap(params: &EventOverlapParams) -> Result<(), AppError
     }
 
     if !conflicts.is_empty() {
-        return Err(AppError::Conflict(format!(
+        return Err(AppError::conflict(format!(
             "Time range overlaps with existing event(s): {}",
             conflicts.join(", ")
         )));
@@ -179,13 +179,13 @@ pub async fn create_schedule_event(
     Json(req): Json<CreateScheduleEventRequest>,
 ) -> Result<(StatusCode, Json<ScheduleEventResponse>), AppError> {
     let start_date = NaiveDate::parse_from_str(&req.start_date, "%Y-%m-%d")
-        .map_err(|_| AppError::BadRequest("Invalid start_date format, use YYYY-MM-DD".into()))?;
+        .map_err(|_| AppError::bad_request("Invalid start_date format, use YYYY-MM-DD".into()))?;
 
     let start_time = NaiveTime::parse_from_str(&req.start_time, "%H:%M")
-        .map_err(|_| AppError::BadRequest("Invalid start_time format, use HH:MM".into()))?;
+        .map_err(|_| AppError::bad_request("Invalid start_time format, use HH:MM".into()))?;
 
-    let end_time =
-        NaiveTime::parse_from_str(&req.end_time, "%H:%M").map_err(|_| AppError::BadRequest("Invalid end_time format, use HH:MM".into()))?;
+    let end_time = NaiveTime::parse_from_str(&req.end_time, "%H:%M")
+        .map_err(|_| AppError::bad_request("Invalid end_time format, use HH:MM".into()))?;
 
     let source_type = req.source_type.unwrap_or(SourceType::Playlist);
     let recurrence_type = req.recurrence_type.unwrap_or(RecurrenceType::None);
@@ -199,7 +199,7 @@ pub async fn create_schedule_event(
     let recurrence_end_date = match req.recurrence_end_date {
         Some(ref d) => Some(
             NaiveDate::parse_from_str(d, "%Y-%m-%d")
-                .map_err(|_| AppError::BadRequest("Invalid recurrence_end_date format, use YYYY-MM-DD".into()))?,
+                .map_err(|_| AppError::bad_request("Invalid recurrence_end_date format, use YYYY-MM-DD".into()))?,
         ),
         None => None,
     };
@@ -251,20 +251,20 @@ pub async fn update_schedule_event(
 ) -> Result<Json<ScheduleEventResponse>, AppError> {
     let existing = repository::find_event_by_id(&db, event_id)
         .await?
-        .ok_or_else(|| AppError::NotFound("Schedule event not found".into()))?;
+        .ok_or_else(|| AppError::not_found("Schedule event not found".into()))?;
 
     let start_date = match req.start_date {
-        Some(ref d) => NaiveDate::parse_from_str(d, "%Y-%m-%d").map_err(|_| AppError::BadRequest("Invalid start_date format".into()))?,
+        Some(ref d) => NaiveDate::parse_from_str(d, "%Y-%m-%d").map_err(|_| AppError::bad_request("Invalid start_date format".into()))?,
         None => existing.start_date,
     };
 
     let start_time = match req.start_time {
-        Some(ref t) => NaiveTime::parse_from_str(t, "%H:%M").map_err(|_| AppError::BadRequest("Invalid start_time".into()))?,
+        Some(ref t) => NaiveTime::parse_from_str(t, "%H:%M").map_err(|_| AppError::bad_request("Invalid start_time".into()))?,
         None => existing.start_time,
     };
 
     let end_time = match req.end_time {
-        Some(ref t) => NaiveTime::parse_from_str(t, "%H:%M").map_err(|_| AppError::BadRequest("Invalid end_time".into()))?,
+        Some(ref t) => NaiveTime::parse_from_str(t, "%H:%M").map_err(|_| AppError::bad_request("Invalid end_time".into()))?,
         None => existing.end_time,
     };
 
@@ -283,7 +283,7 @@ pub async fn update_schedule_event(
 
     let recurrence_end_date = match req.recurrence_end_date {
         Some(Some(ref d)) => {
-            Some(NaiveDate::parse_from_str(d, "%Y-%m-%d").map_err(|_| AppError::BadRequest("Invalid recurrence_end_date".into()))?)
+            Some(NaiveDate::parse_from_str(d, "%Y-%m-%d").map_err(|_| AppError::bad_request("Invalid recurrence_end_date".into()))?)
         }
         Some(None) => None,
         None => existing.recurrence_end_date,
@@ -338,7 +338,7 @@ pub async fn delete_schedule_event(
     let affected = repository::delete_event(&db, event_id).await?;
 
     if affected == 0 {
-        return Err(AppError::NotFound("Schedule event not found".into()));
+        return Err(AppError::not_found("Schedule event not found".into()));
     }
 
     Ok(StatusCode::NO_CONTENT)

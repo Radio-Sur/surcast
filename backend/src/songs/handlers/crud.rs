@@ -112,7 +112,7 @@ pub async fn get_song(
 ) -> Result<Json<SongResponse>, AppError> {
     let song = repository::find_song_by_id(&db, id)
         .await?
-        .ok_or_else(|| AppError::NotFound("Song not found".into()))?;
+        .ok_or_else(|| AppError::not_found("Song not found".into()))?;
 
     let station_ids: Vec<Uuid> = repository::find_station_ids_for_song(&db, song.id)
         .await?
@@ -131,7 +131,7 @@ pub async fn update_song(
 ) -> Result<Json<SongResponse>, AppError> {
     let song = repository::find_song_by_id(&db, id)
         .await?
-        .ok_or_else(|| AppError::NotFound("Song not found".into()))?;
+        .ok_or_else(|| AppError::not_found("Song not found".into()))?;
 
     let title = req.title.unwrap_or(song.title);
     let artist = req.artist.unwrap_or(song.artist);
@@ -142,7 +142,7 @@ pub async fn update_song(
 
     let updated = repository::find_song_by_id(&db, id).await?.ok_or_else(|| {
         tracing::error!("Update succeeded but fetch returned None");
-        AppError::Internal("".into())
+        AppError::internal("".into())
     })?;
 
     let station_ids: Vec<Uuid> = repository::find_station_ids_for_song(&db, updated.id)
@@ -164,7 +164,7 @@ pub async fn delete_song(
 ) -> Result<StatusCode, AppError> {
     let song = repository::find_song_by_id(&db, id)
         .await?
-        .ok_or_else(|| AppError::NotFound("Song not found".into()))?;
+        .ok_or_else(|| AppError::not_found("Song not found".into()))?;
 
     // The affected stations come from the rows the destructive operation
     // actually removed (DELETE ... RETURNING) — never from a pre-delete

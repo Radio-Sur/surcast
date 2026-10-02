@@ -120,7 +120,7 @@ pub async fn patch_settings(
 pub async fn start_icecast(State(db): State<PgPool>, State(icecast_manager): State<IcecastManager>) -> Result<impl IntoResponse, AppError> {
     let settings = models::get_settings(&db).await?;
     if settings.mode == IcecastMode::External {
-        return Err(AppError::BadRequest("Cannot start Icecast in external mode".into()));
+        return Err(AppError::icecast("Cannot start Icecast in external mode".to_string()).with_code("ICECAST_EXTERNAL_MODE"));
     }
     let _ = models::update_settings(
         &db,
@@ -140,14 +140,14 @@ pub async fn start_icecast(State(db): State<PgPool>, State(icecast_manager): Sta
         .await
     {
         Ok(msg) => Ok(Json(json!({ "ok": true, "message": msg }))),
-        Err(msg) => Err(AppError::BadRequest(msg)),
+        Err(msg) => Err(AppError::icecast(msg).with_code("ICECAST_ERROR")),
     }
 }
 
 pub async fn stop_icecast(State(icecast_manager): State<IcecastManager>) -> Result<impl IntoResponse, AppError> {
     match icecast_manager.stop().await {
         Ok(msg) => Ok(Json(json!({ "ok": true, "message": msg }))),
-        Err(msg) => Err(AppError::BadRequest(msg)),
+        Err(msg) => Err(AppError::icecast(msg).with_code("ICECAST_ERROR")),
     }
 }
 
@@ -161,14 +161,14 @@ pub async fn test_connection(
         if reachable {
             Ok(Json(json!({ "ok": true, "message": "External Icecast is reachable" })))
         } else {
-            Err(AppError::BadRequest("External Icecast is not reachable".into()))
+            Err(AppError::icecast("External Icecast is not reachable".to_string()).with_code("ICECAST_UNREACHABLE"))
         }
     } else {
         let running = icecast_manager.is_running_on_port(settings.port as u16).await;
         if running {
             Ok(Json(json!({ "ok": true, "message": "Icecast is running" })))
         } else {
-            Err(AppError::BadRequest("Icecast is not running".into()))
+            Err(AppError::icecast("Icecast is not running".to_string()).with_code("ICECAST_NOT_RUNNING"))
         }
     }
 }

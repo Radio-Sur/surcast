@@ -8,8 +8,10 @@ import Typography from "@mui/material/Typography";
 import { LineChart } from "@mui/x-charts/LineChart";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
+import { ErrorDetails } from "@/components/error-details";
 import { LiveListenersBadge } from "@/components/queue/live-listeners-badge";
 import { useStationListenersHistory } from "@/hooks/use-listeners";
+import { isHttpError, serverMessage } from "@/lib/is-http-error";
 import { useLiveStation } from "@/providers/live-provider";
 import type { ListenerRange } from "@/types";
 
@@ -28,7 +30,7 @@ export function ListenersTab({ stationId }: { stationId: string }) {
   const { t } = useTranslation();
   const [range, setRange] = useState<ListenerRange>("7d");
   const { listeners } = useLiveStation(stationId);
-  const { data, isLoading, isError } = useStationListenersHistory(stationId, range);
+  const { data, isLoading, isError, error } = useStationListenersHistory(stationId, range);
 
   const points = data?.points ?? [];
   const dataset = points.map((p) => ({ time: new Date(p.time).getTime(), listeners: p.listeners }));
@@ -62,7 +64,16 @@ export function ListenersTab({ stationId }: { stationId: string }) {
             <CircularProgress />
           </Box>
         ) : isError ? (
-          <Typography color="error">{t("stations:listeners_load_error")}</Typography>
+          (() => {
+            const info = isHttpError(error);
+            const server = serverMessage(error);
+            return (
+              <ErrorDetails
+                title={server ?? "Failed to load listener history"}
+                details={{ ...info, message: server ?? "Failed to load listener history" }}
+              />
+            );
+          })()
         ) : dataset.length === 0 ? (
           <Typography color="text.secondary">{t("stations:listeners_empty")}</Typography>
         ) : (

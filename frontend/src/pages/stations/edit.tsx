@@ -1,5 +1,4 @@
 import ArrowBack from "@mui/icons-material/ArrowBack";
-import Alert from "@mui/material/Alert";
 import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
 import Card from "@mui/material/Card";
@@ -10,8 +9,9 @@ import Typography from "@mui/material/Typography";
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate, useParams } from "react-router-dom";
+import { ErrorDetails } from "@/components/error-details";
 import { useStation, useUpdateStation } from "@/hooks/use-stations";
-import { isHttpError } from "@/lib/is-http-error";
+import { type HttpErrorInfo, isHttpError } from "@/lib/is-http-error";
 
 export function EditStationPage() {
   const { t } = useTranslation();
@@ -23,7 +23,7 @@ export function EditStationPage() {
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [streamUrl, setStreamUrl] = useState("");
-  const [error, setError] = useState("");
+  const [error, setError] = useState<HttpErrorInfo | null>(null);
 
   useEffect(() => {
     if (station) {
@@ -44,7 +44,7 @@ export function EditStationPage() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setError("");
+    setError(null);
 
     try {
       await updateStation.mutateAsync({
@@ -57,7 +57,8 @@ export function EditStationPage() {
       });
       navigate("/stations");
     } catch (err: unknown) {
-      setError(isHttpError(err)?.message || t("errors:station_update"));
+      const info = isHttpError(err);
+      setError({ ...info, message: info.message || t("errors:station_update") });
     }
   };
 
@@ -103,7 +104,7 @@ export function EditStationPage() {
           </Typography>
 
           <Box component="form" onSubmit={handleSubmit} sx={{ display: "flex", flexDirection: "column", gap: 2.5 }}>
-            {error && <Alert severity="error">{error}</Alert>}
+            {error && <ErrorDetails title={error.message} details={error} onClose={() => setError(null)} />}
 
             <TextField
               label={t("stations:name_label")}

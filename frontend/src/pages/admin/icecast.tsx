@@ -21,6 +21,7 @@ import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { IcecastExternalForm } from "@/components/admin/icecast-external-form";
 import { IcecastManagedForm } from "@/components/admin/icecast-managed-form";
+import { ErrorDetails } from "@/components/error-details";
 import {
   useIcecastStatus,
   useStartIcecast,
@@ -28,11 +29,13 @@ import {
   useTestIcecast,
   useUpdateIcecast,
 } from "@/hooks/use-icecast";
+import { isHttpError, serverMessage } from "@/lib/is-http-error";
+import { reportHttpError } from "@/lib/report-error";
 import { useSnackbar } from "@/providers/snackbar-provider";
 
 export function AdminIcecastPage() {
   const { t } = useTranslation();
-  const { showSnackbar } = useSnackbar();
+  const { showError } = useSnackbar();
   const { data, isLoading, isError, error, refetch } = useIcecastStatus();
   const updateMutation = useUpdateIcecast();
   const startMutation = useStartIcecast();
@@ -78,8 +81,7 @@ export function AdminIcecastPage() {
       },
       {
         onError: (err) => {
-          console.error("Failed to save Icecast settings", err);
-          showSnackbar("Failed to save Icecast settings", "error");
+          reportHttpError(showError, err, "Failed to save Icecast settings");
         },
       },
     );
@@ -97,7 +99,18 @@ export function AdminIcecastPage() {
   if (isError) {
     return (
       <Box sx={{ display: "flex", flexDirection: "column", gap: 2 }}>
-        <Alert severity="error">{error instanceof Error ? error.message : "Failed to load Icecast status"}</Alert>
+        <Alert severity="error">
+          {(() => {
+            const info = isHttpError(error);
+            const server = serverMessage(error);
+            return (
+              <ErrorDetails
+                title={server ?? "Failed to load Icecast status"}
+                details={{ ...info, message: server ?? "Failed to load Icecast status" }}
+              />
+            );
+          })()}
+        </Alert>
       </Box>
     );
   }
@@ -131,11 +144,11 @@ export function AdminIcecastPage() {
           {t("settings:icecast_settings_saved")}
         </Alert>
       )}
-      {updateMutation.isError && (
-        <Alert severity="error" onClose={updateMutation.reset}>
-          {String(updateMutation.error)}
-        </Alert>
-      )}
+      {updateMutation.isError &&
+        (() => {
+          const info = isHttpError(updateMutation.error);
+          return <ErrorDetails title={info.message} details={info} onClose={updateMutation.reset} />;
+        })()}
       {startMutation.isSuccess && (
         <Alert severity="success" onClose={startMutation.reset}>
           {startMutation.data?.message || t("settings:icecast_started")}
@@ -151,11 +164,11 @@ export function AdminIcecastPage() {
           {testMutation.data?.message || t("settings:icecast_connection_ok")}
         </Alert>
       )}
-      {testMutation.isError && (
-        <Alert severity="error" onClose={testMutation.reset}>
-          {String(testMutation.error)}
-        </Alert>
-      )}
+      {testMutation.isError &&
+        (() => {
+          const info = isHttpError(testMutation.error);
+          return <ErrorDetails title={info.message} details={info} onClose={testMutation.reset} />;
+        })()}
 
       <Card variant="outlined" sx={{ borderRadius: 3 }}>
         <CardContent
@@ -217,8 +230,7 @@ export function AdminIcecastPage() {
               onClick={() =>
                 stopMutation.mutate(undefined, {
                   onError: (err) => {
-                    console.error("Failed to stop Icecast", err);
-                    showSnackbar("Failed to stop Icecast", "error");
+                    reportHttpError(showError, err, "Failed to stop Icecast");
                   },
                 })
               }
@@ -234,8 +246,7 @@ export function AdminIcecastPage() {
               onClick={() =>
                 startMutation.mutate(undefined, {
                   onError: (err) => {
-                    console.error("Failed to start Icecast", err);
-                    showSnackbar("Failed to start Icecast", "error");
+                    reportHttpError(showError, err, "Failed to start Icecast");
                   },
                 })
               }
@@ -251,8 +262,7 @@ export function AdminIcecastPage() {
             onClick={() =>
               testMutation.mutate(undefined, {
                 onError: (err) => {
-                  console.error("Failed to test Icecast connection", err);
-                  showSnackbar("Failed to test Icecast connection", "error");
+                  reportHttpError(showError, err, "Failed to test Icecast connection");
                 },
               })
             }

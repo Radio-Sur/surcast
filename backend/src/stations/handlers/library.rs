@@ -30,7 +30,7 @@ pub async fn list_station_songs(
     let per_page = params.per_page.unwrap_or(10000).clamp(1, 100000);
     let offset = (page - 1) * per_page;
 
-    let mut conn = db.acquire().await.map_err(|e| AppError::Internal(e.to_string()))?;
+    let mut conn = db.acquire().await.map_err(|e| AppError::internal(e.to_string()))?;
     let rows = repository::find_station_songs_joined_paginated(&mut conn, station_id, per_page, offset).await?;
     let total = repository::count_station_songs(&mut conn, station_id).await?;
 
@@ -67,7 +67,7 @@ pub async fn add_station_songs(
     let station_id = resolve_station_id(&db, &station_id).await?;
     repository::verify_station_exists(&db, station_id).await?;
 
-    let mut tx = db.begin().await.map_err(|e| AppError::Internal(e.to_string()))?;
+    let mut tx = db.begin().await.map_err(|e| AppError::internal(e.to_string()))?;
 
     for artist_name in &req.artist_names {
         repository::insert_station_songs_by_artist(&mut tx, station_id, artist_name).await?;
@@ -83,7 +83,7 @@ pub async fn add_station_songs(
 
     let rows = repository::find_station_songs_joined(&mut tx, station_id).await?;
 
-    tx.commit().await.map_err(|e| AppError::Internal(e.to_string()))?;
+    tx.commit().await.map_err(|e| AppError::internal(e.to_string()))?;
 
     let songs = rows
         .into_iter()

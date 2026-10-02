@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useCreateScheduleEvent, useUpdateScheduleEvent } from "@/hooks/use-schedule-events";
-import { isHttpError } from "@/lib/is-http-error";
+import { type HttpErrorInfo, isHttpError } from "@/lib/is-http-error";
 import type { Playlist, RecurrenceType, ScheduleEvent, ScheduleSourceType } from "@/types";
 import {
   checkTimeOverlap,
@@ -77,6 +77,7 @@ export function useScheduleEventForm({
 }: UseScheduleEventFormProps) {
   const [form, setForm] = useState<FormState>({ ...defaultFormState });
   const [error, setError] = useState<string | null>(null);
+  const [errorDetails, setErrorDetails] = useState<HttpErrorInfo | null>(null);
   const { t } = useTranslation();
   const createEvent = useCreateScheduleEvent(stationId);
   const updateEvent = useUpdateScheduleEvent(stationId);
@@ -239,6 +240,7 @@ export function useScheduleEventForm({
     } catch (err: unknown) {
       const httpErr = isHttpError(err);
       const msg = httpErr?.message || t("schedule:dialog_validation_save_failed");
+      setErrorDetails(httpErr);
       if (msg.includes("overlap") || msg.includes("Conflict")) {
         setError(t("schedule:dialog_validation_overlap", { message: msg }));
       } else {
@@ -251,6 +253,7 @@ export function useScheduleEventForm({
     form,
     setForm,
     error,
+    errorDetails,
     setError,
     selectedPlaylist,
     isPlaylistSource,

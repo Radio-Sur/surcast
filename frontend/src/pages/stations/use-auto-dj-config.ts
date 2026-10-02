@@ -7,11 +7,12 @@ import {
   useUpdateAutoFill,
   useUpdateAutoFillPlaylist,
 } from "@/hooks/use-auto-fill";
+import { reportHttpError } from "@/lib/report-error";
 import { useSnackbar } from "@/providers/snackbar-provider";
 import type { Playlist, ScheduleSourceType } from "@/types";
 
 export function useAutoDjConfig(stationId: string, playlists: Playlist[]) {
-  const { showSnackbar } = useSnackbar();
+  const { showError } = useSnackbar();
   const { data: config, isLoading, isError, error } = useAutoFill(stationId);
   const updateAutoFill = useUpdateAutoFill(stationId);
   const addAutoFillPlaylist = useAddAutoFillPlaylist(stationId);
@@ -62,8 +63,7 @@ export function useAutoDjConfig(stationId: string, playlists: Playlist[]) {
         {
           onSettled: () => setSaving(false),
           onError: (err) => {
-            console.error("Failed to save auto-DJ config", err);
-            showSnackbar("Failed to save auto-DJ configuration", "error");
+            reportHttpError(showError, err, "Failed to save auto-DJ configuration");
           },
         },
       );

@@ -2,5 +2,15 @@
   "station_create": "Failed to create station",
   "station_update": "Failed to update station",
   "login": "Login failed",
-  "setup": "Setup failed"
+  "setup": "Setup failed",
+  "show_details": "Show error details",
+  "hide_details": "Hide details",
+  "operation_failed": "Operation failed",
+  "category_auth": "Authorization",
+  "category_validation": "Invalid data",
+  "category_not_found": "Not found",
+  "category_conflict": "Conflict",
+  "category_stream": "Playback",
+  "category_icecast": "Streaming server",
+  "category_server": "Server error"
 }

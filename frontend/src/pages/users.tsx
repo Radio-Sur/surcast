@@ -22,14 +22,17 @@ import TextField from "@mui/material/TextField";
 import Typography from "@mui/material/Typography";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
+import { ErrorDetails } from "@/components/error-details";
 import { RoleChip } from "@/components/role-chip";
 import { useAuth } from "@/hooks/use-auth";
 import { useDeleteUser, useUpdateUser, useUsers } from "@/hooks/use-users";
+import { isHttpError, serverMessage } from "@/lib/is-http-error";
+import { reportHttpError } from "@/lib/report-error";
 import { useSnackbar } from "@/providers/snackbar-provider";
 
 export function UsersPage() {
   const { t } = useTranslation();
-  const { showSnackbar } = useSnackbar();
+  const { showError } = useSnackbar();
   const { data: users, isLoading, isError, error } = useUsers();
   const updateUser = useUpdateUser();
   const deleteUser = useDeleteUser();
@@ -69,8 +72,7 @@ export function UsersPage() {
       await updateUser.mutateAsync({ id: editUser, data: { name: editName, role: editRole } });
       setEditUser(null);
     } catch (err) {
-      console.error("Failed to update user", err);
-      showSnackbar("Failed to update user", "error");
+      reportHttpError(showError, err, "Failed to update user");
     }
   };
 
@@ -80,8 +82,7 @@ export function UsersPage() {
         await deleteUser.mutateAsync(deleteId);
         setDeleteId(null);
       } catch (err) {
-        console.error("Failed to delete user", err);
-        showSnackbar("Failed to delete user", "error");
+        reportHttpError(showError, err, "Failed to delete user");
       }
     }
   };
@@ -98,7 +99,18 @@ export function UsersPage() {
   if (isError) {
     return (
       <Box sx={{ display: "flex", flexDirection: "column", gap: 2 }}>
-        <Alert severity="error">{error instanceof Error ? error.message : "Failed to load users"}</Alert>
+        <Alert severity="error">
+          {(() => {
+            const info = isHttpError(error);
+            const server = serverMessage(error);
+            return (
+              <ErrorDetails
+                title={server ?? "Failed to load users"}
+                details={{ ...info, message: server ?? "Failed to load users" }}
+              />
+            );
+          })()}
+        </Alert>
       </Box>
     );
   }

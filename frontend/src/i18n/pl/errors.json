@@ -1,6 +1,16 @@
 {
   "station_create": "Nie udało się utworzyć stacji",
   "station_update": "Nie udało się zaktualizować stacji",
-  "login": "Logowanie nieudane",
-  "setup": "Konfiguracja nieudana"
+  "login": "Logowanie nie powiodło się",
+  "setup": "Konfiguracja nie powiodła się",
+  "show_details": "Pokaż szczegóły błędu",
+  "hide_details": "Ukryj szczegóły",
+  "operation_failed": "Operacja nie powiodła się",
+  "category_auth": "Autoryzacja",
+  "category_validation": "Nieprawidłowe dane",
+  "category_not_found": "Nie znaleziono",
+  "category_conflict": "Konflikt",
+  "category_stream": "Odtwarzanie",
+  "category_icecast": "Serwer strumienia",
+  "category_server": "Błąd serwera"
 }

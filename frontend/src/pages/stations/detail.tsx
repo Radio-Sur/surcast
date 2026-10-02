@@ -14,8 +14,10 @@ import Tabs from "@mui/material/Tabs";
 import Typography from "@mui/material/Typography";
 import { useTranslation } from "react-i18next";
 import { useNavigate, useParams } from "react-router-dom";
+import { ErrorDetails } from "@/components/error-details";
 import { ScheduleSection } from "@/components/schedule/schedule-section";
 import { useStationDetail } from "@/hooks/use-station-detail";
+import { isHttpError, serverMessage } from "@/lib/is-http-error";
 import { AutoDJSection } from "./auto-dj-section";
 import { LibraryTab } from "./library-tab";
 import { ListenersTab } from "./listeners-tab";
@@ -54,7 +56,16 @@ export function StationDetailPage() {
     return (
       <Box sx={{ display: "flex", flexDirection: "column", gap: 2 }}>
         <Alert severity="error">
-          {d.stationLoadError instanceof Error ? d.stationLoadError.message : "Failed to load station details"}
+          {(() => {
+            const info = isHttpError(d.stationLoadError);
+            const server = serverMessage(d.stationLoadError);
+            return (
+              <ErrorDetails
+                title={server ?? "Failed to load station details"}
+                details={{ ...info, message: server ?? "Failed to load station details" }}
+              />
+            );
+          })()}
         </Alert>
       </Box>
     );
@@ -75,13 +86,15 @@ export function StationDetailPage() {
     <Box sx={{ display: "flex", flexDirection: "column", gap: 3 }}>
       <StationHeader
         station={station}
-        playing={!!d.streamStatus?.playing}
+        playing={d.playing}
+        busy={d.streamPlay.isPending || d.streamPause.isPending || d.streamRestart.isPending}
         onBack={() => navigate("/stations")}
         onToggle={() => {
-          if (d.streamStatus?.playing) {
+          if (d.playing) {
             d.setConfirmAction("pause");
           } else {
             d.streamPlay.mutate(undefined, {
+              onSuccess: () => d.handleStreamPlaySuccess(),
               onError: (err) => d.handleMutationError(err, "start stream"),
             });
           }
@@ -109,7 +122,16 @@ export function StationDetailPage() {
       {d.tab === 0 &&
         (d.libraryError ? (
           <Alert severity="error">
-            {d.libraryLoadError instanceof Error ? d.libraryLoadError.message : "Failed to load station library"}
+            {(() => {
+              const info = isHttpError(d.libraryLoadError);
+              const server = serverMessage(d.libraryLoadError);
+              return (
+                <ErrorDetails
+                  title={server ?? "Failed to load station library"}
+                  details={{ ...info, message: server ?? "Failed to load station library" }}
+                />
+              );
+            })()}
           </Alert>
         ) : (
           <LibraryTab
@@ -130,6 +152,7 @@ export function StationDetailPage() {
           stationId={station.id}
           queueSections={d.queueSections}
           streamStatus={d.streamStatus}
+          playing={d.playing}
           connected={d.connected}
           elapsed={d.elapsed}
           listeners={d.liveListeners}
@@ -197,18 +220,25 @@ export function StationDetailPage() {
 
       <StreamConfirmDialog
         action={d.confirmAction}
-        isPending={false}
+        isPending={d.streamPause.isPending || d.streamRestart.isPending}
         onConfirm={() => {
           if (d.confirmAction === "pause") {
             d.streamPause.mutate(undefined, {
+              onSuccess: () => {
+                d.handleStreamPauseSuccess();
+                d.setConfirmAction(null);
+              },
               onError: (err) => d.handleMutationError(err, "pause stream"),
             });
           } else {
             d.streamRestart.mutate(undefined, {
+              onSuccess: () => {
+                d.handleStreamRestartSuccess();
+                d.setConfirmAction(null);
+              },
               onError: (err) => d.handleMutationError(err, "restart stream"),
             });
           }
-          d.setConfirmAction(null);
         }}
         onClose={() => d.setConfirmAction(null)}
       />
