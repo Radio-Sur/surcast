@@ -37,7 +37,7 @@ async fn fetch_queue_items(db: &sqlx::PgPool, station_id: Uuid, song_ids: Option
                 album,
                 duration,
                 mime_type,
-                cover_path,
+                has_cover,
                 origin_playlist_id,
                 playlist_name,
                 is_auto_dj,
@@ -51,7 +51,7 @@ async fn fetch_queue_items(db: &sqlx::PgPool, station_id: Uuid, song_ids: Option
                     artist,
                     album,
                     duration,
-                    has_cover: !cover_path.is_empty(),
+                    has_cover,
                     mime_type,
                     origin_playlist_id,
                     playlist_name,
@@ -94,18 +94,24 @@ pub async fn add_songs_to_queue(
             return Err(AppError::bad_request(format!("Song {song_id} is not in this station's library")));
         }
     }
+    let missing = crate::songs::repository::find_missing_song_ids(&db, &req.song_ids).await?;
+    if let Some(song_id) = missing.first() {
+        return Err(AppError::conflict(format!(
+            "Song {song_id} has no file on disk and cannot be queued — restore the file, then retry"
+        )));
+    }
 
     queue_repo::trim_consumed_queue_items(&db, station_id).await?;
     let start_position = queue_repo::queue_next_position(&db, station_id).await?;
     queue_repo::insert_queue_items_batch(&db, station_id, &req.song_ids, start_position, req.playlist_id).await?;
 
     for &song_id in &req.song_ids {
-        crate::songs::analysis::spawn_analysis(&db, song_id, station_id, &config.upload_dir);
+        crate::songs::analysis::spawn_analysis(&db, song_id, station_id, &config.music_dir);
     }
 
     let items = fetch_queue_items(&db, station_id, Some(&req.song_ids)).await?;
 
-    sync_streamer_songs(&db, &streamers, &lifecycle, &config.upload_dir, station_id, false).await?;
+    sync_streamer_songs(&db, &streamers, &lifecycle, &config.music_dir, station_id, false).await?;
 
     Ok((StatusCode::CREATED, Json(items)))
 }
@@ -121,7 +127,7 @@ pub async fn remove_song_from_queue(
     let station_id = resolve_station_id(&db, &station_id).await?;
     queue_repo::delete_queue_by_id(&db, item_id, station_id).await?;
 
-    sync_streamer_songs(&db, &streamers, &lifecycle, &config.upload_dir, station_id, true).await?;
+    sync_streamer_songs(&db, &streamers, &lifecycle, &config.music_dir, station_id, true).await?;
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -143,7 +149,7 @@ pub async fn reorder_queue(
 
     let items = fetch_queue_items(&db, station_id, None).await?;
 
-    sync_streamer_songs(&db, &streamers, &lifecycle, &config.upload_dir, station_id, true).await?;
+    sync_streamer_songs(&db, &streamers, &lifecycle, &config.music_dir, station_id, true).await?;
 
     Ok(Json(items))
 }
@@ -170,16 +176,23 @@ pub async fn insert_song_at_queue_position(
             req.song_id
         )));
     }
+    let missing = crate::songs::repository::find_missing_song_ids(&db, &[req.song_id]).await?;
+    if !missing.is_empty() {
+        return Err(AppError::conflict(format!(
+            "Song {} has no file on disk and cannot be queued — restore the file, then retry",
+            req.song_id
+        )));
+    }
 
     queue_repo::shift_queue_positions_from(&db, station_id, req.position).await?;
     queue_repo::insert_queue_item_at(&db, station_id, req.song_id, req.position).await?;
     queue_repo::sync_current_song_index_after_renumber(&db, station_id).await?;
 
-    crate::songs::analysis::spawn_analysis(&db, req.song_id, station_id, &config.upload_dir);
+    crate::songs::analysis::spawn_analysis(&db, req.song_id, station_id, &config.music_dir);
 
     let items = fetch_queue_items(&db, station_id, None).await?;
 
-    sync_streamer_songs(&db, &streamers, &lifecycle, &config.upload_dir, station_id, true).await?;
+    sync_streamer_songs(&db, &streamers, &lifecycle, &config.music_dir, station_id, true).await?;
 
     Ok(Json(items))
 }
@@ -203,7 +216,7 @@ pub async fn remove_playlist_songs_from_queue(
     }
     queue_repo::sync_current_song_index_after_renumber(&db, station_id).await?;
 
-    sync_streamer_songs(&db, &streamers, &lifecycle, &config.upload_dir, station_id, true).await?;
+    sync_streamer_songs(&db, &streamers, &lifecycle, &config.music_dir, station_id, true).await?;
 
     Ok(StatusCode::NO_CONTENT)
 }

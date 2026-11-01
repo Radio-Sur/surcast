@@ -1,9 +1,14 @@
 import type {
   ApiKey,
+  DirectoryListing,
+  FileEntry,
+  FileSongRef,
+  FolderEntry,
   Playlist,
   QueueItem,
   ScheduleEvent,
   Song,
+  SongDetails,
   Station,
   StationSong,
   StreamStatus,
@@ -61,6 +66,9 @@ export function fakeSong(overrides?: Partial<Song>): Song {
     mime_type: "audio/mpeg",
     has_cover: false,
     uploaded_by: "1",
+    origin: "api",
+    file_path: "test-song.mp3",
+    missing_since: null,
     created_at: "2026-01-01T00:00:00Z",
     updated_at: "2026-01-01T00:00:00Z",
     station_ids: [],
@@ -172,5 +180,65 @@ export function fakeAuthResponse(overrides?: { user?: Partial<User>; access_toke
     access_token: "mock-access-token",
     refresh_token: "mock-refresh-token",
     user: fakeUser(overrides?.user),
+  };
+}
+
+export function fakeFileSongRef(overrides?: Partial<FileSongRef>): FileSongRef {
+  return {
+    id: genId(),
+    title: "Test Song",
+    artist: "Test Artist",
+    album: "Test Album",
+    duration: 180,
+    has_cover: false,
+    origin: "directory",
+    missing_since: null,
+    ...overrides,
+  };
+}
+
+export function fakeFolderEntry(overrides?: Partial<FolderEntry>): FolderEntry {
+  const name = overrides?.name ?? "folder";
+  return { name, path: overrides?.path ?? name, covers: [], ...overrides };
+}
+
+export function fakeFileEntry(overrides?: Partial<FileEntry>): FileEntry {
+  const name = overrides?.name ?? "file.mp3";
+  return {
+    name,
+    path: overrides?.path ?? name,
+    size: 1024,
+    modified_at: 1767225600000,
+    is_audio: true,
+    song: null,
+    ...overrides,
+  };
+}
+
+export function fakeDirectoryListing(overrides?: Partial<DirectoryListing>): DirectoryListing {
+  return {
+    path: "",
+    parent: null,
+    folders: [],
+    files: [],
+    ...overrides,
+  };
+}
+
+export function fakeSongDetails(overrides?: Partial<SongDetails>): SongDetails {
+  return {
+    ...fakeSong(overrides),
+    extension: "mp3",
+    track: {
+      container: "Mpeg",
+      duration_ms: 180000,
+      bitrate_kbps: 320,
+      sample_rate_hz: 44100,
+      channels: 2,
+      bit_depth: null,
+      has_cover: false,
+      tags: [{ key: "ARTIST", value: "Test Artist" }],
+    },
+    ...overrides,
   };
 }

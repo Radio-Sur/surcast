@@ -164,9 +164,9 @@ pub async fn update_station_fields(db: &PgPool, params: &UpdateStationParams) ->
 pub async fn find_station_songs_joined(
     conn: &mut PgConnection,
     station_id: Uuid,
-) -> Result<Vec<(Uuid, Uuid, String, String, String, i32, String, String)>, AppError> {
-    sqlx::query_as::<_, (Uuid, Uuid, String, String, String, i32, String, String)>(
-        r#"SELECT ss.id, ss.song_id, s.title, s.artist, s.album, s.duration, s.mime_type, s.cover_path
+) -> Result<Vec<(Uuid, Uuid, String, String, String, i32, String, bool)>, AppError> {
+    sqlx::query_as::<_, (Uuid, Uuid, String, String, String, i32, String, bool)>(
+        r#"SELECT ss.id, ss.song_id, s.title, s.artist, s.album, s.duration, s.mime_type, s.has_cover
            FROM station_songs ss
            JOIN songs s ON s.id = ss.song_id
            WHERE ss.station_id = $1
@@ -183,9 +183,9 @@ pub async fn find_station_songs_joined_paginated(
     station_id: Uuid,
     limit: i64,
     offset: i64,
-) -> Result<Vec<(Uuid, Uuid, String, String, String, i32, String, String)>, AppError> {
-    sqlx::query_as::<_, (Uuid, Uuid, String, String, String, i32, String, String)>(
-        r#"SELECT ss.id, ss.song_id, s.title, s.artist, s.album, s.duration, s.mime_type, s.cover_path
+) -> Result<Vec<(Uuid, Uuid, String, String, String, i32, String, bool)>, AppError> {
+    sqlx::query_as::<_, (Uuid, Uuid, String, String, String, i32, String, bool)>(
+        r#"SELECT ss.id, ss.song_id, s.title, s.artist, s.album, s.duration, s.mime_type, s.has_cover
            FROM station_songs ss
            JOIN songs s ON s.id = ss.song_id
            WHERE ss.station_id = $1
@@ -213,9 +213,9 @@ pub async fn find_station_songs_joined_by_ids(
     db: &PgPool,
     station_id: Uuid,
     song_ids: &[Uuid],
-) -> Result<Vec<(Uuid, Uuid, String, String, String, i32, String, String)>, AppError> {
-    sqlx::query_as::<_, (Uuid, Uuid, String, String, String, i32, String, String)>(
-        r#"SELECT ss.id, ss.song_id, s.title, s.artist, s.album, s.duration, s.mime_type, s.cover_path
+) -> Result<Vec<(Uuid, Uuid, String, String, String, i32, String, bool)>, AppError> {
+    sqlx::query_as::<_, (Uuid, Uuid, String, String, String, i32, String, bool)>(
+        r#"SELECT ss.id, ss.song_id, s.title, s.artist, s.album, s.duration, s.mime_type, s.has_cover
            FROM station_songs ss
            JOIN songs s ON s.id = ss.song_id
            WHERE ss.station_id = $1 AND ss.song_id = ANY($2)

@@ -52,7 +52,13 @@ export interface Song {
   file_size: number;
   mime_type: string;
   has_cover: boolean;
-  uploaded_by: string;
+  uploaded_by: string | null;
+  /** `api` for panel/API uploads, `directory` for files dropped straight into the music folder. */
+  origin: string;
+  /** Relative path inside the music folder (original filename kept). */
+  file_path: string;
+  /** Set when the file is gone from disk; the row and its history stay. */
+  missing_since: string | null;
   created_at: string;
   updated_at: string;
   station_ids: string[];
@@ -60,15 +66,42 @@ export interface Song {
 
 export type UploadJobStatusValue = "processing" | "done" | "error";
 
+export interface DuplicateSong {
+  song_id: string;
+  title: string;
+  artist: string;
+  file_path: string;
+}
+
 export interface UploadJobStatus {
   id: string;
   status: UploadJobStatusValue;
   total: number;
   processed: number;
   failed: number;
+  skipped: number;
   current_file: string | null;
   error: string | null;
   song_ids: string[];
+  duplicates: DuplicateSong[];
+}
+
+export interface UploadSongResult {
+  created: boolean;
+  song: Song;
+  duplicate: DuplicateSong | null;
+}
+
+export interface ScanReport {
+  throttled: boolean;
+  scanned_files: number;
+  added: number;
+  renamed: number;
+  reimported: number;
+  marked_missing: number;
+  restored: number;
+  skipped_duplicates: number;
+  backfilled: number;
 }
 
 export interface StationSong {
@@ -309,4 +342,64 @@ export interface AutoFillConfig {
   min_song_gap: number;
   songs_ahead: number;
   weighted_playlists: AutoFillPlaylistEntry[];
+}
+
+export type FileSortKey = "name" | "size" | "modified" | "type";
+export type SortOrder = "asc" | "desc";
+
+/** Song metadata attached to a file in the library browser. */
+export interface FileSongRef {
+  id: string;
+  title: string;
+  artist: string;
+  album: string;
+  duration: number;
+  has_cover: boolean;
+  origin: string;
+  missing_since: string | null;
+}
+
+export interface FolderEntry {
+  name: string;
+  path: string;
+  /** Song ids with distinct embedded covers found below this folder (max 4). */
+  covers: string[];
+}
+
+export interface FileEntry {
+  name: string;
+  path: string;
+  size: number;
+  /** Unix milliseconds, null when unavailable. */
+  modified_at: number | null;
+  is_audio: boolean;
+  song: FileSongRef | null;
+}
+
+export interface DirectoryListing {
+  path: string;
+  parent: string | null;
+  folders: FolderEntry[];
+  files: FileEntry[];
+}
+
+export interface SongTagPair {
+  key: string;
+  value: string;
+}
+
+export interface TrackDetails {
+  container: string | null;
+  duration_ms: number | null;
+  bitrate_kbps: number | null;
+  sample_rate_hz: number | null;
+  channels: number | null;
+  bit_depth: number | null;
+  has_cover: boolean;
+  tags: SongTagPair[];
+}
+
+export interface SongDetails extends Song {
+  extension: string | null;
+  track: TrackDetails | null;
 }

@@ -149,22 +149,7 @@ fn finite(v: f64) -> Option<f32> {
     }
 }
 
-#[derive(Clone, Copy)]
-enum DurationFallback {
-    Discover,
-    AlreadyDiscovered(Option<i32>),
-}
-
-impl DurationFallback {
-    fn known(self) -> Option<i32> {
-        match self {
-            Self::Discover => None,
-            Self::AlreadyDiscovered(duration) => duration,
-        }
-    }
-}
-
-async fn analyze_audio_inner(audio_full_path: &str, duration_fallback: DurationFallback) -> SongAnalysis {
+async fn analyze_audio_inner(audio_full_path: &str) -> SongAnalysis {
     let path = std::path::PathBuf::from(audio_full_path);
     let opts = autocue_rs::CueOptions::default();
 
@@ -174,10 +159,7 @@ async fn analyze_audio_inner(audio_full_path: &str, duration_fallback: DurationF
             .as_ref()
             .ok()
             .and_then(|cues| duration_seconds(cues.duration))
-            .or_else(|| match duration_fallback {
-                DurationFallback::Discover => discover_duration(&path),
-                DurationFallback::AlreadyDiscovered(duration) => duration,
-            });
+            .or_else(|| discover_duration(&path));
         (cues, duration)
     })
     .await;
@@ -207,7 +189,7 @@ async fn analyze_audio_inner(audio_full_path: &str, duration_fallback: DurationF
         Err(error) => {
             tracing::warn!(path = %audio_full_path, %error, "audio analysis task failed, using defaults");
             SongAnalysis {
-                duration: duration_fallback.known(),
+                duration: None,
                 ..Default::default()
             }
         }
@@ -217,18 +199,14 @@ async fn analyze_audio_inner(audio_full_path: &str, duration_fallback: DurationF
 /// Runs autocue-rs cue/loudness analysis off the async runtime and discovers a
 /// fallback duration only if cue analysis fails.
 pub async fn analyze_audio(audio_full_path: &str) -> SongAnalysis {
-    analyze_audio_inner(audio_full_path, DurationFallback::Discover).await
-}
-
-pub(crate) async fn analyze_audio_with_discovered_duration(audio_full_path: &str, duration: Option<i32>) -> SongAnalysis {
-    analyze_audio_inner(audio_full_path, DurationFallback::AlreadyDiscovered(duration)).await
+    analyze_audio_inner(audio_full_path).await
 }
 
 /// Fire-and-forget: analyze a song in the background when it is added to a
 /// station's queue. Only runs when the station uses the `autocue` transition
 /// mode and the song has no analysis yet. Never fails — all errors are logged
 /// and ignored, leaving the song un-analyzed for a later retry.
-pub async fn ensure_analyzed(db: PgPool, song_id: Uuid, station_id: Uuid, upload_dir: String) {
+pub async fn ensure_analyzed(db: PgPool, song_id: Uuid, station_id: Uuid, music_dir: String) {
     let station = match crate::stations::repository::find_station_by_id(&db, station_id).await {
         Ok(Some(s)) => s,
         _ => {
@@ -251,7 +229,7 @@ pub async fn ensure_analyzed(db: PgPool, song_id: Uuid, station_id: Uuid, upload
         return;
     }
 
-    let audio_full_path = resolve_audio_path(&upload_dir, &song.file_path);
+    let audio_full_path = resolve_audio_path(&music_dir, &song.file_path);
     let analysis = analyze_audio(&audio_full_path).await;
     if analysis.analyzed_at.is_none() {
         return;
@@ -264,8 +242,8 @@ pub async fn ensure_analyzed(db: PgPool, song_id: Uuid, station_id: Uuid, upload
 
 /// Spawns [`ensure_analyzed`] on the background runtime. This is the fire-and-
 /// forget entry point used at every place songs are added to a station queue.
-pub fn spawn_analysis(db: &PgPool, song_id: Uuid, station_id: Uuid, upload_dir: &str) {
-    tokio::spawn(ensure_analyzed(db.clone(), song_id, station_id, upload_dir.to_string()));
+pub fn spawn_analysis(db: &PgPool, song_id: Uuid, station_id: Uuid, music_dir: &str) {
+    tokio::spawn(ensure_analyzed(db.clone(), song_id, station_id, music_dir.to_string()));
 }
 
 #[cfg(test)]

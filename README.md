@@ -34,7 +34,7 @@ Copy `.env.example` to `.env` and adjust the values:
 | `JWT_REFRESH_EXPIRY`  | Refresh token lifetime (seconds)              | `604800`                    |
 | `SERVER_HOST`         | Backend bind address                          | `0.0.0.0`                   |
 | `SERVER_PORT`         | Backend port                                  | `3001`                      |
-| `UPLOAD_DIR`          | Directory for uploaded audio                  | `./../uploads`              |
+| `MUSIC_DIR`           | Music library directory (original filenames, subfolders allowed) | `./music` |
 | `RUST_LOG`            | Logging directives (debug opt-in: `surcast_backend=debug,tower_http=debug`) | `surcast_backend=info,tower_http=warn` |
 | `LASTFM_API_KEY`      | Optional Last.fm key                          | –                            |
 | `ICECAST_PUBLIC_URL`  | Public base URL of the Icecast stream         | – (falls back to `<host>:8000`) |

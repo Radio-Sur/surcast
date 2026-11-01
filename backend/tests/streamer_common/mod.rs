@@ -195,7 +195,8 @@ impl StreamerTestApp {
         let port = free_port();
         let icecast = IcecastManager::new(icecast_dir.path().into());
         let mut config = crate::api_common::test_config();
-        config.upload_dir = files.path().display().to_string();
+        // Test audio lands in <files>/audio.
+        config.music_dir = files.path().join("audio").display().to_string();
         let client = reqwest::Client::builder().timeout(Duration::from_secs(5)).build().unwrap();
         // Keep test DB acquisition immediately before ownership transfer into
         // Self: there must be no fallible operation in between.
@@ -331,7 +332,7 @@ impl StreamerTestApp {
             .ok_or_else(|| failure(format!("login response has no access token; body: {body}")))?;
         // Model the production boot path: every station persisted as started
         // is started again (main.rs runs the same restore after Icecast is up).
-        surcast_backend::stations::handlers::stream::restore_started_stations(&self.db, &streamers, &lifecycle, &self.config.upload_dir)
+        surcast_backend::stations::handlers::stream::restore_started_stations(&self.db, &streamers, &lifecycle, &self.config.music_dir)
             .await;
         self.session = Some(BackendSession {
             server,

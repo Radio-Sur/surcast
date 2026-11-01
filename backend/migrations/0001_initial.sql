@@ -74,8 +74,20 @@ CREATE TABLE IF NOT EXISTS songs (
     file_path TEXT NOT NULL,
     file_size BIGINT NOT NULL DEFAULT 0,
     mime_type VARCHAR(100) NOT NULL DEFAULT 'audio/mpeg',
-    cover_path TEXT NOT NULL DEFAULT '',
-    uploaded_by UUID NOT NULL REFERENCES users(id),
+    -- Whether the audio file carries embedded cover art. Covers are read
+    -- straight from the file's tags when requested (nothing is stored).
+    has_cover BOOLEAN NOT NULL DEFAULT false,
+    -- Where the song came from: 'api' (panel/API upload) or 'directory'
+    -- (file dropped straight into MUSIC_DIR, e.g. over FTP).
+    origin TEXT NOT NULL DEFAULT 'api',
+    -- SHA-256 of the audio bytes. Used for duplicate detection and for
+    -- recognizing renames/moves done outside the panel.
+    audio_hash TEXT,
+    -- Set when the file is gone from disk (lazy scanner). The row, queue
+    -- entries and history are kept; playback paths must skip such songs.
+    missing_since TIMESTAMPTZ,
+    -- Directory imports have no uploading user.
+    uploaded_by UUID REFERENCES users(id),
     cue_in DOUBLE PRECISION NOT NULL DEFAULT 0,
     cue_out DOUBLE PRECISION NOT NULL DEFAULT 0,
     cross_start_next DOUBLE PRECISION NOT NULL DEFAULT 0,
@@ -92,6 +104,32 @@ CREATE TABLE IF NOT EXISTS songs (
 );
 
 CREATE INDEX IF NOT EXISTS idx_songs_uploaded_by ON songs(uploaded_by);
+CREATE INDEX IF NOT EXISTS idx_songs_audio_hash ON songs(audio_hash);
+CREATE INDEX IF NOT EXISTS idx_songs_missing ON songs(missing_since) WHERE missing_since IS NOT NULL;
+
+-- ---------------------------------------------------------------
+-- Library management: lazy scanner state
+-- ---------------------------------------------------------------
+-- Every audio file seen on disk gets a row here, so the lazy scanner can
+-- tell new / changed / renamed / deleted files apart without re-hashing
+-- everything on every scan.
+CREATE TABLE IF NOT EXISTS library_files (
+    path TEXT PRIMARY KEY,
+    song_id UUID REFERENCES songs(id) ON DELETE SET NULL,
+    file_hash TEXT,
+    file_size BIGINT NOT NULL DEFAULT 0,
+    mtime BIGINT NOT NULL DEFAULT 0,
+    scanned_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_library_files_hash ON library_files(file_hash);
+CREATE INDEX IF NOT EXISTS idx_library_files_song ON library_files(song_id);
+
+-- Single-row throttle state for the lazy scanner.
+CREATE TABLE IF NOT EXISTS library_scan (
+    key TEXT PRIMARY KEY,
+    last_scan_at TIMESTAMPTZ
+);
 
 -- ---------------------------------------------------------------
 -- Playlists
@@ -261,6 +299,9 @@ CREATE TABLE IF NOT EXISTS upload_jobs (
     current_file TEXT,
     error TEXT,
     song_ids JSONB NOT NULL DEFAULT '[]',
+    -- Upload jobs additionally report skipped duplicates awaiting confirmation.
+    duplicates JSONB NOT NULL DEFAULT '[]',
+    skipped INTEGER NOT NULL DEFAULT 0,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );

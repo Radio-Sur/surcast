@@ -75,7 +75,7 @@ impl StationStreamer {
         station_id: Uuid,
         db: PgPool,
         prebuffer_bytes: i32,
-        upload_dir: &str,
+        music_dir: &str,
         factory: Arc<dyn PlaybackPipelineFactory>,
     ) -> Result<Arc<Self>, PipelineError> {
         let (status_tx, _) = broadcast::channel(64);
@@ -100,7 +100,7 @@ impl StationStreamer {
         let queue = Arc::new(QueueManager::new_with_cursor(
             db.clone(),
             station_id,
-            upload_dir.into(),
+            music_dir.into(),
             songs,
             QueueCursor {
                 current_queue_item_id,

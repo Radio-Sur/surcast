@@ -51,7 +51,7 @@ pub async fn remove_song_station(
     // Same removal semantics as `remove_station_song` (station library
     // removal): reload a live runtime's queue and notify no-runtime
     // observers — a stopped subscriber must see the queue shrink.
-    sync_streamer_songs(&db, &streamers, &lifecycle, &config.upload_dir, station_id, true).await?;
+    sync_streamer_songs(&db, &streamers, &lifecycle, &config.music_dir, station_id, true).await?;
 
     Ok(StatusCode::NO_CONTENT)
 }

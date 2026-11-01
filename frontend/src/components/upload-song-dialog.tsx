@@ -25,11 +25,12 @@ import { useTranslation } from "react-i18next";
 import { reportHttpError } from "@/lib/report-error";
 import { uploadsService } from "@/lib/services/uploads";
 import { useSnackbar } from "@/providers/snackbar-provider";
-import type { Station, UploadJobStatus } from "@/types";
+import type { DuplicateSong, Station, UploadJobStatus } from "@/types";
 
 export interface UploadFinished {
   created: number;
   failed: number;
+  skipped: number;
 }
 
 const AUDIO_EXTS = new Set(["mp3", "wav", "ogg", "flac", "aac", "m4a", "wma", "opus"]);
@@ -64,6 +65,9 @@ export function UploadSongDialog({
   const [starting, setStarting] = useState(false);
   const [jobId, setJobId] = useState<string | null>(null);
   const [jobStatus, setJobStatus] = useState<UploadJobStatus | null>(null);
+  const [duplicates, setDuplicates] = useState<DuplicateSong[] | null>(null);
+  const [pendingResult, setPendingResult] = useState<UploadFinished | null>(null);
+  const forcedRef = useRef(false);
   const { t } = useTranslation();
   const { showSnackbar, showError } = useSnackbar();
 
@@ -75,6 +79,9 @@ export function UploadSongDialog({
     setStarting(false);
     setJobId(null);
     setJobStatus(null);
+    setDuplicates(null);
+    setPendingResult(null);
+    forcedRef.current = false;
   }, [open]);
 
   const resetFormRef = useRef<() => void>(() => {});
@@ -94,11 +101,21 @@ export function UploadSongDialog({
         if (cancelled) return;
         setJobStatus(status);
         if (status.status === "done") {
-          setStarting(false);
-          setJobId(null);
-          resetFormRef.current();
-          onFinishedRef.current({ created: status.processed, failed: status.failed });
-          onCloseRef.current();
+          const result = { created: status.processed, failed: status.failed, skipped: status.skipped };
+          if (status.duplicates.length > 0 && !forcedRef.current) {
+            // Duplicates await confirmation: keep the selected files so the
+            // user can resubmit with allow_duplicate.
+            setStarting(false);
+            setJobId(null);
+            setPendingResult(result);
+            setDuplicates(status.duplicates);
+          } else {
+            setStarting(false);
+            setJobId(null);
+            resetFormRef.current();
+            onFinishedRef.current(result);
+            onCloseRef.current();
+          }
         } else if (status.status === "error") {
           setStarting(false);
           setJobId(null);
@@ -199,7 +216,18 @@ export function UploadSongDialog({
 
   const handleClose = () => {
     resetForm();
+    setDuplicates(null);
+    setPendingResult(null);
+    forcedRef.current = false;
     onClose();
+  };
+
+  const handleDuplicatesCancel = () => {
+    // Keep what the first job created, drop the duplicates.
+    if (pendingResult) {
+      onFinishedRef.current(pendingResult);
+    }
+    handleClose();
   };
 
   const working = starting || jobId !== null;
@@ -210,15 +238,21 @@ export function UploadSongDialog({
   const trackCount = audioCount + (zipFile ? 1 : 0);
   const singleEntry = audioCount === 1 && !zipFile;
 
-  const handleUpload = async () => {
+  const handleUpload = async (allowDuplicate = false) => {
     if (trackCount === 0) return;
 
+    forcedRef.current = allowDuplicate;
+    setDuplicates(null);
+    setPendingResult(null);
     const formData = new FormData();
     for (const f of files) {
       formData.append("file", f);
     }
     if (zipFile) {
       formData.append("file", zipFile);
+    }
+    if (allowDuplicate) {
+      formData.append("allow_duplicate", "true");
     }
     if (singleEntry) {
       if (singleTitle) formData.append("title", singleTitle);
@@ -446,7 +480,7 @@ export function UploadSongDialog({
           {t("common:cancel")}
         </Button>
         <Button
-          onClick={handleUpload}
+          onClick={() => handleUpload()}
           variant="contained"
           disabled={trackCount === 0 || working}
           startIcon={working ? <CircularProgress size={16} color="inherit" /> : undefined}
@@ -454,6 +488,42 @@ export function UploadSongDialog({
           {uploadLabel()}
         </Button>
       </DialogActions>
+
+      <Dialog
+        open={duplicates !== null}
+        onClose={handleDuplicatesCancel}
+        maxWidth="sm"
+        fullWidth
+        slotProps={{ paper: { sx: { borderRadius: 3 } } }}
+      >
+        <DialogTitle sx={{ px: 3, pt: 3, pb: 0 }}>{t("songs:duplicates_title")}</DialogTitle>
+        <DialogContent sx={{ px: 3, pt: 3, pb: 2 }}>
+          <DialogContentText sx={{ mb: 2 }}>{t("songs:duplicates_message")}</DialogContentText>
+          <List dense disablePadding sx={{ maxHeight: 220, overflowY: "auto" }}>
+            {(duplicates ?? []).map((d) => (
+              <ListItem key={d.song_id} sx={{ px: 1 }}>
+                <ListItemIcon sx={{ minWidth: 32 }}>
+                  <MusicNote fontSize="small" color="primary" />
+                </ListItemIcon>
+                <ListItemText
+                  primary={d.title || d.file_path}
+                  secondary={d.file_path}
+                  slotProps={{
+                    primary: { variant: "body2", noWrap: true },
+                    secondary: { variant: "caption", noWrap: true },
+                  }}
+                />
+              </ListItem>
+            ))}
+          </List>
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 3 }}>
+          <Button onClick={handleDuplicatesCancel}>{t("common:cancel")}</Button>
+          <Button onClick={() => handleUpload(true)} variant="contained" disabled={working}>
+            {t("songs:upload_anyway")}
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Dialog>
   );
 }

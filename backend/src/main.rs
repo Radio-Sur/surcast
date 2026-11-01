@@ -67,7 +67,7 @@ async fn main() {
     // Startup restore: every station persisted as started is started again,
     // after the managed Icecast had its chance to come up. A single failing
     // station is logged and skipped — it must not block the boot.
-    stream_handlers::restore_started_stations(&pool, &streamers, &lifecycle, &config.upload_dir).await;
+    stream_handlers::restore_started_stations(&pool, &streamers, &lifecycle, &config.music_dir).await;
 
     let addr = SocketAddr::new(config.server_host.parse().expect("Invalid server host"), config.server_port);
 

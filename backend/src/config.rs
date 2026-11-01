@@ -11,7 +11,10 @@ pub struct Config {
     pub server_host: String,
     pub server_port: u16,
     pub lastfm_api_key: Option<String>,
-    pub upload_dir: String,
+    /// Directory holding the music library. API uploads and files dropped
+    /// in manually (e.g. over FTP) live here under their original names;
+    /// the lazy scanner imports them into the database.
+    pub music_dir: String,
     pub icecast_public_url: String,
 }
 
@@ -34,19 +37,19 @@ impl Config {
                 .parse()
                 .expect("SERVER_PORT must be a number"),
             lastfm_api_key: env::var("LASTFM_API_KEY").ok(),
-            upload_dir: absolute_upload_dir(env::var("UPLOAD_DIR").unwrap_or_else(|_| "./uploads".to_string())),
+            music_dir: absolute_dir(env::var("MUSIC_DIR").unwrap_or_else(|_| "./music".to_string())),
             icecast_public_url: env::var("ICECAST_PUBLIC_URL").unwrap_or_default(),
         }
     }
 }
 
-fn absolute_upload_dir(path: String) -> String {
+fn absolute_dir(path: String) -> String {
     let path = PathBuf::from(path);
     let absolute = if path.is_absolute() {
         normalize_lexically(&path)
     } else {
         let joined = env::current_dir()
-            .expect("failed to resolve UPLOAD_DIR from the current directory")
+            .expect("failed to resolve MUSIC_DIR from the current directory")
             .join(path);
         normalize_lexically(&joined)
     };
@@ -67,7 +70,7 @@ mod tests {
         env::remove_var("SERVER_HOST");
         env::remove_var("SERVER_PORT");
         env::remove_var("LASTFM_API_KEY");
-        env::remove_var("UPLOAD_DIR");
+        env::remove_var("MUSIC_DIR");
         env::remove_var("ICECAST_PUBLIC_URL");
     }
 
@@ -86,8 +89,23 @@ mod tests {
         assert_eq!(config.server_host, "0.0.0.0");
         assert_eq!(config.server_port, 3001);
         assert!(config.lastfm_api_key.is_none());
-        assert!(std::path::Path::new(&config.upload_dir).is_absolute());
-        assert!(std::path::Path::new(&config.upload_dir).ends_with("uploads"));
+        // No MUSIC_DIR set: derives to ./music.
+        assert!(std::path::Path::new(&config.music_dir).is_absolute());
+        assert!(std::path::Path::new(&config.music_dir).ends_with("music"));
+
+        cleanup_env();
+    }
+
+    #[test]
+    #[serial]
+    fn test_config_music_dir_explicit_value() {
+        cleanup_env();
+        env::set_var("DATABASE_URL", "postgres://test:test@localhost/test");
+        env::set_var("JWT_SECRET", "test-secret-thirtytwo-chars-minimum!!");
+        env::set_var("MUSIC_DIR", "/srv/music");
+
+        let config = Config::from_env();
+        assert_eq!(config.music_dir, "/srv/music");
 
         cleanup_env();
     }
@@ -103,7 +121,7 @@ mod tests {
         env::set_var("SERVER_HOST", "127.0.0.1");
         env::set_var("SERVER_PORT", "8080");
         env::set_var("LASTFM_API_KEY", "lastfm-key-123");
-        env::set_var("UPLOAD_DIR", "/custom/uploads");
+        env::set_var("MUSIC_DIR", "/custom/music");
 
         let config = Config::from_env();
         assert_eq!(config.database_url, "postgres://custom:pass@host/custom");
@@ -113,27 +131,27 @@ mod tests {
         assert_eq!(config.server_host, "127.0.0.1");
         assert_eq!(config.server_port, 8080);
         assert_eq!(config.lastfm_api_key, Some("lastfm-key-123".to_string()));
-        assert_eq!(config.upload_dir, "/custom/uploads");
+        assert_eq!(config.music_dir, "/custom/music");
 
         cleanup_env();
     }
 
     #[test]
     #[serial]
-    fn test_config_resolves_relative_upload_dir_to_absolute_path() {
+    fn test_config_resolves_relative_music_dir_to_absolute_path() {
         cleanup_env();
         env::set_var("DATABASE_URL", "postgres://test:test@localhost/test");
         env::set_var("JWT_SECRET", "test-secret-thirtytwo-chars-minimum!!");
-        env::set_var("UPLOAD_DIR", "./../uploads");
+        env::set_var("MUSIC_DIR", "./../music");
 
         let config = Config::from_env();
-        let p = std::path::Path::new(&config.upload_dir);
+        let p = std::path::Path::new(&config.music_dir);
         assert!(p.is_absolute());
         // must be lexically normalized - no ./ or ../ segments
-        let s = config.upload_dir.clone();
-        assert!(!s.contains("/./"), "upload_dir not normalized: {s}");
-        assert!(!s.contains("/../"), "upload_dir not normalized: {s}");
-        assert!(!s.ends_with("/."), "upload_dir not normalized: {s}");
+        let s = config.music_dir.clone();
+        assert!(!s.contains("/./"), "music_dir not normalized: {s}");
+        assert!(!s.contains("/../"), "music_dir not normalized: {s}");
+        assert!(!s.ends_with("/."), "music_dir not normalized: {s}");
 
         cleanup_env();
     }

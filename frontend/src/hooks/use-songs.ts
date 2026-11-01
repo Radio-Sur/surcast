@@ -1,6 +1,14 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { songsService } from "@/lib/services/songs";
-import type { AlbumSelector, PaginatedArtists, PaginatedSongs, Song } from "@/types";
+import type { AlbumSelector, PaginatedArtists, PaginatedSongs, ScanReport, Song, SongDetails } from "@/types";
+
+function useInvalidateLibrary() {
+  const queryClient = useQueryClient();
+  return () => {
+    queryClient.invalidateQueries({ queryKey: ["songs"] });
+    queryClient.invalidateQueries({ queryKey: ["files"] });
+  };
+}
 
 export function useSongs<T = Song[]>(select?: (songs: Song[]) => T) {
   return useQuery({
@@ -15,6 +23,14 @@ export function useSong(id: string) {
     queryKey: ["songs", id],
     queryFn: () => songsService.get(id),
     enabled: !!id,
+  });
+}
+
+export function useSongDetails(id: string, options?: { enabled?: boolean }) {
+  return useQuery<SongDetails>({
+    queryKey: ["songs", id, "details"],
+    queryFn: () => songsService.details(id),
+    enabled: (options?.enabled ?? true) && !!id,
   });
 }
 
@@ -57,18 +73,26 @@ export function useArtists(params: { q?: string; page?: number; per_page?: numbe
 }
 
 export function useDeleteSong() {
-  const queryClient = useQueryClient();
+  const invalidate = useInvalidateLibrary();
   return useMutation({
     mutationFn: (id: string) => songsService.delete(id),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["songs"] }),
+    onSuccess: invalidate,
   });
 }
 
 export function useDeleteSongsBatch() {
-  const queryClient = useQueryClient();
+  const invalidate = useInvalidateLibrary();
   return useMutation({
     mutationFn: (ids: string[]) => songsService.deleteBatch(ids),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["songs"] }),
+    onSuccess: invalidate,
+  });
+}
+
+export function usePurgeMissingSongs() {
+  const invalidate = useInvalidateLibrary();
+  return useMutation({
+    mutationFn: () => songsService.purgeMissing(),
+    onSuccess: invalidate,
   });
 }
 
@@ -85,6 +109,18 @@ export function useUploadZip() {
   return useMutation({
     mutationFn: (data: { file: File; assign_to_all?: boolean; station_ids?: string[] }) => songsService.uploadZip(data),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["songs"] }),
+  });
+}
+
+export function useScanLibrary() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () => songsService.scan(),
+    onSuccess: (report: ScanReport) => {
+      if (!report.throttled && (report.added > 0 || report.renamed > 0 || report.marked_missing > 0)) {
+        queryClient.invalidateQueries({ queryKey: ["songs"] });
+      }
+    },
   });
 }
 

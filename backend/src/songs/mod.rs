@@ -1,5 +1,10 @@
 pub mod analysis;
+pub mod cover;
+pub mod details;
+pub mod files;
 pub mod handlers;
+pub mod import;
 pub mod models;
 pub mod repository;
+pub mod scan;
 pub mod upload;

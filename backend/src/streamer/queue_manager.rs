@@ -43,17 +43,17 @@ pub(crate) enum CommitOutcome {
 
 impl QueueManager {
     #[cfg(test)]
-    pub fn new(db: PgPool, station_id: Uuid, upload_dir: String, songs: Vec<SongInfo>, initial_idx: usize) -> Self {
+    pub fn new(db: PgPool, station_id: Uuid, music_dir: String, songs: Vec<SongInfo>, initial_idx: usize) -> Self {
         Self {
-            repository: QueueRepository::new(db, station_id, upload_dir),
+            repository: QueueRepository::new(db, station_id, music_dir),
             state: Mutex::new(QueueState::new(songs, initial_idx)),
             dirty_cursor: Mutex::new(None),
             refill_attempted_for: Mutex::new(None),
         }
     }
-    pub fn new_with_cursor(db: PgPool, station_id: Uuid, upload_dir: String, songs: Vec<SongInfo>, cursor: QueueCursor) -> Self {
+    pub fn new_with_cursor(db: PgPool, station_id: Uuid, music_dir: String, songs: Vec<SongInfo>, cursor: QueueCursor) -> Self {
         Self {
-            repository: QueueRepository::new(db, station_id, upload_dir),
+            repository: QueueRepository::new(db, station_id, music_dir),
             state: Mutex::new(QueueState::from_cursor(songs, cursor)),
             dirty_cursor: Mutex::new(None),
             refill_attempted_for: Mutex::new(None),

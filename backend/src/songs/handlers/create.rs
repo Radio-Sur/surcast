@@ -1,7 +1,8 @@
-use axum::extract::{Multipart, State};
+use axum::extract::{Multipart, Query, State};
 use axum::http::StatusCode;
 use axum::Extension;
 use axum::Json;
+use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use std::io::Read;
 use uuid::Uuid;
@@ -11,16 +12,93 @@ use super::upload_helper::is_audio_file;
 use crate::auth::middleware::AuthUser;
 use crate::config::Config;
 use crate::errors::{AppError, DbResult};
+use crate::songs::import::{store_upload_bytes, DuplicateInfo, ImportOrigin, ImportOutcome, ImportRequest};
 use crate::songs::models::*;
 use crate::songs::repository;
-use crate::songs::upload::process_song_upload;
+
+#[derive(Debug, Default, Deserialize)]
+pub struct UploadFlags {
+    /// When true, an already-known audio hash inserts a second song row
+    /// (sharing the file) instead of reporting the duplicate.
+    #[serde(default)]
+    pub allow_duplicate: bool,
+}
+
+/// Unified single-upload result. `duplicate` is `Some` exactly when the
+/// uploaded bytes matched an already-known song and `allow_duplicate`
+/// was not set — `song` then carries the existing row.
+#[derive(Debug, Serialize)]
+pub struct UploadSongResult {
+    pub created: bool,
+    pub song: SongResponse,
+    pub duplicate: Option<DuplicateInfo>,
+}
+
+fn overrides(title: &str, artist: &str, album: &str) -> (Option<String>, Option<String>, Option<String>) {
+    (
+        if title.is_empty() { None } else { Some(title.to_string()) },
+        if artist.is_empty() { None } else { Some(artist.to_string()) },
+        if album.is_empty() { None } else { Some(album.to_string()) },
+    )
+}
+
+async fn fetch_response(db: &PgPool, song_id: Uuid, station_ids: &[Uuid]) -> Result<SongResponse, AppError> {
+    let assigned = assign_song_to_stations(db, song_id, station_ids).await?;
+    let song = repository::find_song_by_id(db, song_id).await?.ok_or_else(|| {
+        tracing::error!("Insert succeeded but fetch returned None");
+        AppError::internal("".into())
+    })?;
+    Ok(SongResponse::from((song, assigned)))
+}
+
+async fn import_stored_file(
+    db: &PgPool,
+    config: &Config,
+    user_id: Uuid,
+    relative_path: String,
+    allow_duplicate: bool,
+    title_override: Option<String>,
+    artist_override: Option<String>,
+    album_override: Option<String>,
+    station_ids: &[Uuid],
+) -> Result<UploadSongResult, AppError> {
+    let outcome = crate::songs::import::import_song_file(
+        db,
+        &config.music_dir,
+        &ImportRequest {
+            relative_path,
+            origin: ImportOrigin::Api,
+            uploaded_by: Some(user_id),
+            allow_duplicate,
+            title_override,
+            artist_override,
+            album_override,
+            lastfm_api_key: config.lastfm_api_key.clone(),
+        },
+    )
+    .await?;
+
+    match outcome {
+        ImportOutcome::Created { song_id } => Ok(UploadSongResult {
+            created: true,
+            song: fetch_response(db, song_id, station_ids).await?,
+            duplicate: None,
+        }),
+        ImportOutcome::Duplicate { duplicate } => Ok(UploadSongResult {
+            created: false,
+            song: fetch_response(db, duplicate.song_id, station_ids).await?,
+            duplicate: Some(duplicate),
+        }),
+    }
+}
 
 pub async fn upload_song(
     Extension(auth_user): Extension<AuthUser>,
     State(db): State<PgPool>,
     State(config): State<Config>,
+    Query(flags): Query<UploadFlags>,
     mut multipart: Multipart,
-) -> Result<(StatusCode, Json<SongResponse>), AppError> {
+) -> Result<(StatusCode, Json<UploadSongResult>), AppError> {
     let mut file_bytes: Option<Vec<u8>> = None;
     let mut original_name = String::new();
     let mut title = String::new();
@@ -63,23 +141,6 @@ pub async fn upload_song(
 
     let bytes = file_bytes.ok_or_else(|| AppError::bad_request("No file provided".into()))?;
 
-    let title_override = if title.is_empty() { None } else { Some(title.as_str()) };
-    let artist_override = if artist.is_empty() { None } else { Some(artist.as_str()) };
-    let album_override = if album.is_empty() { None } else { Some(album.as_str()) };
-
-    let processed = process_song_upload(
-        &db,
-        &original_name,
-        &bytes,
-        &config.upload_dir,
-        auth_user.id,
-        config.lastfm_api_key.as_deref(),
-        title_override,
-        artist_override,
-        album_override,
-    )
-    .await?;
-
     if assign_to_all {
         station_ids = crate::stations::repository::find_all_station_ids(&db)
             .await?
@@ -88,22 +149,32 @@ pub async fn upload_song(
             .collect();
     }
 
-    let assigned = assign_song_to_stations(&db, processed.id, &station_ids).await?;
+    let relative_path = store_upload_bytes(&config.music_dir, &original_name, &bytes).await?;
+    let (title_override, artist_override, album_override) = overrides(&title, &artist, &album);
+    let result = import_stored_file(
+        &db,
+        &config,
+        auth_user.id,
+        relative_path,
+        flags.allow_duplicate,
+        title_override,
+        artist_override,
+        album_override,
+        &station_ids,
+    )
+    .await?;
 
-    let song = repository::find_song_by_id(&db, processed.id).await?.ok_or_else(|| {
-        tracing::error!("Insert succeeded but fetch returned None");
-        AppError::internal("".into())
-    })?;
-
-    Ok((StatusCode::CREATED, Json(SongResponse::from((song, assigned)))))
+    let status = if result.created { StatusCode::CREATED } else { StatusCode::OK };
+    Ok((status, Json(result)))
 }
 
 pub async fn upload_zip(
     Extension(auth_user): Extension<AuthUser>,
     State(db): State<PgPool>,
     State(config): State<Config>,
+    Query(flags): Query<UploadFlags>,
     mut multipart: Multipart,
-) -> Result<(StatusCode, Json<Vec<SongResponse>>), AppError> {
+) -> Result<(StatusCode, Json<Vec<UploadSongResult>>), AppError> {
     let mut zip_bytes: Option<Vec<u8>> = None;
     let mut assign_to_all = false;
     let mut station_ids: Vec<Uuid> = Vec::new();
@@ -171,36 +242,34 @@ pub async fn upload_zip(
         return Err(AppError::bad_request("No audio files found in archive".into()));
     }
 
-    let mut created: Vec<SongResponse> = Vec::with_capacity(entries.len());
+    let mut results: Vec<UploadSongResult> = Vec::with_capacity(entries.len());
 
     for (original_name, entry_bytes) in entries {
+        let relative_path = store_upload_bytes(&config.music_dir, &original_name, &entry_bytes).await?;
         let name_without_ext = match original_name.rfind('.') {
             Some(dot) => original_name[..dot].to_string(),
             None => original_name.clone(),
         };
-
-        let processed = process_song_upload(
-            &db,
-            &original_name,
-            &entry_bytes,
-            &config.upload_dir,
-            auth_user.id,
-            config.lastfm_api_key.as_deref(),
-            Some(&name_without_ext),
-            None,
-            None,
-        )
-        .await?;
-
-        let assigned = assign_song_to_stations(&db, processed.id, &station_ids).await?;
-
-        let song = repository::find_song_by_id(&db, processed.id).await?.ok_or_else(|| {
-            tracing::error!("Insert succeeded but fetch returned None");
-            AppError::internal("".into())
-        })?;
-
-        created.push(SongResponse::from((song, assigned)));
+        results.push(
+            import_stored_file(
+                &db,
+                &config,
+                auth_user.id,
+                relative_path,
+                flags.allow_duplicate,
+                Some(name_without_ext),
+                None,
+                None,
+                &station_ids,
+            )
+            .await?,
+        );
     }
 
-    Ok((StatusCode::CREATED, Json(created)))
+    let status = if results.iter().any(|r| r.created) {
+        StatusCode::CREATED
+    } else {
+        StatusCode::OK
+    };
+    Ok((status, Json(results)))
 }

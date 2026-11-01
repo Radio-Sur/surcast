@@ -16,10 +16,6 @@ use crate::playlists::repository;
 use crate::stations::handlers::stream::StationLifecycleLocks;
 use crate::stations::queue_repo;
 
-fn song_has_cover(cover_path: &str) -> bool {
-    !cover_path.is_empty()
-}
-
 fn build_response(p: &Playlist, count: i64, total_dur: i64) -> PlaylistResponse {
     PlaylistResponse {
         id: p.id,
@@ -128,7 +124,7 @@ pub async fn delete_playlist(
     Ok(StatusCode::NO_CONTENT)
 }
 
-fn build_playlist_song(r: (Uuid, Uuid, Uuid, i32, String, String, String, i32, String)) -> PlaylistSongResponse {
+fn build_playlist_song(r: (Uuid, Uuid, Uuid, i32, String, String, String, i32, bool)) -> PlaylistSongResponse {
     PlaylistSongResponse {
         id: r.0,
         playlist_id: r.1,
@@ -138,7 +134,7 @@ fn build_playlist_song(r: (Uuid, Uuid, Uuid, i32, String, String, String, i32, S
         artist: r.5,
         album: r.6,
         duration: r.7,
-        has_cover: song_has_cover(&r.8),
+        has_cover: r.8,
         mime_type: "audio/mpeg".to_string(),
     }
 }
@@ -281,10 +277,10 @@ pub async fn add_playlist_to_queue(
     queue_repo::insert_queue_items_batch(&db, station_id, &song_ids, pos, Some(playlist_id)).await?;
 
     for &song_id in &song_ids {
-        crate::songs::analysis::spawn_analysis(&db, song_id, station_id, &config.upload_dir);
+        crate::songs::analysis::spawn_analysis(&db, song_id, station_id, &config.music_dir);
     }
 
-    crate::stations::handlers::sync_streamer_songs(&db, &streamers, &lifecycle, &config.upload_dir, station_id, false).await?;
+    crate::stations::handlers::sync_streamer_songs(&db, &streamers, &lifecycle, &config.music_dir, station_id, false).await?;
 
     Ok((StatusCode::CREATED, Json(serde_json::json!({ "added": song_ids.len() as i32 }))))
 }

@@ -377,9 +377,9 @@ async fn startup_restore_rechecks_desired_state_under_the_lock() {
         let db = app.db.clone();
         let streamers = Arc::clone(&app.session().streamers);
         let lifecycle = Arc::clone(&app.session().lifecycle);
-        let upload_dir = app.config.upload_dir.clone();
+        let music_dir = app.config.music_dir.clone();
         let restore_task = tokio::spawn(async move {
-            surcast_backend::stations::handlers::stream::restore_started_stations(&db, &streamers, &lifecycle, &upload_dir).await
+            surcast_backend::stations::handlers::stream::restore_started_stations(&db, &streamers, &lifecycle, &music_dir).await
         });
         // A is parked at the runtime-create hook: its re-check passed.
         wait_notified(hooks.before_runtime_create.entered(), "restore to reach station A's runtime hook").await?;

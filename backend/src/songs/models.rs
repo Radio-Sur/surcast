@@ -7,6 +7,30 @@ pub struct BatchDeleteSongsRequest {
     pub ids: Vec<Uuid>,
 }
 
+/// Where the song file came from. Serialized as-is (`api` | `directory`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SongOrigin {
+    Api,
+    Directory,
+}
+
+impl SongOrigin {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Api => "api",
+            Self::Directory => "directory",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "api" => Some(Self::Api),
+            "directory" => Some(Self::Directory),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, sqlx::FromRow, Serialize)]
 pub struct Song {
     pub id: Uuid,
@@ -17,8 +41,11 @@ pub struct Song {
     pub file_path: String,
     pub file_size: i64,
     pub mime_type: String,
-    pub cover_path: String,
-    pub uploaded_by: Uuid,
+    pub has_cover: bool,
+    pub uploaded_by: Option<Uuid>,
+    pub origin: String,
+    pub audio_hash: Option<String>,
+    pub missing_since: Option<DateTime<Utc>>,
     pub cue_in: f64,
     pub cue_out: f64,
     pub cross_start_next: f64,
@@ -44,7 +71,14 @@ pub struct SongResponse {
     pub file_size: i64,
     pub mime_type: String,
     pub has_cover: bool,
-    pub uploaded_by: Uuid,
+    pub uploaded_by: Option<Uuid>,
+    /// `api` for panel/API uploads, `directory` for files dropped straight
+    /// into the music directory (e.g. over FTP).
+    pub origin: String,
+    /// Relative path inside the music directory (original filename kept).
+    pub file_path: String,
+    /// Set when the file is gone from disk; the row and its history stay.
+    pub missing_since: Option<DateTime<Utc>>,
     pub cue_in: f64,
     pub cue_out: f64,
     pub cross_start_next: f64,
@@ -71,8 +105,11 @@ impl From<(Song, Vec<Uuid>)> for SongResponse {
             duration: s.duration,
             file_size: s.file_size,
             mime_type: s.mime_type,
-            has_cover: !s.cover_path.is_empty(),
+            has_cover: s.has_cover,
             uploaded_by: s.uploaded_by,
+            origin: s.origin,
+            file_path: s.file_path,
+            missing_since: s.missing_since,
             cue_in: s.cue_in,
             cue_out: s.cue_out,
             cross_start_next: s.cross_start_next,

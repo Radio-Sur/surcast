@@ -37,14 +37,14 @@ pub async fn list_station_songs(
     let songs = rows
         .into_iter()
         .map(
-            |(id, song_id, title, artist, album, duration, mime_type, cover_path)| StationSongResponse {
+            |(id, song_id, title, artist, album, duration, mime_type, has_cover)| StationSongResponse {
                 id,
                 song_id,
                 title,
                 artist,
                 album,
                 duration,
-                has_cover: !cover_path.is_empty(),
+                has_cover,
                 mime_type,
             },
         )
@@ -88,14 +88,14 @@ pub async fn add_station_songs(
     let songs = rows
         .into_iter()
         .map(
-            |(id, song_id, title, artist, album, duration, mime_type, cover_path)| StationSongResponse {
+            |(id, song_id, title, artist, album, duration, mime_type, has_cover)| StationSongResponse {
                 id,
                 song_id,
                 title,
                 artist,
                 album,
                 duration,
-                has_cover: !cover_path.is_empty(),
+                has_cover,
                 mime_type,
             },
         )
@@ -116,7 +116,7 @@ pub async fn remove_station_song(
     queue_repo::delete_station_queue_by_song(&db, station_id, song_id).await?;
     repository::delete_station_song(&db, station_id, song_id).await?;
 
-    sync_streamer_songs(&db, &streamers, &lifecycle, &config.upload_dir, station_id, true).await?;
+    sync_streamer_songs(&db, &streamers, &lifecycle, &config.music_dir, station_id, true).await?;
 
     Ok(StatusCode::NO_CONTENT)
 }

@@ -5,6 +5,7 @@ import { AppLayout } from "@/components/layout/app-layout";
 import { AdminIcecastPage } from "@/pages/admin/icecast";
 import { ApiKeysPage } from "@/pages/api-keys";
 import { DashboardPage } from "@/pages/dashboard";
+import { FilesPage } from "@/pages/files";
 import { LoginPage } from "@/pages/login";
 import { PlaylistDetailPage } from "@/pages/playlists/detail";
 import { PlaylistsListPage } from "@/pages/playlists/list";
@@ -55,6 +56,7 @@ function App() {
                         <Route path="/stations/:id" element={<StationDetailPage />} />
                         <Route path="/stations/:id/edit" element={<EditStationPage />} />
                         <Route path="/songs" element={<SongsPage />} />
+                        <Route path="/files" element={<FilesPage />} />
                         <Route path="/playlists" element={<PlaylistsListPage />} />
                         <Route path="/playlists/:id" element={<PlaylistDetailPage />} />
                         <Route path="/api-keys" element={<ApiKeysPage />} />

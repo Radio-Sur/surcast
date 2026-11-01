@@ -117,10 +117,10 @@ pub async fn find_playlist_song_ids(db: &PgPool, playlist_id: Uuid) -> Result<Ve
 pub async fn find_playlist_songs_with_details(
     conn: &mut PgConnection,
     playlist_id: Uuid,
-) -> Result<Vec<(Uuid, Uuid, Uuid, i32, String, String, String, i32, String)>, AppError> {
-    sqlx::query_as::<_, (Uuid, Uuid, Uuid, i32, String, String, String, i32, String)>(
+) -> Result<Vec<(Uuid, Uuid, Uuid, i32, String, String, String, i32, bool)>, AppError> {
+    sqlx::query_as::<_, (Uuid, Uuid, Uuid, i32, String, String, String, i32, bool)>(
         r#"SELECT ps.id, ps.playlist_id, ps.song_id, ps.position,
-                  s.title, s.artist, s.album, s.duration, s.cover_path
+                  s.title, s.artist, s.album, s.duration, s.has_cover
            FROM playlist_songs ps
            JOIN songs s ON s.id = ps.song_id
            WHERE ps.playlist_id = $1
@@ -137,10 +137,10 @@ pub async fn find_playlist_songs_with_details_paginated(
     playlist_id: Uuid,
     limit: i64,
     offset: i64,
-) -> Result<Vec<(Uuid, Uuid, Uuid, i32, String, String, String, i32, String)>, AppError> {
-    sqlx::query_as::<_, (Uuid, Uuid, Uuid, i32, String, String, String, i32, String)>(
+) -> Result<Vec<(Uuid, Uuid, Uuid, i32, String, String, String, i32, bool)>, AppError> {
+    sqlx::query_as::<_, (Uuid, Uuid, Uuid, i32, String, String, String, i32, bool)>(
         r#"SELECT ps.id, ps.playlist_id, ps.song_id, ps.position,
-                  s.title, s.artist, s.album, s.duration, s.cover_path
+                  s.title, s.artist, s.album, s.duration, s.has_cover
            FROM playlist_songs ps
            JOIN songs s ON s.id = ps.song_id
            WHERE ps.playlist_id = $1

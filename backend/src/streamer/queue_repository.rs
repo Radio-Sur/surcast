@@ -7,16 +7,12 @@ use crate::stations::repository;
 pub struct QueueRepository {
     db: PgPool,
     station_id: Uuid,
-    upload_dir: String,
+    music_dir: String,
 }
 
 impl QueueRepository {
-    pub fn new(db: PgPool, station_id: Uuid, upload_dir: String) -> Self {
-        Self {
-            db,
-            station_id,
-            upload_dir,
-        }
+    pub fn new(db: PgPool, station_id: Uuid, music_dir: String) -> Self {
+        Self { db, station_id, music_dir }
     }
 
     pub(crate) fn station_id(&self) -> Uuid {
@@ -32,7 +28,7 @@ impl QueueRepository {
             .map(
                 |(file_path, title, artist, duration, queue_item_id, song_id, position, cue_in, cue_out, cross_start_next, analyzed)| {
                     SongInfo {
-                        file_path: crate::songs::handlers::resolve_audio_path(&self.upload_dir, &file_path),
+                        file_path: crate::songs::handlers::resolve_audio_path(&self.music_dir, &file_path),
                         title,
                         artist,
                         duration,
@@ -209,7 +205,7 @@ impl QueueRepository {
             Ok(analyze) => {
                 transaction.commit().await?;
                 for song_id in analyze {
-                    crate::songs::analysis::spawn_analysis(&self.db, song_id, self.station_id, &self.upload_dir);
+                    crate::songs::analysis::spawn_analysis(&self.db, song_id, self.station_id, &self.music_dir);
                 }
                 Ok(())
             }
@@ -319,7 +315,7 @@ impl QueueRepository {
     /// failed fill must be retried by the caller, an empty successful fill
     /// means AutoDJ genuinely had nothing to add.
     pub(crate) async fn refill(&self) -> bool {
-        match crate::scheduling::service::fill_queue_from_schedule(&self.db, self.station_id, &self.upload_dir).await {
+        match crate::scheduling::service::fill_queue_from_schedule(&self.db, self.station_id, &self.music_dir).await {
             Ok(()) => true,
             Err(error) => {
                 tracing::warn!(station_id = %self.station_id, %error, "AutoDJ successor refill error");
@@ -447,7 +443,7 @@ impl QueueRepository {
             ),
         >(
             r#"SELECT sq.id, sq.station_id, sq.song_id, sq.position,
-                      s.title, s.artist, s.album, s.duration, s.mime_type, s.cover_path,
+                      s.title, s.artist, s.album, s.duration, s.mime_type, s.has_cover,
                       sq.origin_playlist_id, p.name as playlist_name, sq.is_auto_dj
                FROM station_queue sq
                JOIN songs s ON s.id = sq.song_id
@@ -471,7 +467,7 @@ impl QueueRepository {
                 album,
                 duration,
                 mime_type,
-                cover_path,
+                has_cover,
                 origin_playlist_id,
                 playlist_name,
                 is_auto_dj,
@@ -485,7 +481,7 @@ impl QueueRepository {
                     "artist": artist,
                     "album": album,
                     "duration": duration,
-                    "has_cover": !cover_path.is_empty(),
+                    "has_cover": has_cover,
                     "mime_type": mime_type,
                     "origin_playlist_id": origin_playlist_id,
                     "playlist_name": playlist_name,

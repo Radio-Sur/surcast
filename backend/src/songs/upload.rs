@@ -1,21 +1,9 @@
-use std::path::PathBuf;
+use crate::songs::analysis::DiscoveredMedia;
 
-use crate::errors::AppError;
-use crate::songs::analysis::{analyze_audio_with_discovered_duration, discover_media, DiscoveredMedia};
-use crate::songs::handlers::{cover_extension_from_mime, ext_from_filename, mime_from_ext, resolve_audio_path, save_uploaded_file};
-use crate::songs::repository;
-use crate::util::normalize_lexically;
-use sqlx::PgPool;
-use uuid::Uuid;
-
-pub struct ProcessedSong {
-    pub id: Uuid,
-}
-
-struct SongMetadata {
-    title: String,
-    artist: String,
-    album: String,
+pub(crate) struct SongMetadata {
+    pub(crate) title: String,
+    pub(crate) artist: String,
+    pub(crate) album: String,
 }
 
 fn sanitize_metadata_text(value: String) -> String {
@@ -30,14 +18,14 @@ fn sanitize_metadata_text(value: String) -> String {
         .join(" / ")
 }
 
-fn sanitize_metadata(mut metadata: SongMetadata) -> SongMetadata {
+pub(crate) fn sanitize_metadata(mut metadata: SongMetadata) -> SongMetadata {
     metadata.title = sanitize_metadata_text(metadata.title);
     metadata.artist = sanitize_metadata_text(metadata.artist);
     metadata.album = sanitize_metadata_text(metadata.album);
     metadata
 }
 
-fn resolve_song_metadata(
+pub(crate) fn resolve_song_metadata(
     original_name: &str,
     title_override: Option<&str>,
     artist_override: Option<&str>,
@@ -78,11 +66,12 @@ fn resolve_song_metadata(
     sanitize_metadata(SongMetadata { title, artist, album })
 }
 
-async fn enrich_from_external(api_key: &str, metadata: &SongMetadata, fetch_cover: bool) -> (SongMetadata, Option<(Vec<u8>, String)>) {
+/// Fills missing text metadata (title/artist/album) from an external source.
+/// Cover art is never fetched: covers always come from the file's own tags.
+pub(crate) async fn enrich_from_external(api_key: &str, metadata: &SongMetadata) -> SongMetadata {
     let mut title = metadata.title.clone();
     let mut artist = metadata.artist.clone();
     let mut album = metadata.album.clone();
-    let mut cover = None;
 
     if !title.is_empty() {
         if let Some(meta) = crate::metadata::enrich(api_key, &title, &artist).await {
@@ -95,109 +84,10 @@ async fn enrich_from_external(api_key: &str, metadata: &SongMetadata, fetch_cove
             if album.is_empty() {
                 album = meta.album;
             }
-            if fetch_cover {
-                if let Some(url) = &meta.cover_url {
-                    if let Ok(resp) = reqwest::get(url).await {
-                        if let Ok(img_bytes) = resp.bytes().await {
-                            cover = Some((img_bytes.to_vec(), "image/jpeg".to_string()));
-                        }
-                    }
-                }
-            }
         }
     }
 
-    (SongMetadata { title, artist, album }, cover)
-}
-
-async fn save_cover(data: &[u8], mime: &str, upload_dir: &str) -> String {
-    let Some(ext) = cover_extension_from_mime(mime) else {
-        tracing::warn!(%mime, "Unsupported embedded cover format");
-        return String::new();
-    };
-    let covers_dir = normalize_lexically(&PathBuf::from(upload_dir).join("covers"));
-    let _ = tokio::fs::create_dir_all(&covers_dir).await;
-    let cover_filename = format!("{}.{}", Uuid::new_v4(), ext);
-    let cover_file = covers_dir.join(&cover_filename);
-    if let Err(e) = tokio::fs::write(&cover_file, data).await {
-        tracing::warn!("Failed to save cover art: {e}");
-        String::new()
-    } else {
-        cover_filename
-    }
-}
-
-pub async fn process_song_upload(
-    db: &PgPool,
-    original_name: &str,
-    bytes: &[u8],
-    upload_dir: &str,
-    user_id: Uuid,
-    lastfm_api_key: Option<&str>,
-    title_override: Option<&str>,
-    artist_override: Option<&str>,
-    album_override: Option<&str>,
-) -> Result<ProcessedSong, AppError> {
-    let ext = ext_from_filename(original_name);
-    let mime = mime_from_ext(original_name);
-    let file_path = save_uploaded_file(upload_dir, bytes, ext).await?;
-    let audio_full_path = resolve_audio_path(upload_dir, &file_path);
-    let file_size = bytes.len() as i64;
-
-    let discovered = discover_media(&audio_full_path).await;
-    let metadata = resolve_song_metadata(original_name, title_override, artist_override, album_override, &discovered);
-    let (metadata, external_cover) = if let Some(api_key) = lastfm_api_key {
-        enrich_from_external(api_key, &metadata, discovered.cover_data.is_none()).await
-    } else {
-        (metadata, None)
-    };
-    let metadata = sanitize_metadata(metadata);
-
-    let cover_path = if let Some((data, mime)) = discovered.cover_data.as_ref().or(external_cover.as_ref()) {
-        save_cover(data, mime, upload_dir).await
-    } else {
-        String::new()
-    };
-
-    let mut analysis = analyze_audio_with_discovered_duration(&audio_full_path, discovered.duration).await;
-    let duration = analysis.duration.unwrap_or(1).max(1);
-    // Fallback: play the whole file.
-    if analysis.analyzed_at.is_none() {
-        analysis.cue_out = duration as f64;
-        analysis.cross_start_next = duration as f64;
-    }
-
-    let song_id = Uuid::new_v4();
-
-    repository::insert_song_record(
-        db,
-        &repository::InsertSongParams {
-            id: song_id,
-            title: metadata.title.clone(),
-            artist: metadata.artist.clone(),
-            album: metadata.album.clone(),
-            cover_path,
-            file_path,
-            file_size,
-            mime_type: mime.to_string(),
-            duration,
-            uploaded_by: user_id,
-            cue_in: analysis.cue_in,
-            cue_out: analysis.cue_out,
-            cross_start_next: analysis.cross_start_next,
-            loudness: analysis.loudness,
-            loudness_range: analysis.loudness_range,
-            true_peak: analysis.true_peak,
-            true_peak_db: analysis.true_peak_db,
-            amplify: analysis.amplify,
-            sustained_ending: analysis.sustained_ending,
-            longtail: analysis.longtail,
-            analyzed_at: analysis.analyzed_at,
-        },
-    )
-    .await?;
-
-    Ok(ProcessedSong { id: song_id })
+    SongMetadata { title, artist, album }
 }
 
 #[cfg(test)]

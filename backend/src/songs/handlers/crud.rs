@@ -6,6 +6,21 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use super::upload_helper::resolve_audio_path;
+
+/// Unlinks a song's audio file only when no other song row still references
+/// it (files are shared on forced duplicates). Also drops the scanner
+/// tracking row.
+async fn unlink_song_files(db: &PgPool, config: &Config, song: &crate::songs::models::Song) {
+    if repository::count_songs_with_file_path(db, &song.file_path, song.id)
+        .await
+        .unwrap_or(1)
+        == 0
+    {
+        let song_path = resolve_audio_path(&config.music_dir, &song.file_path);
+        let _ = tokio::fs::remove_file(&song_path).await;
+    }
+    let _ = repository::delete_library_file(db, &song.file_path).await;
+}
 use crate::api::StreamersMap;
 use crate::auth::middleware::AuthUser;
 use crate::config::Config;
@@ -31,6 +46,19 @@ pub async fn list_songs(Extension(_auth_user): Extension<AuthUser>, State(db): S
     }
 
     Ok(Json(results))
+}
+
+/// Lazy library scan: imports files dropped into the music directory
+/// (FTP/manual copies), follows renames by content hash and flags deleted
+/// files as missing. Fast for steady state (only new/changed files are
+/// read); never runs autocue analysis.
+pub async fn scan_library_endpoint(
+    Extension(_auth_user): Extension<AuthUser>,
+    State(db): State<PgPool>,
+    State(config): State<Config>,
+) -> Result<Json<crate::songs::scan::ScanReport>, AppError> {
+    let report = crate::songs::scan::scan_library(&db, &config.music_dir, config.lastfm_api_key.as_deref()).await?;
+    Ok(Json(report))
 }
 
 pub async fn search_songs(
@@ -172,10 +200,9 @@ pub async fn delete_song(
     // concurrent enqueue cannot slip a queue row past the returned set.
     let affected = repository::delete_song_globally(&db, id).await?;
 
-    let song_path = resolve_audio_path(&config.upload_dir, &song.file_path);
-    let _ = tokio::fs::remove_file(&song_path).await;
+    unlink_song_files(&db, &config, &song).await;
 
-    sync_station_queues(&db, &streamers, &lifecycle, &config.upload_dir, affected, true).await?;
+    sync_station_queues(&db, &streamers, &lifecycle, &config.music_dir, affected, true).await?;
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -199,11 +226,10 @@ pub async fn delete_songs_batch(
     let affected = repository::delete_songs_globally(&db, &req.ids).await?;
 
     for song in &songs {
-        let song_path = resolve_audio_path(&config.upload_dir, &song.file_path);
-        let _ = tokio::fs::remove_file(&song_path).await;
+        unlink_song_files(&db, &config, song).await;
     }
 
-    sync_station_queues(&db, &streamers, &lifecycle, &config.upload_dir, affected, true).await?;
+    sync_station_queues(&db, &streamers, &lifecycle, &config.music_dir, affected, true).await?;
 
     Ok(StatusCode::NO_CONTENT)
 }

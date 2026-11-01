@@ -288,7 +288,7 @@ pub(crate) async fn resolve_station_id(db: &PgPool, id_or_slug: &str) -> Result<
 async fn get_or_create_streamer(
     db: &PgPool,
     streamers: &StreamersMap,
-    upload_dir: &str,
+    music_dir: &str,
     station_id: Uuid,
     station_name: &str,
     songs: Vec<SongInfo>,
@@ -314,7 +314,7 @@ async fn get_or_create_streamer(
         station_id,
         db.clone(),
         prebuffer_bytes,
-        upload_dir,
+        music_dir,
         Arc::new(GStreamerPipelineFactory::default()),
     )
     .await
@@ -353,7 +353,7 @@ pub(crate) async fn sync_streamer_songs(
     db: &PgPool,
     streamers: &StreamersMap,
     lifecycle: &StationLifecycleLocks,
-    upload_dir: &str,
+    music_dir: &str,
     station_id: Uuid,
     align_next: bool,
 ) -> Result<(), AppError> {
@@ -372,7 +372,7 @@ pub(crate) async fn sync_streamer_songs(
     let songs = rows
         .into_iter()
         .map(|r| SongInfo {
-            file_path: crate::songs::handlers::resolve_audio_path(upload_dir, &r.0),
+            file_path: crate::songs::handlers::resolve_audio_path(music_dir, &r.0),
             title: r.1,
             artist: r.2,
             duration: r.3,
@@ -426,13 +426,13 @@ pub(crate) async fn sync_station_queues(
     db: &PgPool,
     streamers: &StreamersMap,
     lifecycle: &StationLifecycleLocks,
-    upload_dir: &str,
+    music_dir: &str,
     station_ids: impl IntoIterator<Item = Uuid>,
     align_next: bool,
 ) -> Result<(), AppError> {
     let mut first_error: Option<AppError> = None;
     for station_id in station_ids {
-        if let Err(error) = sync_streamer_songs(db, streamers, lifecycle, upload_dir, station_id, align_next).await {
+        if let Err(error) = sync_streamer_songs(db, streamers, lifecycle, music_dir, station_id, align_next).await {
             tracing::error!(station_id = %station_id, %error, "station queue sync failed; continuing with remaining stations");
             if first_error.is_none() {
                 first_error = Some(error);
@@ -473,7 +473,7 @@ pub(crate) async fn sync_streamer_playback_config(streamers: &StreamersMap, stat
 pub(crate) async fn get_or_create_streamer_for_station(
     db: &PgPool,
     streamers: &StreamersMap,
-    upload_dir: &str,
+    music_dir: &str,
     station_id: Uuid,
 ) -> Result<Arc<StationStreamer>, AppError> {
     let station = repository::find_station_by_id(db, station_id)
@@ -484,7 +484,7 @@ pub(crate) async fn get_or_create_streamer_for_station(
     let songs: Vec<SongInfo> = rows
         .into_iter()
         .map(|r| SongInfo {
-            file_path: crate::songs::handlers::resolve_audio_path(upload_dir, &r.0),
+            file_path: crate::songs::handlers::resolve_audio_path(music_dir, &r.0),
             title: r.1,
             artist: r.2,
             duration: r.3,
@@ -518,7 +518,7 @@ pub(crate) async fn get_or_create_streamer_for_station(
     }
     let mount = station.mount();
 
-    get_or_create_streamer(db, streamers, upload_dir, station_id, &mount, songs, station.prebuffer_bytes).await
+    get_or_create_streamer(db, streamers, music_dir, station_id, &mount, songs, station.prebuffer_bytes).await
 }
 
 /// Control-plane Play shared by REST and WebSocket: persists the user's
@@ -531,7 +531,7 @@ pub(crate) async fn get_or_create_streamer_for_station(
 /// [`run_committed_start`] task. The caller owns only the guard
 /// acquisition and the JoinHandle await; from the first
 /// `set_station_started(true)` await on, ownership (guard, DB pool,
-/// streamers, lifecycle, upload_dir) belongs to the task, so caller
+/// streamers, lifecycle, music_dir) belongs to the task, so caller
 /// cancellation can never suppress the lifecycle notification or the
 /// runtime-start attempt after the persistence committed. Dropping the
 /// JoinHandle does not cancel the task.
@@ -539,15 +539,15 @@ pub(crate) async fn start_station(
     db: &PgPool,
     streamers: &StreamersMap,
     lifecycle: &Arc<StationLifecycleLocks>,
-    upload_dir: &str,
+    music_dir: &str,
     station_id: Uuid,
 ) -> Result<Arc<StationStreamer>, AppError> {
     let guard = lifecycle.lock(station_id).await;
     let db = db.clone();
     let streamers = Arc::clone(streamers);
     let lifecycle = Arc::clone(lifecycle);
-    let upload_dir = upload_dir.to_owned();
-    let operation = tokio::spawn(run_committed_start(db, streamers, lifecycle, upload_dir, station_id, guard));
+    let music_dir = music_dir.to_owned();
+    let operation = tokio::spawn(run_committed_start(db, streamers, lifecycle, music_dir, station_id, guard));
     operation.await.map_err(|error| {
         tracing::error!(station_id = %station_id, %error, "committed play task failed");
         AppError::stream("Stream start task failed".to_string()).with_code("STREAM_TASK_FAILED")
@@ -557,7 +557,7 @@ pub(crate) async fn start_station(
 /// The full user-facing start, run as ONE cancellation-independent
 /// operation: persists `is_started = true`, notifies the lifecycle
 /// observers and starts the runtime. The caller moves the guard, the DB
-/// pool, the streamer map, the lifecycle Arc and `upload_dir` into this
+/// pool, the streamer map, the lifecycle Arc and `music_dir` into this
 /// task BEFORE the first mutating DB await, so caller cancellation can
 /// never interrupt the mutation or suppress the notification that follows
 /// a committed persistence. A persistence error aborts BEFORE the runtime
@@ -570,14 +570,14 @@ async fn run_committed_start(
     db: PgPool,
     streamers: StreamersMap,
     lifecycle: Arc<StationLifecycleLocks>,
-    upload_dir: String,
+    music_dir: String,
     station_id: Uuid,
     guard: OwnedMutexGuard<()>,
 ) -> Result<Arc<StationStreamer>, AppError> {
     let result = (async {
         repository::set_station_started(&db, station_id, true).await?;
         lifecycle.notify_lifecycle_changed(station_id);
-        start_station_runtime(&db, &streamers, &lifecycle, &upload_dir, station_id).await
+        start_station_runtime(&db, &streamers, &lifecycle, &music_dir, station_id).await
     })
     .await;
     if let Err(error) = &result {
@@ -596,11 +596,11 @@ async fn start_station_runtime(
     db: &PgPool,
     streamers: &StreamersMap,
     lifecycle: &StationLifecycleLocks,
-    upload_dir: &str,
+    music_dir: &str,
     station_id: Uuid,
 ) -> Result<Arc<StationStreamer>, AppError> {
     lifecycle.hooks.before_runtime_create.wait().await;
-    let streamer = get_or_create_streamer_for_station(db, streamers, upload_dir, station_id).await?;
+    let streamer = get_or_create_streamer_for_station(db, streamers, music_dir, station_id).await?;
     streamer.play().await.map_err(|error| {
         tracing::error!(station_id = %station_id, %error, "stream playback failed");
         AppError::from_pipeline(&error, "Stream playback failed".to_string())
@@ -860,7 +860,7 @@ pub(crate) async fn restart_station(
     db: &PgPool,
     streamers: &StreamersMap,
     lifecycle: &Arc<StationLifecycleLocks>,
-    upload_dir: &str,
+    music_dir: &str,
     station_id: Uuid,
 ) -> Result<Arc<StationStreamer>, AppError> {
     let guard = lifecycle.lock(station_id).await;
@@ -871,8 +871,8 @@ pub(crate) async fn restart_station(
             let db = db.clone();
             let streamers = Arc::clone(streamers);
             let lifecycle = Arc::clone(lifecycle);
-            let upload_dir = upload_dir.to_owned();
-            let operation = tokio::spawn(run_committed_start(db, streamers, lifecycle, upload_dir, station_id, guard));
+            let music_dir = music_dir.to_owned();
+            let operation = tokio::spawn(run_committed_start(db, streamers, lifecycle, music_dir, station_id, guard));
             operation.await.map_err(|error| {
                 tracing::error!(station_id = %station_id, %error, "committed start task failed");
                 AppError::stream("Stream start task failed".to_string()).with_code("STREAM_TASK_FAILED")
@@ -884,7 +884,7 @@ pub(crate) async fn restart_station(
             let db = db.clone();
             let streamers = Arc::clone(streamers);
             let lifecycle = Arc::clone(lifecycle);
-            let upload_dir = upload_dir.to_owned();
+            let music_dir = music_dir.to_owned();
             let operation = tokio::spawn(async move {
                 let result = finish_admitted_shutdown(&streamers, station_id, &streamer, receiver).await;
                 if let Err(error) = result {
@@ -892,7 +892,7 @@ pub(crate) async fn restart_station(
                     let _guard = guard;
                     return Err(error);
                 }
-                run_committed_start(db, streamers, lifecycle, upload_dir, station_id, guard).await
+                run_committed_start(db, streamers, lifecycle, music_dir, station_id, guard).await
             });
             operation.await.map_err(|error| {
                 tracing::error!(station_id = %station_id, %error, "committed restart task failed");
@@ -991,7 +991,7 @@ async fn run_committed_delete(
 /// Startup restore: every station persisted as `started` is started again,
 /// without re-persisting the intent (no `UPDATE`, no `updated_at` bump).
 /// One failing station must never block the rest of the boot.
-pub async fn restore_started_stations(db: &PgPool, streamers: &StreamersMap, lifecycle: &StationLifecycleLocks, upload_dir: &str) {
+pub async fn restore_started_stations(db: &PgPool, streamers: &StreamersMap, lifecycle: &StationLifecycleLocks, music_dir: &str) {
     let stations = match repository::find_started_stations(db).await {
         Ok(stations) => stations,
         Err(error) => {
@@ -1000,7 +1000,7 @@ pub async fn restore_started_stations(db: &PgPool, streamers: &StreamersMap, lif
         }
     };
     for station in stations {
-        restore_station_if_still_started(db, streamers, lifecycle, upload_dir, station.id).await;
+        restore_station_if_still_started(db, streamers, lifecycle, music_dir, station.id).await;
     }
 }
 
@@ -1015,7 +1015,7 @@ async fn restore_station_if_still_started(
     db: &PgPool,
     streamers: &StreamersMap,
     lifecycle: &StationLifecycleLocks,
-    upload_dir: &str,
+    music_dir: &str,
     station_id: Uuid,
 ) {
     let _guard = lifecycle.lock(station_id).await;
@@ -1030,7 +1030,7 @@ async fn restore_station_if_still_started(
     if !still_started {
         return;
     }
-    if let Err(error) = start_station_runtime(db, streamers, lifecycle, upload_dir, station_id).await {
+    if let Err(error) = start_station_runtime(db, streamers, lifecycle, music_dir, station_id).await {
         tracing::error!(station_id = %station_id, %error, "startup restore: failed to start station");
     }
 }
@@ -1064,7 +1064,7 @@ pub async fn stream_play(
     Path(station_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let station_id = resolve_station_id(&db, &station_id).await?;
-    start_station(&db, &streamers, &lifecycle, &config.upload_dir, station_id).await?;
+    start_station(&db, &streamers, &lifecycle, &config.music_dir, station_id).await?;
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 
@@ -1110,7 +1110,7 @@ pub async fn stream_restart(
     let station_id = resolve_station_id(&db, &station_id).await?;
     // One lock for the whole transition: stop the old runtime, then start
     // the fresh one explicitly — get/create alone never plays anymore.
-    restart_station(&db, &streamers, &lifecycle, &config.upload_dir, station_id).await?;
+    restart_station(&db, &streamers, &lifecycle, &config.music_dir, station_id).await?;
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 

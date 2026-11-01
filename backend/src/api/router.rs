@@ -135,15 +135,26 @@ pub fn create_router(
         )
         .route("/api/uploads/{id}", get(songs::handlers::upload_jobs::get_upload_job))
         .route("/api/songs/search", get(songs::handlers::search_songs))
+        .route("/api/songs/scan", post(songs::handlers::scan_library_endpoint))
         .route("/api/songs/artists", get(songs::handlers::list_artists))
         .route("/api/songs/count", post(songs::handlers::count_songs))
         .route("/api/songs/batch", delete(songs::handlers::delete_songs_batch))
+        .route("/api/songs/missing", delete(songs::handlers::purge_missing))
+        .route("/api/files", get(songs::handlers::list_files).delete(songs::handlers::delete_file))
+        .route(
+            "/api/files/folders",
+            get(songs::handlers::list_folders)
+                .post(songs::handlers::create_folder)
+                .delete(songs::handlers::delete_folder),
+        )
+        .route("/api/files/move", post(songs::handlers::move_entry))
         .route(
             "/api/songs/{id}",
             get(songs::handlers::get_song)
                 .put(songs::handlers::update_song)
                 .delete(songs::handlers::delete_song),
         )
+        .route("/api/songs/{id}/details", get(songs::handlers::get_song_details))
         .route("/api/songs/{id}/stations", post(songs::handlers::add_song_stations))
         .route(
             "/api/songs/{id}/stations/{station_id}",

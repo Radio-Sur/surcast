@@ -83,22 +83,15 @@ pub async fn global_ws(
         crate::auth::middleware::verify_token(token, &config.jwt_secret).map_err(|_| AppError::unauthorized("Invalid token".into()))?;
     }
 
-    let upload_dir = config.upload_dir.clone();
+    let music_dir = config.music_dir.clone();
     let jwt_secret = config.jwt_secret.clone();
     let token_from_query = query.token.clone();
 
-    Ok(ws.on_upgrade(move |socket| {
-        handle_connection(
-            socket,
-            db,
-            streamers,
-            lifecycle,
-            upload_dir,
-            jwt_secret,
-            token_from_query,
-            listeners,
-        )
-    }))
+    Ok(
+        ws.on_upgrade(move |socket| {
+            handle_connection(socket, db, streamers, lifecycle, music_dir, jwt_secret, token_from_query, listeners)
+        }),
+    )
 }
 
 async fn handle_connection(
@@ -106,7 +99,7 @@ async fn handle_connection(
     db: PgPool,
     streamers: StreamersMap,
     lifecycle: Arc<StationLifecycleLocks>,
-    upload_dir: String,
+    music_dir: String,
     jwt_secret: String,
     token_from_query: Option<String>,
     listeners: Arc<ListenersState>,
@@ -126,7 +119,7 @@ async fn handle_connection(
     let (out_tx, out_rx) = mpsc::unbounded_channel();
     let mut send_task = tokio::spawn(ws_send_task(sender, out_rx));
     let mut listeners_task = tokio::spawn(forward_listeners(listeners, out_tx.clone()));
-    let mut recv_task = tokio::spawn(ws_recv_task(receiver, db, streamers, lifecycle, upload_dir, jwt_secret, out_tx));
+    let mut recv_task = tokio::spawn(ws_recv_task(receiver, db, streamers, lifecycle, music_dir, jwt_secret, out_tx));
 
     tokio::select! {
         _ = &mut send_task => {},
@@ -266,7 +259,7 @@ async fn ws_recv_task(
     db: PgPool,
     streamers: StreamersMap,
     lifecycle: Arc<StationLifecycleLocks>,
-    upload_dir: String,
+    music_dir: String,
     jwt_secret: String,
     out_tx: mpsc::UnboundedSender<Outbound>,
 ) {
@@ -339,7 +332,7 @@ async fn ws_recv_task(
                 // and live feed cannot race or interleave.
                 let handle = tokio::spawn(forward_station(
                     db.clone(),
-                    upload_dir.clone(),
+                    music_dir.clone(),
                     streamers.clone(),
                     lifecycle.clone(),
                     station_id,
@@ -368,7 +361,7 @@ async fn ws_recv_task(
             }
             Inbound::Play { station_id } => {
                 if let Ok(id) = resolve_station_id(&db, &station_id).await {
-                    if let Err(error) = start_station(&db, &streamers, &lifecycle, &upload_dir, id).await {
+                    if let Err(error) = start_station(&db, &streamers, &lifecycle, &music_dir, id).await {
                         let _ = out_tx.send(Outbound::Error {
                             station_id: Some(id),
                             data: format!("play failed: {error}"),
@@ -411,7 +404,7 @@ async fn ws_recv_task(
 /// every subscriber of the station and is reserved for real queue changes.
 async fn forward_station(
     db: PgPool,
-    upload_dir: String,
+    music_dir: String,
     streamers: StreamersMap,
     lifecycle: Arc<StationLifecycleLocks>,
     station_id: Uuid,
@@ -436,7 +429,7 @@ async fn forward_station(
             loop {
                 match no_runtime_snapshot(
                     &db,
-                    &upload_dir,
+                    &music_dir,
                     &streamers,
                     &lifecycle,
                     station_id,
@@ -491,7 +484,7 @@ async fn forward_station(
         };
         // Attach with a full fresh snapshot, then forward live broadcasts
         // until the runtime is replaced (or gone).
-        match attach_snapshot_and_forward(&db, &upload_dir, &streamers, station_id, &out_tx, streamer).await {
+        match attach_snapshot_and_forward(&db, &music_dir, &streamers, station_id, &out_tx, streamer).await {
             ForwardOutcome::Reattach => continue,
             ForwardOutcome::ConnectionGone => return,
         }
@@ -577,7 +570,7 @@ enum StationObservation {
 /// even when `is_started` did not.
 async fn no_runtime_snapshot(
     db: &PgPool,
-    upload_dir: &str,
+    music_dir: &str,
     streamers: &StreamersMap,
     lifecycle: &StationLifecycleLocks,
     station_id: Uuid,
@@ -678,7 +671,7 @@ async fn no_runtime_snapshot(
         }
     }
     if is_started_changed || force_queue {
-        if let Some(queue) = db_queue_snapshot(db, upload_dir, station_id).await {
+        if let Some(queue) = db_queue_snapshot(db, music_dir, station_id).await {
             if out_tx.send(Outbound::QueueUpdate { station_id, data: queue }).is_err() {
                 return NoRuntimeSnapshot::ConnectionGone;
             }
@@ -700,7 +693,7 @@ async fn no_runtime_snapshot(
 /// and re-attaching would spin on failed sends.
 async fn attach_snapshot_and_forward(
     db: &PgPool,
-    upload_dir: &str,
+    music_dir: &str,
     streamers: &StreamersMap,
     station_id: Uuid,
     out_tx: &mpsc::UnboundedSender<Outbound>,
@@ -730,7 +723,7 @@ async fn attach_snapshot_and_forward(
             }
         }
     }
-    if let Some(queue) = db_queue_snapshot(db, upload_dir, station_id).await {
+    if let Some(queue) = db_queue_snapshot(db, music_dir, station_id).await {
         if out_tx.send(Outbound::QueueUpdate { station_id, data: queue }).is_err() {
             return ForwardOutcome::ConnectionGone;
         }
@@ -829,8 +822,8 @@ fn get_streamer(streamers: &StreamersMap, station_id: &Uuid) -> Option<Arc<Stati
 /// Read-only queue snapshot straight from the database, using the same queue
 /// repository the streamers feed their broadcasts from. Never creates a
 /// runtime — this is what Subscribe uses for stations without one.
-async fn db_queue_snapshot(db: &PgPool, upload_dir: &str, station_id: Uuid) -> Option<serde_json::Value> {
-    let raw = crate::streamer::queue_repository::QueueRepository::new(db.clone(), station_id, upload_dir.to_string())
+async fn db_queue_snapshot(db: &PgPool, music_dir: &str, station_id: Uuid) -> Option<serde_json::Value> {
+    let raw = crate::streamer::queue_repository::QueueRepository::new(db.clone(), station_id, music_dir.to_string())
         .queue_json()
         .await;
     serde_json::from_str(&raw).ok()

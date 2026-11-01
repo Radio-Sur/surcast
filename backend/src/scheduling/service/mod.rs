@@ -142,7 +142,7 @@ async fn fill_from_schedule_entry_locked(
     Ok(())
 }
 
-pub async fn fill_queue_from_schedule(db: &PgPool, station_id: Uuid, upload_dir: &str) -> Result<(), AppError> {
+pub async fn fill_queue_from_schedule(db: &PgPool, station_id: Uuid, music_dir: &str) -> Result<(), AppError> {
     // One advisory lock for the whole fill, so a manual trigger and a
     // streamer commit-fill can never count the queue from interleaved
     // cursor states (which used to over- and under-fill the window).
@@ -150,16 +150,16 @@ pub async fn fill_queue_from_schedule(db: &PgPool, station_id: Uuid, upload_dir:
     self::auto_fill::lock_station_queue(&mut transaction, station_id).await?;
     let analyze = fill_queue_from_schedule_locked(&mut transaction, station_id).await?;
     transaction.commit().await.db_error("failed to commit AutoDJ queue fill")?;
-    spawn_pending_analyses(db, station_id, upload_dir, &analyze);
+    spawn_pending_analyses(db, station_id, music_dir, &analyze);
     Ok(())
 }
 
 /// Song analysis is a side effect that cannot be rolled back: it must only
 /// run after the fill transaction committed, never for rows a failed attempt
 /// rolled back (a retry would otherwise analyze the same song repeatedly).
-fn spawn_pending_analyses(db: &PgPool, station_id: Uuid, upload_dir: &str, analyze: &[Uuid]) {
+fn spawn_pending_analyses(db: &PgPool, station_id: Uuid, music_dir: &str, analyze: &[Uuid]) {
     for song_id in analyze {
-        crate::songs::analysis::spawn_analysis(db, *song_id, station_id, upload_dir);
+        crate::songs::analysis::spawn_analysis(db, *song_id, station_id, music_dir);
     }
 }
 

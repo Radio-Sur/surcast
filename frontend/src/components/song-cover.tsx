@@ -22,6 +22,8 @@ export function SongCover({
       component="img"
       src={`/api/songs/${songId}/cover`}
       alt=""
+      loading="lazy"
+      decoding="async"
       onError={() => setImgError(true)}
       sx={{
         width: size,

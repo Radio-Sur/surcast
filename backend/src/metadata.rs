@@ -5,7 +5,6 @@ pub struct EnrichedMetadata {
     pub title: String,
     pub artist: String,
     pub album: String,
-    pub cover_url: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -49,14 +48,6 @@ struct TrackInfoArtist {
 #[derive(Deserialize)]
 struct TrackInfoAlbum {
     title: String,
-    image: Vec<AlbumImage>,
-}
-
-#[derive(Deserialize)]
-struct AlbumImage {
-    #[serde(rename = "#text")]
-    text: String,
-    size: String,
 }
 
 /// Try to extract artist and title from a filename (without extension).
@@ -109,18 +100,6 @@ pub fn parse_filename(name: &str) -> (String, String) {
     ("".to_string(), cleaned.to_string())
 }
 
-fn largest_image(images: &[AlbumImage]) -> Option<&str> {
-    let preferred = ["mega", "extralarge", "large", "medium", "small"];
-    for size in &preferred {
-        if let Some(img) = images.iter().find(|i| i.size == *size) {
-            if !img.text.is_empty() {
-                return Some(&img.text);
-            }
-        }
-    }
-    images.iter().find(|i| !i.text.is_empty()).map(|i| i.text.as_str())
-}
-
 pub async fn enrich(api_key: &str, title: &str, artist: &str) -> Option<EnrichedMetadata> {
     if !artist.is_empty() && !title.is_empty() {
         if let Some(info) = fetch_track_info(api_key, artist, title).await {
@@ -164,19 +143,12 @@ async fn fetch_track_info(api_key: &str, artist: &str, track: &str) -> Option<En
     let corrected_title = resp.track.name;
     let corrected_artist = resp.track.artist.name;
 
-    let (album, cover_url) = match &resp.track.album {
-        Some(album) => {
-            let url = largest_image(&album.image).map(|s| s.to_string());
-            (album.title.clone(), url)
-        }
-        None => (String::new(), None),
-    };
+    let album = resp.track.album.as_ref().map(|album| album.title.clone()).unwrap_or_default();
 
     Some(EnrichedMetadata {
         title: corrected_title,
         artist: corrected_artist,
         album,
-        cover_url,
     })
 }
 
@@ -226,43 +198,5 @@ mod tests {
         let (artist, title) = parse_filename("01. Artist - Title");
         assert_eq!(artist, "Artist");
         assert_eq!(title, "Title");
-    }
-
-    #[test]
-    fn test_largest_image_empty() {
-        let images = vec![];
-        assert_eq!(largest_image(&images), None);
-    }
-
-    #[test]
-    fn test_largest_image_one() {
-        let images = vec![AlbumImage {
-            text: "url".to_string(),
-            size: "small".to_string(),
-        }];
-        assert_eq!(largest_image(&images), Some("url"));
-    }
-
-    #[test]
-    fn test_largest_image_multiple() {
-        let images = vec![
-            AlbumImage {
-                text: "small_url".to_string(),
-                size: "small".to_string(),
-            },
-            AlbumImage {
-                text: "large_url".to_string(),
-                size: "large".to_string(),
-            },
-            AlbumImage {
-                text: "extralarge_url".to_string(),
-                size: "extralarge".to_string(),
-            },
-            AlbumImage {
-                text: "mega_url".to_string(),
-                size: "mega".to_string(),
-            },
-        ];
-        assert_eq!(largest_image(&images), Some("mega_url"));
     }
 }

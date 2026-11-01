@@ -3,6 +3,7 @@ import type enAuth from "./en/auth.json";
 import type enCommon from "./en/common.json";
 import type enDashboard from "./en/dashboard.json";
 import type enErrors from "./en/errors.json";
+import type enFiles from "./en/files.json";
 import type enNav from "./en/nav.json";
 import type enPlaylists from "./en/playlists.json";
 import type enSchedule from "./en/schedule.json";
@@ -16,6 +17,7 @@ export type TranslationResources = {
   nav: typeof enNav;
   auth: typeof enAuth;
   songs: typeof enSongs;
+  files: typeof enFiles;
   stations: typeof enStations;
   schedule: typeof enSchedule;
   settings: typeof enSettings;

@@ -27,11 +27,12 @@ services:
     env_file: .env
     environment:
       DATABASE_URL: postgres://surcast:surcast@postgres:5432/surcast
+      MUSIC_DIR: /workspace/music
     ports:
       - "80:3001"
       - "8000:8000"
     volumes:
-      - uploads:/workspace/uploads
+      - music:/workspace/music
     networks:
       - surcast
     depends_on:
@@ -46,7 +47,7 @@ services:
 
 volumes:
   pgdata:
-  uploads:
+  music:
 
 networks:
   surcast:

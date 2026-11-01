@@ -65,7 +65,7 @@ async fn setup_with_station_and_song(pool: PgPool) -> (TestServer, String, Uuid,
         .multipart(form)
         .await;
     assert_eq!(song_resp.status_code(), 201, "upload song failed: {}", song_resp.text());
-    let song_id: Uuid = song_resp.json::<serde_json::Value>()["id"]
+    let song_id: Uuid = song_resp.json::<serde_json::Value>()["song"]["id"]
         .as_str()
         .expect("no id in song response")
         .parse()
@@ -385,20 +385,20 @@ async fn test_reorder_then_add_keeps_upcoming_songs(pool: PgPool) {
 }
 
 async fn upload_station_song(server: &TestServer, token: &str, station_id: Uuid, title: &str) -> Uuid {
+    // Distinct bytes per song: identical content would be reported as a
+    // duplicate instead of creating a new row.
+    let bytes = format!("fake audio for {title}").into_bytes();
     let form = MultipartForm::new()
         .add_text("title", title)
         .add_text("artist", "Queue Artist")
-        .add_part(
-            "file",
-            Part::bytes(b"fake audio" as &[_]).file_name("test.mp3").mime_type("audio/mpeg"),
-        );
+        .add_part("file", Part::bytes(bytes).file_name("test.mp3").mime_type("audio/mpeg"));
     let resp = server
         .post("/api/songs")
         .add_header("Authorization", &format!("Bearer {token}"))
         .multipart(form)
         .await;
     assert_eq!(resp.status_code(), 201, "upload failed: {}", resp.text());
-    let song_id: Uuid = resp.json::<serde_json::Value>()["id"].as_str().unwrap().parse().unwrap();
+    let song_id: Uuid = resp.json::<serde_json::Value>()["song"]["id"].as_str().unwrap().parse().unwrap();
     let assign = server
         .post(&format!("/api/songs/{song_id}/stations"))
         .add_header("Authorization", &format!("Bearer {token}"))

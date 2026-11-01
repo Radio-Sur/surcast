@@ -44,12 +44,12 @@ fn song_params(id: Uuid, user_id: Uuid) -> InsertSongParams {
         title: "Test Song".into(),
         artist: "Test Artist".into(),
         album: "Test Album".into(),
-        cover_path: "covers/test.jpg".into(),
+        has_cover: true,
         file_path: "/tmp/test_song.mp3".into(),
         file_size: 2048,
         mime_type: "audio/mpeg".into(),
         duration: 240,
-        uploaded_by: user_id,
+        uploaded_by: Some(user_id),
         ..InsertSongParams::default()
     }
 }

@@ -1,6 +1,7 @@
 import { setupServer } from "msw/node";
 import { apiKeysHandlers } from "./handlers/api-keys";
 import { authHandlers } from "./handlers/auth";
+import { filesHandlers } from "./handlers/files";
 import { icecastHandlers } from "./handlers/icecast";
 import { listenersHandlers } from "./handlers/listeners";
 import { playlistsHandlers } from "./handlers/playlists";
@@ -14,6 +15,7 @@ export const server = setupServer(
   ...authHandlers,
   ...stationsHandlers,
   ...songsHandlers,
+  ...filesHandlers,
   ...playlistsHandlers,
   ...scheduleHandlers,
   ...usersHandlers,

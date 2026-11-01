@@ -12,7 +12,7 @@ use super::upload_helper::is_audio_file;
 use crate::auth::middleware::AuthUser;
 use crate::config::Config;
 use crate::errors::{AppError, DbResult};
-use crate::songs::upload::process_song_upload;
+use crate::songs::import::{import_song_file, store_upload_bytes, DuplicateInfo, ImportOrigin, ImportOutcome, ImportRequest};
 
 #[derive(Serialize)]
 pub struct UploadJobCreated {
@@ -26,9 +26,11 @@ pub struct UploadJobStatus {
     pub total: i32,
     pub processed: i32,
     pub failed: i32,
+    pub skipped: i32,
     pub current_file: Option<String>,
     pub error: Option<String>,
     pub song_ids: Vec<Uuid>,
+    pub duplicates: Vec<DuplicateInfo>,
 }
 
 pub async fn start_upload(
@@ -39,6 +41,7 @@ pub async fn start_upload(
 ) -> Result<(StatusCode, Json<UploadJobCreated>), AppError> {
     let mut files: Vec<(String, Vec<u8>)> = Vec::new();
     let mut assign_to_all = false;
+    let mut allow_duplicate = false;
     let mut station_ids: Vec<Uuid> = Vec::new();
     let mut title_override: Option<String> = None;
     let mut artist_override: Option<String> = None;
@@ -63,6 +66,7 @@ pub async fn start_upload(
             "artist" => artist_override = Some(field.text().await.unwrap_or_default()),
             "album" => album_override = Some(field.text().await.unwrap_or_default()),
             "assign_to_all" => assign_to_all = field.text().await.unwrap_or_default() == "true",
+            "allow_duplicate" => allow_duplicate = field.text().await.unwrap_or_default() == "true",
             "station_ids" => {
                 let text = field.text().await.unwrap_or_default();
                 if !text.is_empty() {
@@ -108,6 +112,7 @@ pub async fn start_upload(
         entries,
         station_ids,
         single_meta,
+        allow_duplicate,
     ));
 
     Ok((StatusCode::ACCEPTED, Json(UploadJobCreated { job_id })))
@@ -133,12 +138,14 @@ pub async fn get_upload_job(
             i32,
             i32,
             i32,
+            i32,
             Option<String>,
             Option<String>,
             Option<serde_json::Value>,
+            Option<serde_json::Value>,
         ),
     >(
-        "SELECT id, user_id, status, total, processed, failed, current_file, error, song_ids
+        "SELECT id, user_id, status, total, processed, failed, skipped, current_file, error, song_ids, duplicates
          FROM upload_jobs WHERE id = $1",
     )
     .bind(job_id)
@@ -146,7 +153,7 @@ pub async fn get_upload_job(
     .await
     .db_error("failed to query upload job")?;
 
-    let Some((id, owner_id, status, total, processed, failed, current_file, error, song_ids)) = row else {
+    let Some((id, owner_id, status, total, processed, failed, skipped, current_file, error, song_ids, duplicates)) = row else {
         return Err(AppError::not_found("Upload job not found".into()));
     };
 
@@ -155,6 +162,7 @@ pub async fn get_upload_job(
     }
 
     let song_ids: Vec<Uuid> = song_ids.and_then(|v| serde_json::from_value(v).ok()).unwrap_or_default();
+    let duplicates: Vec<DuplicateInfo> = duplicates.and_then(|v| serde_json::from_value(v).ok()).unwrap_or_default();
 
     Ok(Json(UploadJobStatus {
         id,
@@ -162,9 +170,11 @@ pub async fn get_upload_job(
         total,
         processed,
         failed,
+        skipped,
         current_file,
         error,
         song_ids,
+        duplicates,
     }))
 }
 
@@ -213,25 +223,39 @@ async fn set_current_file(db: &PgPool, job_id: Uuid, name: &str) {
         .await;
 }
 
-async fn update_progress(db: &PgPool, job_id: Uuid, processed: i32, failed: i32) {
-    let _ = sqlx::query("UPDATE upload_jobs SET processed = $1, failed = $2, updated_at = now() WHERE id = $3")
+async fn update_progress(db: &PgPool, job_id: Uuid, processed: i32, failed: i32, skipped: i32) {
+    let _ = sqlx::query("UPDATE upload_jobs SET processed = $1, failed = $2, skipped = $3, updated_at = now() WHERE id = $4")
         .bind(processed)
         .bind(failed)
+        .bind(skipped)
         .bind(job_id)
         .execute(db)
         .await;
 }
 
-async fn finish_job(db: &PgPool, job_id: Uuid, status: &str, error: Option<&str>, song_ids: &[Uuid], processed: i32, failed: i32) {
+async fn finish_job(
+    db: &PgPool,
+    job_id: Uuid,
+    status: &str,
+    error: Option<&str>,
+    song_ids: &[Uuid],
+    duplicates: &[DuplicateInfo],
+    processed: i32,
+    failed: i32,
+    skipped: i32,
+) {
     let ids = serde_json::to_string(song_ids).unwrap_or_else(|_| "[]".to_string());
+    let dupes = serde_json::to_string(duplicates).unwrap_or_else(|_| "[]".to_string());
     let _ = sqlx::query(
-        "UPDATE upload_jobs SET status = $1, error = $2, song_ids = $3::jsonb, processed = $4, failed = $5, current_file = NULL, updated_at = now() WHERE id = $6",
+        "UPDATE upload_jobs SET status = $1, error = $2, song_ids = $3::jsonb, duplicates = $4::jsonb, processed = $5, failed = $6, skipped = $7, current_file = NULL, updated_at = now() WHERE id = $8",
     )
     .bind(status)
     .bind(error)
     .bind(ids)
+    .bind(dupes)
     .bind(processed)
     .bind(failed)
+    .bind(skipped)
     .bind(job_id)
     .execute(db)
     .await;
@@ -245,10 +269,13 @@ async fn run_job(
     entries: Vec<(String, Vec<u8>)>,
     station_ids: Vec<Uuid>,
     single_meta: Option<(Option<String>, Option<String>, Option<String>)>,
+    allow_duplicate: bool,
 ) {
     let mut processed = 0i32;
     let mut failed = 0i32;
+    let mut skipped = 0i32;
     let mut song_ids: Vec<Uuid> = Vec::new();
+    let mut duplicates: Vec<DuplicateInfo> = Vec::new();
     let mut last_error: Option<String> = None;
 
     let (title_override, artist_override, album_override) = single_meta.unwrap_or((None, None, None));
@@ -256,28 +283,53 @@ async fn run_job(
     for (original_name, bytes) in entries {
         set_current_file(&db, job_id, &original_name).await;
 
-        match process_song_upload(
+        let stored = store_upload_bytes(&config.music_dir, &original_name, &bytes).await;
+        let relative_path = match stored {
+            Ok(path) => path,
+            Err(e) => {
+                tracing::warn!(file = %original_name, "Song upload failed: {e}");
+                failed += 1;
+                if last_error.is_none() {
+                    last_error = Some(e.to_string());
+                }
+                update_progress(&db, job_id, processed, failed, skipped).await;
+                continue;
+            }
+        };
+
+        match import_song_file(
             &db,
-            &original_name,
-            &bytes,
-            &config.upload_dir,
-            user_id,
-            config.lastfm_api_key.as_deref(),
-            title_override.as_deref(),
-            artist_override.as_deref(),
-            album_override.as_deref(),
+            &config.music_dir,
+            &ImportRequest {
+                relative_path,
+                origin: ImportOrigin::Api,
+                uploaded_by: Some(user_id),
+                allow_duplicate,
+                title_override: title_override.clone(),
+                artist_override: artist_override.clone(),
+                album_override: album_override.clone(),
+                lastfm_api_key: config.lastfm_api_key.clone(),
+            },
         )
         .await
         {
-            Ok(song) => {
-                if let Err(e) = assign_song_to_stations(&db, song.id, &station_ids).await {
-                    tracing::warn!(song = %song.id, "failed to assign song after upload: {e}");
+            Ok(ImportOutcome::Created { song_id }) => {
+                if let Err(e) = assign_song_to_stations(&db, song_id, &station_ids).await {
+                    tracing::warn!(song = %song_id, "failed to assign song after upload: {e}");
                 }
-                song_ids.push(song.id);
+                song_ids.push(song_id);
                 processed += 1;
             }
+            Ok(ImportOutcome::Duplicate { duplicate }) => {
+                if let Err(e) = assign_song_to_stations(&db, duplicate.song_id, &station_ids).await {
+                    tracing::warn!(song = %duplicate.song_id, "failed to assign duplicate song after upload: {e}");
+                }
+                song_ids.push(duplicate.song_id);
+                duplicates.push(duplicate);
+                skipped += 1;
+            }
             Err(e) => {
-                tracing::warn!(file = %original_name, "Song upload/analysis failed: {e}");
+                tracing::warn!(file = %original_name, "Song import failed: {e}");
                 failed += 1;
                 if last_error.is_none() {
                     last_error = Some(e.to_string());
@@ -285,10 +337,21 @@ async fn run_job(
             }
         }
 
-        update_progress(&db, job_id, processed, failed).await;
+        update_progress(&db, job_id, processed, failed, skipped).await;
     }
 
-    finish_job(&db, job_id, "done", last_error.as_deref(), &song_ids, processed, failed).await;
+    finish_job(
+        &db,
+        job_id,
+        "done",
+        last_error.as_deref(),
+        &song_ids,
+        &duplicates,
+        processed,
+        failed,
+        skipped,
+    )
+    .await;
 }
 
 #[cfg(test)]

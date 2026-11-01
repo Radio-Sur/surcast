@@ -152,23 +152,29 @@ pub(crate) async fn fill_from_playlist_locked(
 }
 
 async fn pick_from_playlist(connection: &mut PgConnection, playlist_id: Uuid) -> Result<Vec<Uuid>, AppError> {
-    sqlx::query_scalar("SELECT ps.song_id FROM playlist_songs ps WHERE ps.playlist_id = $1 ORDER BY ps.position")
-        .bind(playlist_id)
-        .fetch_all(&mut *connection)
-        .await
-        .db_error("failed to pick songs from playlist")
+    sqlx::query_scalar(
+        "SELECT ps.song_id FROM playlist_songs ps JOIN songs s ON s.id = ps.song_id
+         WHERE ps.playlist_id = $1 AND s.missing_since IS NULL ORDER BY ps.position",
+    )
+    .bind(playlist_id)
+    .fetch_all(&mut *connection)
+    .await
+    .db_error("failed to pick songs from playlist")
 }
 
 async fn pick_from_station_library(connection: &mut PgConnection, station_id: Uuid) -> Result<Vec<Uuid>, AppError> {
-    sqlx::query_scalar("SELECT ss.song_id FROM station_songs ss WHERE ss.station_id = $1")
-        .bind(station_id)
-        .fetch_all(&mut *connection)
-        .await
-        .db_error("failed to pick from station library")
+    sqlx::query_scalar(
+        "SELECT ss.song_id FROM station_songs ss JOIN songs s ON s.id = ss.song_id
+         WHERE ss.station_id = $1 AND s.missing_since IS NULL",
+    )
+    .bind(station_id)
+    .fetch_all(&mut *connection)
+    .await
+    .db_error("failed to pick from station library")
 }
 
 async fn pick_from_global_library(connection: &mut PgConnection) -> Result<Vec<Uuid>, AppError> {
-    sqlx::query_scalar("SELECT id FROM songs")
+    sqlx::query_scalar("SELECT id FROM songs WHERE missing_since IS NULL")
         .fetch_all(&mut *connection)
         .await
         .db_error("failed to pick from global library")

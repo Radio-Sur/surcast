@@ -13,6 +13,7 @@ frontend/package-lock.json
 .icecast/
 
 uploads/
+music/
 
 # Env
 .env

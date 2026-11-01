@@ -239,12 +239,14 @@ pub struct InsertSongParams {
     pub title: String,
     pub artist: String,
     pub album: String,
-    pub cover_path: String,
+    pub has_cover: bool,
     pub file_path: String,
     pub file_size: i64,
     pub mime_type: String,
     pub duration: i32,
-    pub uploaded_by: Uuid,
+    pub uploaded_by: Option<Uuid>,
+    pub origin: String,
+    pub audio_hash: Option<String>,
     pub cue_in: f64,
     pub cue_out: f64,
     pub cross_start_next: f64,
@@ -265,12 +267,14 @@ impl Default for InsertSongParams {
             title: String::new(),
             artist: String::new(),
             album: String::new(),
-            cover_path: String::new(),
+            has_cover: false,
             file_path: String::new(),
             file_size: 0,
             mime_type: String::new(),
             duration: 0,
-            uploaded_by: Uuid::new_v4(),
+            uploaded_by: None,
+            origin: "api".to_string(),
+            audio_hash: None,
             cue_in: 0.0,
             cue_out: 0.0,
             cross_start_next: 0.0,
@@ -288,18 +292,20 @@ impl Default for InsertSongParams {
 
 pub async fn insert_song_record(db: &PgPool, params: &InsertSongParams) -> Result<(), AppError> {
     sqlx::query(
-        "INSERT INTO songs (id, title, artist, album, cover_path, file_path, file_size, mime_type, duration, uploaded_by, cue_in, cue_out, cross_start_next, loudness, loudness_range, true_peak, true_peak_db, amplify, sustained_ending, longtail, analyzed_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)",
+        "INSERT INTO songs (id, title, artist, album, has_cover, file_path, file_size, mime_type, duration, uploaded_by, origin, audio_hash, cue_in, cue_out, cross_start_next, loudness, loudness_range, true_peak, true_peak_db, amplify, sustained_ending, longtail, analyzed_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23)",
     )
     .bind(params.id)
     .bind(&params.title)
     .bind(&params.artist)
     .bind(&params.album)
-    .bind(&params.cover_path)
+    .bind(params.has_cover)
     .bind(&params.file_path)
     .bind(params.file_size)
     .bind(&params.mime_type)
     .bind(params.duration)
     .bind(params.uploaded_by)
+    .bind(&params.origin)
+    .bind(&params.audio_hash)
     .bind(params.cue_in)
     .bind(params.cue_out)
     .bind(params.cross_start_next)
@@ -392,6 +398,353 @@ pub async fn delete_song_from_station_songs(db: &PgPool, song_id: Uuid, station_
         .execute(db)
         .await
         .db_error("failed to remove from station library")?;
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Library management: content hashes, renames, missing files, scanner state.
+// ---------------------------------------------------------------------------
+
+/// Finds a song by its audio content hash (duplicate detection, rename
+/// matching). Only songs with a computed hash participate.
+/// IDs (subset of `ids`) whose files are gone from disk. Such songs must
+/// not enter a play queue until the file is back (the scanner clears the
+/// flag automatically).
+pub async fn find_missing_song_ids(db: &PgPool, ids: &[Uuid]) -> Result<Vec<Uuid>, AppError> {
+    let missing: Vec<(Uuid,)> = sqlx::query_as("SELECT id FROM songs WHERE id = ANY($1) AND missing_since IS NOT NULL")
+        .bind(ids)
+        .fetch_all(db)
+        .await
+        .db_error("failed to find missing songs")?;
+    Ok(missing.into_iter().map(|(id,)| id).collect())
+}
+
+pub async fn find_song_by_audio_hash(db: &PgPool, hash: &str) -> Result<Option<Song>, AppError> {
+    sqlx::query_as::<_, Song>("SELECT * FROM songs WHERE audio_hash = $1 ORDER BY created_at ASC LIMIT 1")
+        .bind(hash)
+        .fetch_optional(db)
+        .await
+        .db_error("failed to find song by audio hash")
+}
+
+/// Points a song row at a new relative path (rename/move done outside the
+/// panel). The row — and everything referencing it — stays intact.
+pub async fn update_song_path(db: &PgPool, id: Uuid, file_path: &str, file_size: i64) -> Result<(), AppError> {
+    sqlx::query("UPDATE songs SET file_path = $1, file_size = $2, missing_since = NULL, updated_at = NOW() WHERE id = $3")
+        .bind(file_path)
+        .bind(file_size)
+        .bind(id)
+        .execute(db)
+        .await
+        .db_error("failed to update song path")?;
+    Ok(())
+}
+
+/// Re-imports a file that changed in place: fresh metadata, new hash and a
+/// cleared analysis (recomputed when the song reaches a queue). Also clears
+/// the missing flag — the file is back.
+#[allow(clippy::too_many_arguments)]
+pub async fn refresh_song_file(
+    db: &PgPool,
+    id: Uuid,
+    title: &str,
+    artist: &str,
+    album: &str,
+    duration: i32,
+    file_size: i64,
+    mime_type: &str,
+    audio_hash: Option<String>,
+    has_cover: bool,
+) -> Result<(), AppError> {
+    sqlx::query(
+        "UPDATE songs SET title = $1, artist = $2, album = $3, duration = $4, file_size = $5, mime_type = $6,
+         audio_hash = $7, has_cover = $8,
+         cue_in = 0, cue_out = 0, cross_start_next = 0,
+         loudness = NULL, loudness_range = NULL, true_peak = NULL, true_peak_db = NULL, amplify = NULL,
+         sustained_ending = false, longtail = false, analyzed_at = NULL,
+         missing_since = NULL, updated_at = NOW() WHERE id = $9",
+    )
+    .bind(title)
+    .bind(artist)
+    .bind(album)
+    .bind(duration)
+    .bind(file_size)
+    .bind(mime_type)
+    .bind(audio_hash)
+    .bind(has_cover)
+    .bind(id)
+    .execute(db)
+    .await
+    .db_error("failed to refresh song file")?;
+    Ok(())
+}
+
+pub async fn mark_song_missing(db: &PgPool, id: Uuid) -> Result<(), AppError> {
+    sqlx::query("UPDATE songs SET missing_since = COALESCE(missing_since, NOW()), updated_at = NOW() WHERE id = $1")
+        .bind(id)
+        .execute(db)
+        .await
+        .db_error("failed to mark song missing")?;
+    Ok(())
+}
+
+pub async fn clear_song_missing(db: &PgPool, id: Uuid) -> Result<(), AppError> {
+    sqlx::query("UPDATE songs SET missing_since = NULL, updated_at = NOW() WHERE id = $1")
+        .bind(id)
+        .execute(db)
+        .await
+        .db_error("failed to clear song missing flag")?;
+    Ok(())
+}
+
+/// How many OTHER songs point at the same audio file (shared on forced
+/// duplicates). Unlink the file only when this returns 0.
+pub async fn count_songs_with_file_path(db: &PgPool, file_path: &str, except_id: Uuid) -> Result<i64, AppError> {
+    let (count,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM songs WHERE file_path = $1 AND id <> $2")
+        .bind(file_path)
+        .bind(except_id)
+        .fetch_one(db)
+        .await
+        .db_error("failed to count songs by file path")?;
+    Ok(count)
+}
+
+#[derive(Debug, sqlx::FromRow)]
+pub struct LibraryFile {
+    pub path: String,
+    pub song_id: Option<Uuid>,
+    pub file_hash: Option<String>,
+    pub file_size: i64,
+    pub mtime: i64,
+}
+
+pub async fn list_library_files(db: &PgPool) -> Result<Vec<LibraryFile>, AppError> {
+    sqlx::query_as::<_, LibraryFile>("SELECT path, song_id, file_hash, file_size, mtime FROM library_files")
+        .fetch_all(db)
+        .await
+        .db_error("failed to list library files")
+}
+
+pub async fn upsert_library_file(
+    db: &PgPool,
+    path: &str,
+    song_id: Option<Uuid>,
+    file_hash: Option<String>,
+    file_size: i64,
+    mtime: i64,
+) -> Result<(), AppError> {
+    sqlx::query(
+        "INSERT INTO library_files (path, song_id, file_hash, file_size, mtime, scanned_at)
+         VALUES ($1, $2, $3, $4, $5, NOW())
+         ON CONFLICT (path) DO UPDATE SET song_id = $2, file_hash = $3, file_size = $4, mtime = $5, scanned_at = NOW()",
+    )
+    .bind(path)
+    .bind(song_id)
+    .bind(file_hash)
+    .bind(file_size)
+    .bind(mtime)
+    .execute(db)
+    .await
+    .db_error("failed to upsert library file")?;
+    Ok(())
+}
+
+pub async fn delete_library_file(db: &PgPool, path: &str) -> Result<(), AppError> {
+    sqlx::query("DELETE FROM library_files WHERE path = $1")
+        .bind(path)
+        .execute(db)
+        .await
+        .db_error("failed to delete library file")?;
+    Ok(())
+}
+
+/// Songs whose file path is exactly one of `paths` (file browser overlay).
+pub async fn find_songs_by_paths(db: &PgPool, paths: &[String]) -> Result<Vec<Song>, AppError> {
+    if paths.is_empty() {
+        return Ok(Vec::new());
+    }
+    sqlx::query_as::<_, Song>("SELECT * FROM songs WHERE file_path = ANY($1)")
+        .bind(paths)
+        .fetch_all(db)
+        .await
+        .db_error("failed to find songs by paths")
+}
+
+/// Songs whose file lives at `prefix` or inside it (a folder subtree).
+pub async fn find_songs_under_path(db: &PgPool, prefix: &str) -> Result<Vec<Song>, AppError> {
+    sqlx::query_as::<_, Song>(
+        "SELECT * FROM songs
+         WHERE file_path = $1 OR left(file_path, char_length($1) + 1) = $1 || '/'
+         ORDER BY file_path",
+    )
+    .bind(prefix)
+    .fetch_all(db)
+    .await
+    .db_error("failed to find songs under path")
+}
+
+/// Covered, present songs grouped by their immediate child folder of `prefix`.
+/// Used to decide whether the cached folder cover art is still current.
+#[derive(Debug, sqlx::FromRow)]
+pub struct FolderCoverSignature {
+    pub folder: String,
+    pub song_count: i64,
+    pub max_updated_at: chrono::DateTime<chrono::Utc>,
+}
+
+pub async fn folder_cover_signatures(db: &PgPool, prefix: &str) -> Result<Vec<FolderCoverSignature>, AppError> {
+    sqlx::query_as::<_, FolderCoverSignature>(
+        r#"SELECT
+               split_part(
+                   CASE WHEN $1 = '' THEN file_path ELSE substr(file_path, char_length($1) + 2) END,
+                   '/', 1
+               ) AS folder,
+               COUNT(*) AS song_count,
+               MAX(updated_at) AS max_updated_at
+           FROM songs
+           WHERE has_cover = TRUE
+             AND missing_since IS NULL
+             AND ($1 = '' OR left(file_path, char_length($1) + 1) = $1 || '/')
+             AND position('/' in CASE WHEN $1 = '' THEN file_path ELSE substr(file_path, char_length($1) + 2) END) > 0
+           GROUP BY folder"#,
+    )
+    .bind(prefix)
+    .fetch_all(db)
+    .await
+    .db_error("failed to compute folder cover signatures")
+}
+
+#[derive(Debug, sqlx::FromRow)]
+pub struct FolderCoverCacheRow {
+    pub folder_path: String,
+    pub signature: String,
+    pub covers: Vec<Uuid>,
+}
+
+pub async fn find_folder_cover_cache(db: &PgPool, folder_paths: &[String]) -> Result<Vec<FolderCoverCacheRow>, AppError> {
+    if folder_paths.is_empty() {
+        return Ok(Vec::new());
+    }
+    sqlx::query_as::<_, FolderCoverCacheRow>("SELECT folder_path, signature, covers FROM folder_cover_cache WHERE folder_path = ANY($1)")
+        .bind(folder_paths)
+        .fetch_all(db)
+        .await
+        .db_error("failed to read folder cover cache")
+}
+
+pub async fn upsert_folder_cover_cache(db: &PgPool, folder_path: &str, signature: &str, covers: &[Uuid]) -> Result<(), AppError> {
+    sqlx::query(
+        "INSERT INTO folder_cover_cache (folder_path, signature, covers, updated_at)
+         VALUES ($1, $2, $3, NOW())
+         ON CONFLICT (folder_path) DO UPDATE
+         SET signature = EXCLUDED.signature, covers = EXCLUDED.covers, updated_at = NOW()",
+    )
+    .bind(folder_path)
+    .bind(signature)
+    .bind(covers.to_vec())
+    .execute(db)
+    .await
+    .db_error("failed to cache folder covers")?;
+    Ok(())
+}
+
+/// Covered, present songs at `prefix` or below, ordered by path. Only the id
+/// and path are needed to read and deduplicate their embedded art.
+pub async fn find_cover_songs_under_path(db: &PgPool, prefix: &str) -> Result<Vec<(Uuid, String)>, AppError> {
+    sqlx::query_as::<_, (Uuid, String)>(
+        "SELECT id, file_path FROM songs
+         WHERE has_cover = TRUE
+           AND missing_since IS NULL
+           AND (file_path = $1 OR left(file_path, char_length($1) + 1) = $1 || '/')
+         ORDER BY file_path",
+    )
+    .bind(prefix)
+    .fetch_all(db)
+    .await
+    .db_error("failed to find covered songs under path")
+}
+
+/// Every song currently flagged missing, oldest first.
+pub async fn find_all_missing_songs(db: &PgPool) -> Result<Vec<Song>, AppError> {
+    sqlx::query_as::<_, Song>("SELECT * FROM songs WHERE missing_since IS NOT NULL ORDER BY missing_since, id")
+        .fetch_all(db)
+        .await
+        .db_error("failed to find missing songs")
+}
+
+/// Rewrites song paths after a move/rename: `$1` and everything under it are
+/// re-rooted at `$2`.
+pub async fn move_song_paths(db: &PgPool, from: &str, to: &str) -> Result<u64, AppError> {
+    let result = sqlx::query(
+        "UPDATE songs
+         SET file_path = $2 || substring(file_path from char_length($1) + 1), updated_at = NOW()
+         WHERE file_path = $1 OR left(file_path, char_length($1) + 1) = $1 || '/'",
+    )
+    .bind(from)
+    .bind(to)
+    .execute(db)
+    .await
+    .db_error("failed to move song paths")?;
+    Ok(result.rows_affected())
+}
+
+/// Same as [`move_song_paths`] for the scanner's tracking table. Stale rows at
+/// the destination (a path that no longer exists on disk) are dropped first so
+/// the primary-key update cannot collide.
+pub async fn move_library_file_paths(db: &PgPool, from: &str, to: &str) -> Result<u64, AppError> {
+    sqlx::query(
+        "DELETE FROM library_files
+         WHERE path = $2 OR left(path, char_length($2) + 1) = $2 || '/'",
+    )
+    .bind(from)
+    .bind(to)
+    .execute(db)
+    .await
+    .db_error("failed to clear stale library paths")?;
+
+    let result = sqlx::query(
+        "UPDATE library_files
+         SET path = $2 || substring(path from char_length($1) + 1)
+         WHERE path = $1 OR left(path, char_length($1) + 1) = $1 || '/'",
+    )
+    .bind(from)
+    .bind(to)
+    .execute(db)
+    .await
+    .db_error("failed to move library file paths")?;
+    Ok(result.rows_affected())
+}
+
+pub async fn delete_library_files_under_path(db: &PgPool, prefix: &str) -> Result<u64, AppError> {
+    let result = sqlx::query(
+        "DELETE FROM library_files
+         WHERE path = $1 OR left(path, char_length($1) + 1) = $1 || '/'",
+    )
+    .bind(prefix)
+    .execute(db)
+    .await
+    .db_error("failed to delete library files under path")?;
+    Ok(result.rows_affected())
+}
+
+/// Last successful library scan (throttle). `None` means "never scanned".
+pub async fn get_last_scan_at(db: &PgPool) -> Result<Option<chrono::DateTime<chrono::Utc>>, AppError> {
+    let row: Option<(chrono::DateTime<chrono::Utc>,)> =
+        sqlx::query_as("SELECT last_scan_at FROM library_scan WHERE key = 'music' AND last_scan_at IS NOT NULL")
+            .fetch_optional(db)
+            .await
+            .db_error("failed to read library scan state")?;
+    Ok(row.map(|(at,)| at))
+}
+
+pub async fn set_last_scan_at(db: &PgPool) -> Result<(), AppError> {
+    sqlx::query(
+        "INSERT INTO library_scan (key, last_scan_at) VALUES ('music', NOW())
+         ON CONFLICT (key) DO UPDATE SET last_scan_at = NOW()",
+    )
+    .execute(db)
+    .await
+    .db_error("failed to write library scan state")?;
     Ok(())
 }
 

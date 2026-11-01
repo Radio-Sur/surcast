@@ -24,12 +24,12 @@ async fn make_song(db: &PgPool, user_id: Uuid) -> Uuid {
             title: "Playlist Song".into(),
             artist: "Artist".into(),
             album: "Album".into(),
-            cover_path: "".into(),
+            has_cover: false,
             file_path: "/tmp/playlist.mp3".into(),
             file_size: 1024,
             mime_type: "audio/mpeg".into(),
             duration: 180,
-            uploaded_by: user_id,
+            uploaded_by: Some(user_id),
             ..InsertSongParams::default()
         },
     )

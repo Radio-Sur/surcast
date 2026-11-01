@@ -6,6 +6,7 @@ import enAuth from "./en/auth.json";
 import enCommon from "./en/common.json";
 import enDashboard from "./en/dashboard.json";
 import enErrors from "./en/errors.json";
+import enFiles from "./en/files.json";
 import enNav from "./en/nav.json";
 import enPlaylists from "./en/playlists.json";
 import enSchedule from "./en/schedule.json";
@@ -18,6 +19,7 @@ import plAuth from "./pl/auth.json";
 import plCommon from "./pl/common.json";
 import plDashboard from "./pl/dashboard.json";
 import plErrors from "./pl/errors.json";
+import plFiles from "./pl/files.json";
 import plNav from "./pl/nav.json";
 import plPlaylists from "./pl/playlists.json";
 import plSchedule from "./pl/schedule.json";
@@ -32,6 +34,7 @@ const resources = {
     nav: enNav,
     auth: enAuth,
     songs: enSongs,
+    files: enFiles,
     stations: enStations,
     schedule: enSchedule,
     settings: enSettings,
@@ -46,6 +49,7 @@ const resources = {
     nav: plNav,
     auth: plAuth,
     songs: plSongs,
+    files: plFiles,
     stations: plStations,
     schedule: plSchedule,
     settings: plSettings,

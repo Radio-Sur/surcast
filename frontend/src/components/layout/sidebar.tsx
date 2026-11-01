@@ -1,4 +1,5 @@
 import Dashboard from "@mui/icons-material/Dashboard";
+import Folder from "@mui/icons-material/Folder";
 import LibraryMusic from "@mui/icons-material/LibraryMusic";
 import People from "@mui/icons-material/People";
 import PlaylistPlay from "@mui/icons-material/PlaylistPlay";
@@ -28,6 +29,7 @@ export function Sidebar() {
     { to: "/", icon: Dashboard, label: t("dashboard") },
     { to: "/stations", icon: Radio, label: t("stations") },
     { to: "/songs", icon: LibraryMusic, label: t("music") },
+    { to: "/files", icon: Folder, label: t("files") },
     { to: "/playlists", icon: PlaylistPlay, label: t("playlists") },
     { to: "/api-keys", icon: VpnKey, label: t("api_keys") },
     { to: "/users", icon: People, label: t("users") },

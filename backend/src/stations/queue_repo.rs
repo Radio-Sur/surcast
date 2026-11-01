@@ -116,7 +116,7 @@ pub async fn find_queue_items_all(
         String,
         i32,
         String,
-        String,
+        bool,
         Option<Uuid>,
         Option<String>,
         bool,
@@ -135,14 +135,14 @@ pub async fn find_queue_items_all(
             String,
             i32,
             String,
-            String,
+            bool,
             Option<Uuid>,
             Option<String>,
             bool,
         ),
     >(
         r#"SELECT sq.id, sq.station_id, sq.song_id, sq.position,
-                  s.title, s.artist, s.album, s.duration, s.mime_type, s.cover_path,
+                  s.title, s.artist, s.album, s.duration, s.mime_type, s.has_cover,
                   sq.origin_playlist_id, p.name as playlist_name, sq.is_auto_dj
            FROM station_queue sq
            JOIN songs s ON s.id = sq.song_id
@@ -171,7 +171,7 @@ pub async fn find_queue_items_by_song_ids(
         String,
         i32,
         String,
-        String,
+        bool,
         Option<Uuid>,
         Option<String>,
         bool,
@@ -190,14 +190,14 @@ pub async fn find_queue_items_by_song_ids(
             String,
             i32,
             String,
-            String,
+            bool,
             Option<Uuid>,
             Option<String>,
             bool,
         ),
     >(
         r#"SELECT sq.id, sq.station_id, sq.song_id, sq.position,
-                  s.title, s.artist, s.album, s.duration, s.mime_type, s.cover_path,
+                  s.title, s.artist, s.album, s.duration, s.mime_type, s.has_cover,
                   sq.origin_playlist_id, p.name as playlist_name, sq.is_auto_dj
            FROM station_queue sq
            JOIN songs s ON s.id = sq.song_id

@@ -201,11 +201,11 @@ pub async fn trigger_auto_fill(
     Path(station_id): Path<String>,
 ) -> Result<Json<Value>, AppError> {
     let sid: Uuid = station_id.parse().map_err(|_| AppError::bad_request("Invalid station ID".into()))?;
-    fill_queue_from_schedule(&db, sid, &config.upload_dir).await?;
+    fill_queue_from_schedule(&db, sid, &config.music_dir).await?;
     // The refill above writes rows straight into the DB; a live streamer keeps
     // its own in-memory queue copy, so reload it or the new tracks are never
     // picked up by the running pipeline.
-    crate::stations::handlers::sync_streamer_songs(&db, &streamers, &lifecycle, &config.upload_dir, sid, false).await?;
+    crate::stations::handlers::sync_streamer_songs(&db, &streamers, &lifecycle, &config.music_dir, sid, false).await?;
     Ok(Json(json!({ "status": "ok" })))
 }
 #[cfg(test)]
