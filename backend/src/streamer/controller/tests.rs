@@ -1833,25 +1833,28 @@ async fn stale_and_duplicate_events_do_not_supersede_the_current_plan() {
 }
 
 #[tokio::test]
-async fn reload_into_a_stopped_controller_starts_playback_once_songs_arrive() {
+async fn reload_into_an_idle_controller_leaves_resume_to_the_idle_ticker() {
     let mut harness = ControllerScenario::stopped().build().await;
     assert!(matches!(harness.play().await.unwrap().operation, PipelineOperation::Stop));
     harness.assert_state(PipelineState::Stopped);
 
-    let prepared = harness
-        .reload_titles(&["A"], false)
+    assert!(harness.reload_titles(&["A"], false).await.unwrap().is_none());
+    harness.assert_idle(true);
+    let (operation, attempt_id) = harness
+        .controller
+        .resume_from_idle()
         .await
-        .unwrap()
-        .expect("reload into a stopped controller with songs must issue a replace");
-    let PipelineOperation::Replace(plan) = &prepared.operation else {
-        panic!("reload into a stopped controller with songs must issue a replace");
+        .expect("idle ticker must resume a filled queue");
+    let PipelineOperation::Replace(plan) = &operation else {
+        panic!("idle resume must issue a replace");
     };
     assert!(matches!(plan.mode, ReplaceMode::InitialReplaceFromStopped));
     harness.assert_state(PipelineState::Stopped);
-    let play_id = prepared.play_attempt_id.expect("play attempt id");
-    assert!(harness.commit_play(play_id, &Ok(())));
+    let mut status_rx = harness.controller.status_tx.subscribe();
+    harness.controller.on_resume_result(attempt_id, Ok(()));
     harness.assert_state(PipelineState::Playing);
     harness.assert_current_song("A");
+    assert!(matches!(status_rx.try_recv(), Ok(StatusEvent::SongChange { title, total: 1, .. }) if title == "A"));
     assert_eq!(
         harness.pipeline.count(Call::Replace),
         0,
@@ -1863,6 +1866,111 @@ async fn reload_into_a_stopped_controller_starts_playback_once_songs_arrive() {
     let operation = empty_harness.reload_titles(&[], false).await.unwrap();
     assert!(operation.is_none(), "an empty reload must not start anything");
     empty_harness.assert_state(PipelineState::Stopped);
+}
+
+#[tokio::test]
+async fn reload_into_a_stopped_controller_does_not_start_before_explicit_play() {
+    let mut harness = ControllerScenario::stopped().with_queue(&["A", "B"]).build().await;
+    assert!(harness.reload_titles(&["A", "B"], false).await.unwrap().is_none());
+    harness.assert_pending_play(false);
+    harness.assert_idle(false);
+    let prepared = harness.play().await.expect("the explicit start must be the only play attempt");
+    let id = prepared.play_attempt_id.unwrap();
+    assert!(harness.commit_play(id, &Ok(())));
+    harness.assert_state(PipelineState::Playing);
+}
+
+#[tokio::test]
+async fn queue_reload_during_pending_play_does_not_schedule_another_start() {
+    let mut harness = ControllerScenario::stopped().with_queue(&["A", "B"]).build().await;
+    let prepared = harness.play().await.unwrap();
+    let id = prepared.play_attempt_id.unwrap();
+    assert!(harness.reload_titles(&["B", "C"], true).await.unwrap().is_none());
+    harness.assert_pending_play_id(Some(id));
+    harness.assert_current_song("A");
+    assert!(harness.commit_play(id, &Ok(())));
+    harness.assert_state(PipelineState::Playing);
+}
+
+#[tokio::test]
+async fn reload_after_a_failed_initial_play_allows_one_explicit_retry() {
+    let mut harness = ControllerScenario::stopped().with_queue(&["A", "B"]).build().await;
+    let first = harness.play().await.unwrap().play_attempt_id.unwrap();
+    assert!(harness.commit_play(first, &Err(PipelineError::Pipeline("output unavailable".into()))));
+    assert!(harness.reload_titles(&["A", "B"], false).await.unwrap().is_none());
+    let retry = harness.play().await.expect("retry must not find a play started by reload");
+    let id = retry.play_attempt_id.unwrap();
+    assert_ne!(first, id);
+    assert!(harness.commit_play(id, &Ok(())));
+    harness.assert_state(PipelineState::Playing);
+}
+
+#[tokio::test]
+async fn failed_queue_snapshot_never_broadcasts_an_empty_queue() {
+    let harness = ControllerScenario::playing().build().await;
+    let mut queue_rx = harness.controller.queue_tx.subscribe();
+    assert!(harness.controller.push_queue_update().await.is_err());
+    assert!(matches!(queue_rx.try_recv(), Err(TryRecvError::Empty)));
+}
+
+#[tokio::test]
+async fn manual_play_joins_an_in_flight_idle_resume_without_a_second_replace() {
+    for fail in [false, true] {
+        let pipeline = Arc::new(RecordingPipeline::with_gates());
+        if fail {
+            pipeline.fail(Call::Replace);
+        }
+        let harness = ControllerScenario::idle()
+            .with_queue(&["A", "B"])
+            .with_pipeline(pipeline.clone())
+            .build()
+            .await;
+        let (runtime, _events) = harness.into_runtime();
+        let gate = pipeline.replace_gate().unwrap();
+        gate.wait_started().await;
+
+        let mut response = runtime.submit_and_wait_admitted(StationCommand::Play).await.unwrap();
+        assert!(matches!(response.try_recv(), Err(OneshotTryRecvError::Empty)));
+        assert_eq!(pipeline.count(Call::Replace), 1);
+        gate.release();
+        let result = tokio::time::timeout(Duration::from_secs(2), response).await.unwrap().unwrap();
+        assert_eq!(
+            result.is_err(),
+            fail,
+            "manual Play must receive the automatic attempt's real outcome"
+        );
+        assert_eq!(pipeline.count(Call::Replace), 1, "joining must not queue another initial Replace");
+        assert_eq!(
+            runtime.state().await.unwrap(),
+            if fail { PipelineState::Stopped } else { PipelineState::Playing }
+        );
+        runtime.shutdown().await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn late_terminal_errors_after_stop_do_not_consume_the_current_song() {
+    let mut harness = ControllerScenario::playing().with_queue(&["A", "B"]).build().await;
+    let current = harness.controller.queue.current_song_info().unwrap();
+    let key = StationController::key_of(&current);
+    let generation = harness.controller.generation();
+    harness.stop();
+    assert!(harness
+        .handle_event(PipelineEvent::DecodeFailed {
+            generation,
+            track: key.clone(),
+            message: "Internal data stream error.".into(),
+        })
+        .await
+        .is_none());
+    assert!(harness
+        .handle_event(PipelineEvent::CurrentEos { generation, current: key })
+        .await
+        .is_none());
+    harness.assert_current_song("A");
+    harness.assert_idle(false);
+    harness.assert_pending_play(false);
+    assert!(harness.play().await.is_ok(), "the retained current must be retryable");
 }
 
 #[tokio::test]

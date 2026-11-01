@@ -1,14 +1,15 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, renderHook, waitFor } from "@testing-library/react";
+import { act, render, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { useState } from "react";
 import { I18nextProvider } from "react-i18next";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import i18n from "@/i18n";
+import { fakeQueueItem, fakeStreamStatus } from "@/mocks/data";
 import { server } from "@/mocks/server";
 import { AuthProvider } from "@/providers/auth-provider";
-import { LiveProvider, useLiveSocketConnected, useLiveStation } from "@/providers/live-provider";
+import { LiveProvider, useLiveSocketConnected, useLiveStation, useLiveStatusUpdater } from "@/providers/live-provider";
 import { ThemeProvider } from "@/providers/theme-provider";
 import { setupAuth } from "@/test/test-utils";
 
@@ -81,6 +82,27 @@ beforeEach(() => {
 });
 
 describe("LiveProvider", () => {
+  it("applies confirmed REST status without clearing the queue or blocking subsequent WebSocket updates", async () => {
+    const { result } = renderHook(() => ({ station: useLiveStation("s1"), updateStatus: useLiveStatusUpdater() }), {
+      wrapper: createWrapper(),
+    });
+    await waitFor(() => expect(getWS()).toBeDefined());
+    const queue = [fakeQueueItem({ station_id: "s1" })];
+    act(() => getWS().onmessage?.({ data: JSON.stringify({ type: "queue_update", station_id: "s1", data: queue }) }));
+    const stopped = fakeStreamStatus({ playing: false });
+    act(() => result.current.updateStatus("s1", stopped));
+    expect(result.current.station.status).toEqual(stopped);
+    expect(result.current.station.queue).toEqual(queue);
+    const live = fakeStreamStatus({ playing: true, elapsed: 10 });
+    act(() =>
+      getWS().onmessage?.({
+        data: JSON.stringify({ type: "status", station_id: "s1", data: { type: "state", data: live } }),
+      }),
+    );
+    expect(result.current.station.status).toEqual(live);
+    expect(result.current.station.queue).toEqual(queue);
+  });
+
   it("connects and subscribes to a station", async () => {
     const { result } = renderHook(() => useLiveStation("s1"), { wrapper: createWrapper() });
     await waitFor(() => expect(result.current.connected).toBe(false));

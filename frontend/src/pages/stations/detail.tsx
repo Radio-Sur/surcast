@@ -87,14 +87,15 @@ export function StationDetailPage() {
       <StationHeader
         station={station}
         playing={d.playing}
-        busy={d.streamPlay.isPending || d.streamPause.isPending || d.streamRestart.isPending}
+        operation={d.streamOperation}
         onBack={() => navigate("/stations")}
         onToggle={() => {
+          if (d.streamOperation) return;
           if (d.playing) {
-            d.setConfirmAction("pause");
+            d.setConfirmAction("stop");
           } else {
             d.streamPlay.mutate(undefined, {
-              onSuccess: () => d.handleStreamPlaySuccess(),
+              onSuccess: d.handleStreamPlaySuccess,
               onError: (err) => d.handleMutationError(err, "start stream"),
             });
           }
@@ -220,27 +221,30 @@ export function StationDetailPage() {
 
       <StreamConfirmDialog
         action={d.confirmAction}
-        isPending={d.streamPause.isPending || d.streamRestart.isPending}
+        isPending={d.streamOperation !== null}
         onConfirm={() => {
-          if (d.confirmAction === "pause") {
-            d.streamPause.mutate(undefined, {
-              onSuccess: () => {
-                d.handleStreamPauseSuccess();
+          if (d.streamOperation) return;
+          if (d.confirmAction === "stop") {
+            d.streamStop.mutate(undefined, {
+              onSuccess: (status) => {
+                d.handleStreamStopSuccess(status);
                 d.setConfirmAction(null);
               },
-              onError: (err) => d.handleMutationError(err, "pause stream"),
+              onError: (err) => d.handleMutationError(err, "stop stream"),
             });
           } else {
             d.streamRestart.mutate(undefined, {
-              onSuccess: () => {
-                d.handleStreamRestartSuccess();
+              onSuccess: (status) => {
+                d.handleStreamRestartSuccess(status);
                 d.setConfirmAction(null);
               },
               onError: (err) => d.handleMutationError(err, "restart stream"),
             });
           }
         }}
-        onClose={() => d.setConfirmAction(null)}
+        onClose={() => {
+          if (!d.streamOperation) d.setConfirmAction(null);
+        }}
       />
     </Box>
   );

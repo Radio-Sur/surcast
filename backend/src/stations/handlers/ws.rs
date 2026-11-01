@@ -671,10 +671,24 @@ async fn no_runtime_snapshot(
         }
     }
     if is_started_changed || force_queue {
-        if let Some(queue) = db_queue_snapshot(db, music_dir, station_id).await {
-            if out_tx.send(Outbound::QueueUpdate { station_id, data: queue }).is_err() {
-                return NoRuntimeSnapshot::ConnectionGone;
+        let message = match db_queue_snapshot(db, music_dir, station_id).await {
+            Ok(queue) => Outbound::QueueUpdate { station_id, data: queue },
+            Err(error) => {
+                tracing::error!(station_id = %station_id, %error, "station queue snapshot unavailable");
+                if out_tx
+                    .send(Outbound::Error {
+                        station_id: Some(station_id),
+                        data: "station queue unavailable".into(),
+                    })
+                    .is_err()
+                {
+                    return NoRuntimeSnapshot::ConnectionGone;
+                }
+                return NoRuntimeSnapshot::DbError;
             }
+        };
+        if out_tx.send(message).is_err() {
+            return NoRuntimeSnapshot::ConnectionGone;
         }
     }
     NoRuntimeSnapshot::Sent { is_started }
@@ -723,10 +737,18 @@ async fn attach_snapshot_and_forward(
             }
         }
     }
-    if let Some(queue) = db_queue_snapshot(db, music_dir, station_id).await {
-        if out_tx.send(Outbound::QueueUpdate { station_id, data: queue }).is_err() {
-            return ForwardOutcome::ConnectionGone;
+    let queue_message = match db_queue_snapshot(db, music_dir, station_id).await {
+        Ok(queue) => Outbound::QueueUpdate { station_id, data: queue },
+        Err(error) => {
+            tracing::error!(station_id = %station_id, %error, "station queue snapshot unavailable on attach");
+            Outbound::Error {
+                station_id: Some(station_id),
+                data: "station queue unavailable".into(),
+            }
         }
+    };
+    if out_tx.send(queue_message).is_err() {
+        return ForwardOutcome::ConnectionGone;
     }
 
     forward_live_broadcasts(
@@ -822,11 +844,12 @@ fn get_streamer(streamers: &StreamersMap, station_id: &Uuid) -> Option<Arc<Stati
 /// Read-only queue snapshot straight from the database, using the same queue
 /// repository the streamers feed their broadcasts from. Never creates a
 /// runtime — this is what Subscribe uses for stations without one.
-async fn db_queue_snapshot(db: &PgPool, music_dir: &str, station_id: Uuid) -> Option<serde_json::Value> {
+async fn db_queue_snapshot(db: &PgPool, music_dir: &str, station_id: Uuid) -> Result<serde_json::Value, AppError> {
     let raw = crate::streamer::queue_repository::QueueRepository::new(db.clone(), station_id, music_dir.to_string())
         .queue_json()
-        .await;
-    serde_json::from_str(&raw).ok()
+        .await
+        .map_err(|error| AppError::internal(format!("Failed to read queue snapshot: {error}")))?;
+    serde_json::from_str(&raw).map_err(|error| AppError::internal(format!("Invalid queue snapshot: {error}")))
 }
 
 #[cfg(test)]

@@ -1362,7 +1362,7 @@ async fn repro_start_with_empty_queue_plays_once_songs_arrive() {
     // then the queue fills (manual add / Auto DJ / schedule). The streamer
     // must begin broadcasting as soon as songs arrive; otherwise the panel
     // shows the loaded queue stuck at "--:--/xx:xx" with nothing playing.
-    run_streamer_test(async |app| {
+    run_http_streamer_test(async |app| {
         let station = app
             .create_station_with(
                 "Empty start repro",
@@ -1370,6 +1370,12 @@ async fn repro_start_with_empty_queue_plays_once_songs_arrive() {
                 serde_json::json!({"transition_mode": "autocue", "autocue_fade_max_ms": 5000}),
             )
             .await?;
+        app.disable_auto_fill(&station).await?;
+        let mut inbox = WsInbox::subscribe(app, &station).await?;
+        inbox
+            .wait_for_status("initial stopped state", |data| data["playing"] == false)
+            .await?;
+        inbox.wait_for_queue_titles("initial empty queue", &[]).await?;
 
         // Start with an empty database queue: an idle streamer is created.
         app.play(&station).await?;
@@ -1392,6 +1398,14 @@ async fn repro_start_with_empty_queue_plays_once_songs_arrive() {
             .wait_title_playing(&station, "tone A")
             .await
             .map_err(|error| failure(format!("streamer stayed idle after the queue filled: {error}")))?;
+        inbox
+            .recv_until("automatic resume announced to the panel", |message| {
+                message["type"] == "status" && message["data"]["type"] == "song_change" && message["data"]["data"]["title"] == "tone A"
+            })
+            .await?;
+        inbox
+            .wait_for_queue_titles("filled queue announced to the panel", &["tone A", "tone B", "tone C"])
+            .await?;
         app.wait_elapsed(&station, 1)
             .await
             .map_err(|error| failure(format!("clock stalled after {playing:?}: {error}")))?;
@@ -1447,6 +1461,156 @@ async fn repro_autocue_analyzed_mp3_starts_playing() {
         app.wait_elapsed(&station, 1)
             .await
             .map_err(|error| failure(format!("elapsed clock stalled after {playing:?}: {error}")))?;
+        Ok(())
+    })
+    .await
+}
+
+#[tokio::test]
+#[serial]
+async fn crossfade_mp3_with_production_prebuffer_starts_and_hands_over() {
+    run_streamer_test(async |app| {
+        let station = app
+            .create_station_with(
+                "Production buffer",
+                "production-buffer",
+                serde_json::json!({"transition_mode": "crossfade", "default_fade_ms": 3000, "prebuffer_bytes": 16384}),
+            )
+            .await?;
+        app.disable_auto_fill(&station).await?;
+        let bytes = app.generate_mp3().await?;
+        // Seed unanalysed MP3s directly, without the enqueue handler's
+        // background analysis. This exercises the user's naive crossfade.
+        for (position, title) in [(0, "MP3 A"), (1, "MP3 B")] {
+            let name = format!("production-{position}.mp3");
+            app.write_audio(&name, &bytes)?;
+            let song: uuid::Uuid =
+                sqlx::query_scalar("INSERT INTO songs (title, artist, file_path, duration) VALUES ($1, 'test', $2, 10) RETURNING id")
+                    .bind(title)
+                    .bind(name)
+                    .fetch_one(&app.db)
+                    .await?;
+            sqlx::query("INSERT INTO station_queue (station_id, song_id, position) VALUES ($1, $2, $3)")
+                .bind(station.id)
+                .bind(song)
+                .bind(position)
+                .execute(&app.db)
+                .await?;
+        }
+        app.play(&station).await?;
+        app.wait_title_playing(&station, "MP3 A").await?;
+        app.assert_station_serves_audio(&station).await?;
+        app.wait_elapsed(&station, 1).await?;
+        app.wait_title_playing(&station, "MP3 B").await?;
+        app.assert_station_serves_audio(&station).await?;
+        Ok(())
+    })
+    .await
+}
+
+#[tokio::test]
+#[serial]
+async fn play_recovers_when_icecast_returns_during_initial_start() {
+    run_streamer_test(async |app| {
+        let station = app.station_with_tone("Failed start retry", "failed-start-retry").await?;
+        app.icecast.stop().await?;
+        let response = app.session().post(&format!("/api/stations/{}/stream/play", station.id), None).await;
+        if !matches!(response.status_code().as_u16(), 200 | 500) {
+            return Err(failure(format!("unexpected initial start response: {}", response.text())));
+        }
+        // A source connection failure can arrive synchronously (500) or
+        // asynchronously after Playing (200 + reconnect). Either way keep
+        // the same runtime: a later Play must recover, never double-start.
+        app.icecast.start(app.port.into(), "surcast", "admin", "surcast").await?;
+        app.play(&station).await?;
+        app.wait_title_playing(&station, "tone A").await?;
+        app.assert_station_serves_audio(&station).await?;
+        Ok(())
+    })
+    .await
+}
+
+#[tokio::test]
+#[serial]
+async fn autodj_keeps_four_upcoming_and_broadcasts_refills() {
+    run_http_streamer_test(async |app| {
+        let station = app
+            .create_station_with(
+                "AutoDJ live queue",
+                "autodj-live-queue",
+                serde_json::json!({"transition_mode": "crossfade", "default_fade_ms": 500, "prebuffer_bytes": 16384}),
+            )
+            .await?;
+        app.add_tones_to_library(&station, "autodj-live", &STANDARD_TONES, 4).await?;
+        app.enable_auto_fill(&station, 4, false).await?;
+        let mut inbox = WsInbox::subscribe(app, &station).await?;
+        inbox.wait_for_queue_titles("initial empty queue", &[]).await?;
+        app.play(&station).await?;
+        let mut status = app.wait_playing(&station).await?;
+        app.assert_station_serves_audio(&station).await?;
+        for step in 0..4 {
+            if step > 0 {
+                status = app.wait_advance(&station, status.song_index).await?;
+            }
+            let upcoming: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM station_queue sq JOIN stations st ON st.id = sq.station_id
+                 WHERE st.id = $1 AND sq.id <> ALL(st.consumed_queue_item_ids)
+                   AND ((st.current_queue_item_id IS NULL AND sq.position > st.current_song_index)
+                     OR (st.current_queue_item_id IS NOT NULL AND sq.id IS DISTINCT FROM st.current_queue_item_id))",
+            )
+            .bind(station.id)
+            .fetch_one(&app.db)
+            .await?;
+            assert_eq!(upcoming, 4, "AutoDJ must keep four upcoming songs after transition {step}");
+            let update = inbox
+                .wait_for_queue_update("live AutoDJ refill", |data| {
+                    data.as_array().is_some_and(|items| items.len() as u64 == status.total)
+                })
+                .await?;
+            assert!(update["data"].as_array().unwrap().iter().all(|item| item["is_auto_dj"] == true));
+        }
+        app.assert_station_serves_audio(&station).await?;
+        Ok(())
+    })
+    .await
+}
+
+#[tokio::test]
+#[serial]
+#[ignore = "requires SURCAST_TEST_CURRENT_MP3 and SURCAST_TEST_NEXT_MP3"]
+async fn local_mp3_pair_starts_with_production_settings() {
+    let paths = [
+        std::env::var("SURCAST_TEST_CURRENT_MP3").unwrap(),
+        std::env::var("SURCAST_TEST_NEXT_MP3").unwrap(),
+    ];
+    run_streamer_test(async |app| {
+        let station = app
+            .create_station_with(
+                "Local MP3 regression",
+                "local-mp3-regression",
+                serde_json::json!({"transition_mode": "crossfade", "default_fade_ms": 3000, "prebuffer_bytes": 16384}),
+            )
+            .await?;
+        app.disable_auto_fill(&station).await?;
+        for (position, path) in paths.iter().enumerate() {
+            let name = format!("local-{position}.mp3");
+            app.write_audio(&name, &std::fs::read(path)?)?;
+            let song: uuid::Uuid = sqlx::query_scalar("INSERT INTO songs (title, file_path) VALUES ($1, $2) RETURNING id")
+                .bind(format!("Local {position}"))
+                .bind(name)
+                .fetch_one(&app.db)
+                .await?;
+            sqlx::query("INSERT INTO station_queue (station_id, song_id, position) VALUES ($1, $2, $3)")
+                .bind(station.id)
+                .bind(song)
+                .bind(position as i32)
+                .execute(&app.db)
+                .await?;
+        }
+        app.play(&station).await?;
+        app.wait_title_playing(&station, "Local 0").await?;
+        app.assert_station_serves_audio(&station).await?;
+        app.wait_elapsed(&station, 1).await?;
         Ok(())
     })
     .await

@@ -731,6 +731,19 @@ impl GStreamerPipeline {
             }
         }
 
+        // The next branch's timing/offset is now configured. Release its
+        // streaming gate BEFORE waiting for Playing: adding the mixer pad
+        // can force a new preroll at the real asynchronous shout2send sink.
+        // Waiting first creates a cycle (sink waits for mixer data, mixer
+        // waits for the gated next, gate waits for Playing). Test fakesinks
+        // use async=false and therefore do not expose that startup race.
+        // Candidates remain registered as preparing until the successful
+        // state change, so a decode failure still cancels/rolls back them.
+        for candidate in &mut candidates {
+            if let Some(action) = branch::take_paused_release(candidate) {
+                branch::apply_paused_release(action);
+            }
+        }
         if let Err(error) = self.set_state(PipelineState::Playing) {
             self.rollback_initial_replace(candidates);
             return Err(error);
@@ -741,7 +754,6 @@ impl GStreamerPipeline {
             return Err(PipelineError::Pipeline("initial replace cancelled / decode failed".into()));
         }
 
-        let release_actions: Vec<_>;
         {
             let mut reg = self.registry.lock().unwrap_or_else(|error| error.into_inner());
             let mut active = self.active.lock().unwrap_or_else(|error| error.into_inner());
@@ -756,7 +768,6 @@ impl GStreamerPipeline {
             for c in &candidates {
                 reg.unregister_preparing(&c.key);
             }
-            release_actions = candidates.iter_mut().filter_map(branch::take_paused_release).collect();
             reg.live = candidates;
             *active = Some(ActivePlan {
                 generation: plan.generation,
@@ -771,10 +782,6 @@ impl GStreamerPipeline {
                 current_epoch: gst::ClockTime::ZERO,
                 last_elapsed: gst::ClockTime::ZERO,
             });
-        }
-
-        for action in release_actions {
-            branch::apply_paused_release(action);
         }
 
         self.publish_metadata(&plan.current.metadata);

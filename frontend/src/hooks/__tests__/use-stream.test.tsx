@@ -7,6 +7,20 @@ import { useStreamPause, useStreamPlay, useStreamRestart, useStreamSkip, useStre
 import { server } from "@/mocks/server";
 import { setupAuth } from "@/test/test-utils";
 
+const confirmed = (playing: boolean) => ({
+  playing,
+  broadcasting: playing,
+  source_connected: playing,
+  is_started: playing,
+  runtime_active: playing,
+  song_index: 0,
+  total: 1,
+  elapsed: 0,
+  title: "Test",
+  artist: "",
+  duration: 120,
+});
+
 function createWrapper() {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
   return function Wrapper({ children }: { children: ReactNode }) {
@@ -30,7 +44,10 @@ describe("useStreamSkip", () => {
 
 describe("useStreamStop", () => {
   it("mutates successfully", async () => {
-    server.use(http.post("/api/stations/s1/stream/stop", () => HttpResponse.json({})));
+    server.use(
+      http.post("/api/stations/s1/stream/stop", () => HttpResponse.json({})),
+      http.get("/api/stations/s1/stream/status", () => HttpResponse.json(confirmed(false))),
+    );
     const { result } = renderHook(() => useStreamStop("s1"), { wrapper: createWrapper() });
     result.current.mutate();
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
@@ -39,7 +56,10 @@ describe("useStreamStop", () => {
 
 describe("useStreamPlay", () => {
   it("mutates successfully", async () => {
-    server.use(http.post("/api/stations/s1/stream/play", () => HttpResponse.json({})));
+    server.use(
+      http.post("/api/stations/s1/stream/play", () => HttpResponse.json({})),
+      http.get("/api/stations/s1/stream/status", () => HttpResponse.json(confirmed(true))),
+    );
     const { result } = renderHook(() => useStreamPlay("s1"), { wrapper: createWrapper() });
     result.current.mutate();
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
@@ -57,7 +77,10 @@ describe("useStreamPause", () => {
 
 describe("useStreamRestart", () => {
   it("mutates successfully", async () => {
-    server.use(http.post("/api/stations/s1/stream/restart", () => HttpResponse.json({})));
+    server.use(
+      http.post("/api/stations/s1/stream/restart", () => HttpResponse.json({})),
+      http.get("/api/stations/s1/stream/status", () => HttpResponse.json(confirmed(true))),
+    );
     const { result } = renderHook(() => useStreamRestart("s1"), { wrapper: createWrapper() });
     result.current.mutate();
     await waitFor(() => expect(result.current.isSuccess).toBe(true));

@@ -1,4 +1,4 @@
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::Json;
 use sqlx::PgPool;
 use std::collections::HashMap;
@@ -298,14 +298,12 @@ async fn get_or_create_streamer(
         let map = streamers.lock().unwrap_or_else(|e| e.into_inner());
         map.get(&station_id).cloned()
     } {
-        if !songs.is_empty() {
-            // A station that was idle (or restarted) keeps the queue stored in
-            // the database; reload it so playback resumes with the current rows.
-            existing.reload_songs(songs, false).await.map_err(|error| {
-                tracing::error!(station_id = %station_id, %error, "stream queue reload failed");
-                AppError::from_pipeline(&error, "Stream queue reload failed".to_string())
-            })?;
-        }
+        // Reload is passive: the caller owns the subsequent Play command.
+        // Empty snapshots must also replace stale rows from a previous run.
+        existing.reload_songs(songs, false).await.map_err(|error| {
+            tracing::error!(station_id = %station_id, %error, "stream queue reload failed");
+            AppError::from_pipeline(&error, "Stream queue reload failed".to_string())
+        })?;
         return Ok(existing);
     }
     let streamer = StationStreamer::new(
@@ -497,21 +495,6 @@ pub(crate) async fn get_or_create_streamer_for_station(
             analyzed: r.10,
         })
         .collect();
-
-    if let Some(existing) = {
-        let map = streamers.lock().unwrap_or_else(|e| e.into_inner());
-        map.get(&station_id).cloned()
-    } {
-        if !songs.is_empty() {
-            // Starting a station must resume from the queue stored in the
-            // database even when an (idle) streamer already exists.
-            existing.reload_songs(songs, false).await.map_err(|error| {
-                tracing::error!(station_id = %station_id, %error, "stream queue reload failed");
-                AppError::from_pipeline(&error, "Stream queue reload failed".to_string())
-            })?;
-        }
-        return Ok(existing);
-    }
 
     if songs.is_empty() {
         tracing::info!("Station queue is empty, creating idle streamer for {station_id}");
@@ -1114,27 +1097,53 @@ pub async fn stream_restart(
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 
+#[derive(Default, serde::Deserialize)]
+pub struct StreamStatusQuery {
+    #[serde(default)]
+    verify_output: bool,
+}
+
 pub async fn stream_status(
     State(db): State<PgPool>,
     State(streamers): State<StreamersMap>,
+    State(lifecycle): State<Arc<StationLifecycleLocks>>,
     Path(station_id): Path<String>,
+    Query(query): Query<StreamStatusQuery>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let station_id = resolve_station_id(&db, &station_id).await?;
+    // Confirmation must not mix a runtime from one lifecycle with the
+    // persisted intent/source from another. Ordinary status stays cheap.
+    let _guard = if query.verify_output {
+        Some(lifecycle.lock(station_id).await)
+    } else {
+        None
+    };
     let streamer = {
         let map = streamers.lock().unwrap_or_else(|e| e.into_inner());
         map.get(&station_id).cloned()
     };
-    if let Some(streamer) = streamer {
-        let status = streamer.status_json().await.map_err(|error| {
+    let runtime_active = streamer.is_some();
+    let mut status = if let Some(streamer) = streamer {
+        streamer.status_json().await.map_err(|error| {
             tracing::error!(station_id = %station_id, %error, "stream status failed");
             AppError::from_pipeline(&error, "Stream status failed".to_string())
-        })?;
-        Ok(Json(status))
+        })?
     } else {
-        Ok(Json(serde_json::json!({
+        serde_json::json!({
             "playing": false, "song_index": 0, "total": 0, "elapsed": 0, "title": "", "artist": "", "duration": 0,
-        })))
+        })
+    };
+    if query.verify_output {
+        let station = repository::find_station_by_id(&db, station_id)
+            .await?
+            .ok_or_else(|| AppError::not_found("Station not found".into()))?;
+        let (source_connected, broadcasting) = crate::listeners::poller::verify_output(&db, &station.mount()).await?;
+        status["source_connected"] = source_connected.into();
+        status["broadcasting"] = broadcasting.into();
+        status["is_started"] = station.is_started.into();
+        status["runtime_active"] = runtime_active.into();
     }
+    Ok(Json(status))
 }
 
 #[cfg(test)]

@@ -136,6 +136,141 @@ fn session_hooks(app: &StreamerTestApp) -> Arc<surcast_backend::stations::handle
 
 // ---- scenarios ------------------------------------------------------------
 
+async fn wait_verified_output(app: &StreamerTestApp, station: &TestStation, playing: bool) -> Result<(), Box<dyn std::error::Error>> {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    loop {
+        let response = app
+            .session()
+            .get(&format!("/api/stations/{}/stream/status?verify_output=true", station.id))
+            .await;
+        assert_eq!(response.status_code().as_u16(), 200, "{}", response.text());
+        let status = response.json::<serde_json::Value>();
+        if status["playing"] == playing
+            && status["broadcasting"] == playing
+            && status["source_connected"] == playing
+            && status["is_started"] == playing
+            && status["runtime_active"] == playing
+        {
+            return Ok(());
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return Err(failure(format!("output was not confirmed: {status}")));
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+}
+
+#[tokio::test]
+#[serial]
+async fn verified_status_confirms_audio_and_terminal_stop_without_losing_queue() {
+    run_http_streamer_test(async |app| {
+        let station = app.create_station("Confirmed output", "confirmed-output").await?;
+        app.disable_auto_fill(&station).await?;
+        let song = app.insert_tone("Long tone", "confirmed-output.wav", 440.0, 90).await?;
+        app.assign(&song, &station).await?;
+        let queue = app.enqueue(&station, &[song.id]).await?;
+        wait_verified_output(app, &station, false).await?;
+        app.assert_lifecycle_state(&station, false, 0).await?;
+        for cycle in 0..2 {
+            app.play(&station).await?;
+            wait_verified_output(app, &station, true).await?;
+            app.assert_station_serves_audio(&station).await?;
+            app.stop(&station).await?;
+            wait_verified_output(app, &station, false).await?;
+            let response = app
+                .client
+                .get(format!("http://127.0.0.1:{}/confirmed-output.mp3", app.port))
+                .send()
+                .await?;
+            assert_eq!(response.status().as_u16(), 404, "stopped source must no longer serve audio");
+            assert_eq!(app.fetch_queue(&station).await?[0].id, queue[0].id);
+            if cycle == 0 {
+                // Longer than Icecast's source timeout: no paused connection
+                // may remain to poison the next start.
+                tokio::time::sleep(Duration::from_secs(11)).await;
+            }
+        }
+        Ok(())
+    })
+    .await
+}
+
+#[tokio::test]
+#[serial]
+async fn verified_status_never_treats_icecast_failure_or_idle_as_confirmed_output() {
+    run_http_streamer_test(async |app| {
+        let station = app.create_station("Unverified output", "unverified-output").await?;
+        app.disable_auto_fill(&station).await?;
+        app.play(&station).await?;
+        let response = app
+            .session()
+            .get(&format!("/api/stations/{}/stream/status?verify_output=true", station.id))
+            .await;
+        assert_eq!(response.status_code().as_u16(), 200);
+        let status = response.json::<serde_json::Value>();
+        assert_eq!(status["is_started"], true);
+        assert_eq!(status["runtime_active"], true);
+        assert_eq!(status["playing"], false);
+        assert_eq!(status["broadcasting"], false);
+        app.stop(&station).await?;
+        sqlx::query("UPDATE icecast_settings SET admin_password = 'invalid'")
+            .execute(&app.db)
+            .await?;
+        let response = app
+            .session()
+            .get(&format!("/api/stations/{}/stream/status?verify_output=true", station.id))
+            .await;
+        assert_eq!(response.status_code().as_u16(), 500);
+        assert_eq!(response.json::<serde_json::Value>()["code"], "STREAM_OUTPUT_UNVERIFIED");
+        // Normal status is still available without Icecast admin access.
+        assert!(!app.status(&station).await?.playing);
+        app.assert_lifecycle_state(&station, false, 0).await?;
+        Ok(())
+    })
+    .await
+}
+
+/// Build the frontend first, then run this optional real-browser regression:
+/// `cargo test --test e2e_lifecycle panel_stop_start_without_refresh -- --ignored`.
+/// Owns an isolated DB, station and Icecast; never uses the developer's login.
+#[tokio::test]
+#[serial]
+#[ignore = "requires frontend build and Playwright Chromium"]
+async fn panel_stop_start_without_refresh() {
+    run_http_streamer_test(async |app| {
+        let station = app.create_station("Browser lifecycle", "browser-lifecycle").await?;
+        app.disable_auto_fill(&station).await?;
+        let song = app.insert_tone("Browser tone", "browser-lifecycle.wav", 440.0, 90).await?;
+        app.assign(&song, &station).await?;
+        app.enqueue(&station, &[song.id]).await?;
+        let base = app.session().server.server_address().ok_or_else(|| failure("no HTTP server"))?;
+        let output = tokio::process::Command::new("node")
+            .arg("../frontend/e2e/stream-lifecycle.mjs")
+            .env("SURCAST_BROWSER_BASE", base.to_string())
+            .env("SURCAST_BROWSER_AUTH", &app.session().auth)
+            .env("SURCAST_BROWSER_STATION", station.id.to_string())
+            .env(
+                "SURCAST_BROWSER_ICECAST",
+                format!("http://127.0.0.1:{}/browser-lifecycle.mp3", app.port),
+            )
+            .kill_on_drop(true)
+            .output()
+            .await?;
+        if !output.status.success() {
+            return Err(failure(format!(
+                "browser regression failed:\n{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            )));
+        }
+        println!("{}", String::from_utf8_lossy(&output.stdout));
+        app.assert_lifecycle_state(&station, false, 0).await?;
+        assert_eq!(app.fetch_queue(&station).await?.len(), 1);
+        Ok(())
+    })
+    .await
+}
+
 #[tokio::test]
 #[serial]
 async fn observation_never_starts_a_station() {
@@ -742,6 +877,39 @@ async fn stopped_subscriber_receives_live_queue_update() {
 
         inbox.wait_for_queue_titles("queue after enqueue", &["tone A", "tone B"]).await?;
         app.assert_lifecycle_state(&station, false, 0).await?;
+        Ok(())
+    })
+    .await
+}
+
+#[tokio::test]
+#[serial]
+async fn websocket_queue_matches_rest_before_and_after_play() {
+    run_http_streamer_test(async |app| {
+        let station = app.station_with_tone("Queue cover snapshot", "queue-cover-snapshot").await?;
+        sqlx::query("UPDATE songs SET has_cover = true WHERE id IN (SELECT song_id FROM station_queue WHERE station_id = $1)")
+            .bind(station.id)
+            .execute(&app.db)
+            .await?;
+        let second = app.insert_tone("tone B", "queue-cover-b.wav", 440.0, 10).await?;
+        app.assign(&second, &station).await?;
+        app.enqueue(&station, &[second.id]).await?;
+
+        let rest = app
+            .session()
+            .get(&format!("/api/stations/{}/queue", station.id))
+            .await
+            .json::<serde_json::Value>();
+        let mut inbox = WsInbox::subscribe(app, &station).await?;
+        let stopped = inbox.wait_for_queue_titles("stopped queue snapshot", &["tone A", "tone B"]).await?;
+        assert_eq!(stopped["data"], rest);
+        assert_eq!(stopped["data"][0]["has_cover"], true);
+        assert_eq!(stopped["data"][1]["has_cover"], false);
+
+        app.play(&station).await?;
+        let playing = inbox.wait_for_queue_titles("playing queue snapshot", &["tone A", "tone B"]).await?;
+        assert_eq!(playing["data"], rest);
+        app.assert_station_serves_audio(&station).await?;
         Ok(())
     })
     .await

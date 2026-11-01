@@ -581,7 +581,7 @@ impl StationController {
                     self.decode_exclusions = None;
                     self.queue.commit_current(&song, anchor).await;
                     self.publish_song_change();
-                    self.push_queue_update().await;
+                    let _ = self.push_queue_update().await;
 
                     if let (Some(current), Some(next_song)) = (self.queue.current_song_info(), self.effective_successor()) {
                         let current_track = Self::track(current);
@@ -659,6 +659,17 @@ impl StationController {
     }
 
     async fn resolve_current_terminal(&mut self, generation: u64, track: &TrackKey) -> Option<Result<PreparedOperation, PipelineError>> {
+        // A downstream output failure can emit a fatal backbone error,
+        // followed by secondary "streaming stopped" errors from the media
+        // source. Once stopped, those late events must not consume a valid
+        // current song (or mark it broken): the next Play needs to retry it.
+        if self.state == PipelineState::Stopped
+            && self.pending_play.is_none()
+            && self.pending_resume.is_none()
+            && self.pending_skip.is_none()
+        {
+            return None;
+        }
         let current = self.queue.current_song_info().map(|song| song.queue_item_id);
         if generation == self.generation && current == Some(track.queue_item_id) {
             if self.pending_skip.is_some() {
@@ -809,17 +820,18 @@ impl StationController {
                         play_attempt_id: None,
                     });
                 }
-                self.push_queue_update().await;
+                let _ = self.push_queue_update().await;
             } else {
                 // The queue may hold fewer upcoming songs than the configured
                 // AutoDJ songs_ahead minimum (e.g. songs were removed while
                 // the station was stopped). Top the database queue up before
                 // starting; the fill is count-based and no-ops when nothing
-                // is missing. The in-memory copy is not reloaded here — the
-                // first commit (handover or skip) reloads it, and the panel
-                // queue view reads the database directly.
-                self.queue.refill().await;
-                self.push_queue_update().await;
+                // is missing. Reload before staging the pair so a newly
+                // filled successor is ready for the first handover too.
+                if self.queue.refill().await {
+                    self.queue.reload_from_db().await;
+                }
+                let _ = self.push_queue_update().await;
             }
             let operation = self.replace_current(ReplaceMode::InitialReplaceFromStopped);
             self.idle = false;
@@ -901,6 +913,10 @@ impl StationController {
         self.idle
     }
 
+    pub(crate) fn pending_resume_attempt(&self) -> Option<u64> {
+        self.pending_resume
+    }
+
     #[cfg(test)]
     pub(crate) fn state(&self) -> PipelineState {
         self.state
@@ -929,7 +945,7 @@ impl StationController {
         self.queue.refill().await;
         self.queue.reload_from_db().await;
         self.queue.current_song_info()?;
-        self.push_queue_update().await;
+        let _ = self.push_queue_update().await;
         self.resume_attempt_seq = self.resume_attempt_seq.wrapping_add(1).max(1);
         let attempt_id = self.resume_attempt_seq;
         self.pending_resume = Some(attempt_id);
@@ -952,6 +968,7 @@ impl StationController {
             Ok(()) => {
                 self.idle = false;
                 self.state = PipelineState::Playing;
+                self.publish_song_change();
             }
             Err(error) => {
                 tracing::warn!(station_id = %self.station_id, %error, "automatic idle resume failed; retrying on the next tick");
@@ -1558,7 +1575,7 @@ impl StationController {
                         });
                         if self.state == PipelineState::Playing {
                             self.publish_song_change();
-                            self.push_queue_update().await;
+                            let _ = self.push_queue_update().await;
                             if let Ok(prepared) = self.skip().await {
                                 return (true, SkipFollowup::Operation(prepared));
                             }
@@ -1622,7 +1639,7 @@ impl StationController {
                 }
 
                 self.publish_song_change();
-                self.push_queue_update().await;
+                let _ = self.push_queue_update().await;
 
                 let followup = realign
                     .map(|(id, operation)| SkipFollowup::Realign { id, operation })
@@ -1956,18 +1973,17 @@ impl StationController {
 
     pub(crate) async fn reload(&mut self, songs: Vec<SongInfo>, align_next: bool) -> Result<Option<PreparedOperation>, PipelineError> {
         let was_stopped = matches!(self.state, PipelineState::Stopped);
-        let retain_missing_current = !was_stopped;
+        let retain_missing_current =
+            !was_stopped || self.pending_play.is_some() || self.pending_resume.is_some() || self.pending_skip.is_some();
         self.queue.reload_songs(songs, retain_missing_current);
         if was_stopped {
-            // The station was started while its database queue was still
-            // empty, leaving an idle streamer behind. Once songs arrive
-            // (manual add, Auto DJ refill, schedule) playback must begin;
-            // play() stays a no-op while the queue remains empty.
-            return Ok(if self.queue.current_song_info().is_some() {
-                Some(self.play().await?)
-            } else {
-                None
-            });
+            // Reload is observation/synchronization, not a Play command.
+            // The explicit start path reloads and then calls play(); doing
+            // that here as well queues two initial starts. Idle stations
+            // retain `idle` and the runtime ticker resumes them once songs
+            // arrive, without starting manually stopped/failed runtimes or
+            // interfering with an already pending initial replace.
+            return Ok(None);
         }
         if !align_next || !matches!(self.state, PipelineState::Playing | PipelineState::Paused) {
             return Ok(None);
@@ -2061,9 +2077,13 @@ impl StationController {
         self.driver.clone()
     }
 
-    pub(crate) async fn push_queue_update(&self) {
-        let message = self.queue.queue_json().await;
+    pub(crate) async fn push_queue_update(&self) -> Result<(), PipelineError> {
+        let message = self.queue.queue_json().await.map_err(|error| {
+            tracing::error!(station_id = %self.station_id, %error, "failed to read station queue; retaining the previous client snapshot");
+            PipelineError::Pipeline("station queue unavailable".into())
+        })?;
         let _ = self.queue_tx.send(message);
+        Ok(())
     }
 
     pub(crate) async fn trim_played_items(&self) {

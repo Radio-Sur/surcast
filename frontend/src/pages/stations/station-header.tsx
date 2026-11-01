@@ -9,7 +9,7 @@ import type { Station } from "@/types";
 export function StationHeader({
   station,
   playing,
-  busy,
+  operation,
   onBack,
   onToggle,
   onRestart,
@@ -17,13 +17,14 @@ export function StationHeader({
 }: {
   station: Station;
   playing: boolean;
-  busy?: boolean;
+  operation?: "starting" | "stopping" | "restarting" | null;
   onBack: () => void;
   onToggle: () => void;
   onRestart: () => void;
   onEdit: () => void;
 }) {
   const { t } = useTranslation();
+  const busy = !!operation;
 
   return (
     <Box sx={{ display: "flex", alignItems: "center", gap: 2 }}>
@@ -36,7 +37,13 @@ export function StationHeader({
             {station.name}
           </Typography>
           <Chip
-            label={playing ? t("stations:stream_status_live") : t("stations:stream_status_stopped")}
+            label={
+              operation
+                ? t(`stations:stream_${operation}`)
+                : playing
+                  ? t("stations:stream_status_live")
+                  : t("stations:stream_status_stopped")
+            }
             size="small"
             variant={playing ? "filled" : "outlined"}
             sx={
@@ -50,11 +57,22 @@ export function StationHeader({
           {station.description || t("common:no_description")}
         </Typography>
       </Box>
-      <Button variant="outlined" size="small" color={playing ? "error" : "success"} onClick={onToggle} disabled={busy}>
-        {playing ? t("common:stop") : t("common:start")}
+      <Button
+        variant="outlined"
+        size="small"
+        color={playing ? "error" : "success"}
+        onClick={onToggle}
+        disabled={busy}
+        loading={operation === "starting" || operation === "stopping"}
+      >
+        {operation && operation !== "restarting"
+          ? t(`stations:stream_${operation}`)
+          : playing
+            ? t("common:stop")
+            : t("common:start")}
       </Button>
-      <Button variant="outlined" size="small" onClick={onRestart} disabled={busy}>
-        {t("common:restart")}
+      <Button variant="outlined" size="small" onClick={onRestart} disabled={busy} loading={operation === "restarting"}>
+        {operation === "restarting" ? t("stations:stream_restarting") : t("common:restart")}
       </Button>
       <Button variant="outlined" size="small" onClick={onEdit} disabled={busy}>
         {t("common:edit")}

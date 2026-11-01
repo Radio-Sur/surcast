@@ -8,6 +8,8 @@ use super::pipeline::TrackKey;
 use super::pipeline::{PipelineError, PipelineEvent, StationPlaybackConfig};
 use super::{SongInfo, StatusEvent};
 
+type ResumePlayWaiter = (u64, oneshot::Sender<Result<(), PipelineError>>);
+
 #[cfg(test)]
 #[derive(Debug, Clone)]
 pub(crate) struct StationTestSnapshot {
@@ -55,7 +57,7 @@ pub(crate) enum StationCommand {
         config: StationPlaybackConfig,
         response: oneshot::Sender<Result<(), PipelineError>>,
     },
-    PushQueueUpdate(oneshot::Sender<()>),
+    PushQueueUpdate(oneshot::Sender<Result<(), PipelineError>>),
     TrimPlayedItems(oneshot::Sender<()>),
     Status(oneshot::Sender<Result<StatusEvent, PipelineError>>),
     #[cfg(test)]
@@ -441,16 +443,17 @@ impl StationRuntime {
         #[cfg(test)]
         let loop_play_result_gate = play_result_gate.clone();
         tokio::spawn(async move {
+            let mut resume_play_waiters = Vec::new();
             loop {
                 tokio::select! {
                     command = receiver.recv() => {
                         let Some(command) = command else { break };
                         #[cfg(not(test))]
-                        if !command.run(&mut controller, retries.clone(), &operations_regular, &operations_urgent).await {
+                        if !command.run(&mut controller, retries.clone(), &operations_regular, &operations_urgent, &mut resume_play_waiters).await {
                             break;
                         }
                         #[cfg(test)]
-                        if !command.run(&mut controller, retries.clone(), &operations_regular, &operations_urgent, loop_play_result_gate.clone()).await {
+                        if !command.run(&mut controller, retries.clone(), &operations_regular, &operations_urgent, &mut resume_play_waiters, loop_play_result_gate.clone()).await {
                             break;
                         }
                     },
@@ -521,9 +524,8 @@ impl StationRuntime {
                             // completions that a newer user decision
                             // superseded.
                             tokio::spawn(async move {
-                                if let Ok(result) = receiver.await {
-                                    let _ = commands.send(StationCommand::ResumeResult { attempt_id, result }).await;
-                                }
+                                let result = receiver.await.unwrap_or_else(|_| Err(PipelineError::Pipeline("station runtime stopped".into())));
+                                let _ = commands.send(StationCommand::ResumeResult { attempt_id, result }).await;
                             });
                         }
                     },
@@ -688,14 +690,7 @@ impl StationRuntime {
     }
 
     pub(crate) async fn push_queue_update(&self) -> Result<(), PipelineError> {
-        let (response, receiver) = oneshot::channel();
-        self.commands
-            .send(StationCommand::PushQueueUpdate(response))
-            .await
-            .map_err(|_| PipelineError::Pipeline("station runtime stopped".to_owned()))?;
-        receiver
-            .await
-            .map_err(|_| PipelineError::Pipeline("station runtime stopped".to_owned()))
+        self.request(StationCommand::PushQueueUpdate).await
     }
 
     pub(crate) async fn trim_played_items(&self) -> Result<(), PipelineError> {
@@ -728,68 +723,79 @@ impl StationCommand {
         retries: mpsc::Sender<StationCommand>,
         operations: &mpsc::UnboundedSender<ExecutorTask>,
         urgent: &mpsc::UnboundedSender<ExecutorTask>,
+        resume_play_waiters: &mut Vec<ResumePlayWaiter>,
         #[cfg(test)] play_result_gate: std::sync::Arc<std::sync::Mutex<Option<std::sync::Arc<crate::streamer::testsupport::Gate>>>>,
     ) -> bool {
         match self {
-            Self::Play(response) => match controller.play().await {
-                Ok(prepared) => {
-                    match prepared.play_attempt_id {
-                        Some(attempt_id) => {
-                            #[cfg(test)]
-                            let gate = play_result_gate.lock().unwrap().clone();
-                            #[cfg(test)]
-                            submit_play_operation(prepared.operation, attempt_id, Some(response), operations, &retries, gate);
-                            #[cfg(not(test))]
-                            submit_play_operation(prepared.operation, attempt_id, Some(response), operations, &retries);
-                        }
-                        None => match prepared.attempt_id {
-                            Some(attempt_id) => {
-                                controller.attach_skip_response(attempt_id, response);
-                                submit_skip_operation(prepared.operation, attempt_id, operations, &retries);
-                            }
-                            None => {
-                                ExecutorTask::Operation(PendingPipelineAction::operation(prepared.operation, Some(response)))
-                                    .submit(operations);
-                            }
-                        },
-                    }
-                    // token, output binding, retry on failure).
-                    if controller.is_output_known_disconnected() {
-                        let generation = controller.generation();
-                        let output_epoch = controller.output_epoch();
-                        match controller.resume_reconnect_for_break().await {
-                            Some(Ok(super::driver::PipelineOperation::Reconnect(target))) => {
-                                let token = controller.current_reconnect_token();
-                                let token_shared = controller.reconnect_token_shared();
-                                ExecutorTask::Operation(PendingPipelineAction::reconnect(
-                                    target,
-                                    retries,
-                                    generation,
-                                    output_epoch,
-                                    0,
-                                    token,
-                                    token_shared,
-                                    None,
-                                    true,
-                                ))
-                                .submit(operations);
-                            }
-                            Some(Ok(operation)) => {
-                                ExecutorTask::Operation(PendingPipelineAction::operation(operation, None)).submit(operations);
-                            }
-                            Some(Err(error)) => {
-                                // Target refresh failed: retryable like a
-                                // disconnect-time refresh failure.
-                                let token = controller.current_reconnect_token();
-                                tracing::warn!(%error, generation, output_epoch, "failed to prepare reconnect after pause; scheduling a retry");
-                                schedule_reconnect_retry(retries, generation, output_epoch, 0, token);
-                            }
-                            None => {}
-                        }
-                    }
+            Self::Play(response) => {
+                // AutoDJ may already be starting this idle station when a
+                // user presses Play. Join that exact attempt rather than
+                // invalidate it and submit a second initial Replace; the
+                // second would fail as stale after the first starts audio.
+                if let Some(attempt_id) = controller.pending_resume_attempt() {
+                    resume_play_waiters.push((attempt_id, response));
+                    return true;
                 }
-                Err(error) => send(response, Err(error)),
-            },
+                match controller.play().await {
+                    Ok(prepared) => {
+                        match prepared.play_attempt_id {
+                            Some(attempt_id) => {
+                                #[cfg(test)]
+                                let gate = play_result_gate.lock().unwrap().clone();
+                                #[cfg(test)]
+                                submit_play_operation(prepared.operation, attempt_id, Some(response), operations, &retries, gate);
+                                #[cfg(not(test))]
+                                submit_play_operation(prepared.operation, attempt_id, Some(response), operations, &retries);
+                            }
+                            None => match prepared.attempt_id {
+                                Some(attempt_id) => {
+                                    controller.attach_skip_response(attempt_id, response);
+                                    submit_skip_operation(prepared.operation, attempt_id, operations, &retries);
+                                }
+                                None => {
+                                    ExecutorTask::Operation(PendingPipelineAction::operation(prepared.operation, Some(response)))
+                                        .submit(operations);
+                                }
+                            },
+                        }
+                        // token, output binding, retry on failure).
+                        if controller.is_output_known_disconnected() {
+                            let generation = controller.generation();
+                            let output_epoch = controller.output_epoch();
+                            match controller.resume_reconnect_for_break().await {
+                                Some(Ok(super::driver::PipelineOperation::Reconnect(target))) => {
+                                    let token = controller.current_reconnect_token();
+                                    let token_shared = controller.reconnect_token_shared();
+                                    ExecutorTask::Operation(PendingPipelineAction::reconnect(
+                                        target,
+                                        retries,
+                                        generation,
+                                        output_epoch,
+                                        0,
+                                        token,
+                                        token_shared,
+                                        None,
+                                        true,
+                                    ))
+                                    .submit(operations);
+                                }
+                                Some(Ok(operation)) => {
+                                    ExecutorTask::Operation(PendingPipelineAction::operation(operation, None)).submit(operations);
+                                }
+                                Some(Err(error)) => {
+                                    // Target refresh failed: retryable like a
+                                    // disconnect-time refresh failure.
+                                    let token = controller.current_reconnect_token();
+                                    tracing::warn!(%error, generation, output_epoch, "failed to prepare reconnect after pause; scheduling a retry");
+                                    schedule_reconnect_retry(retries, generation, output_epoch, 0, token);
+                                }
+                                None => {}
+                            }
+                        }
+                    }
+                    Err(error) => send(response, Err(error)),
+                }
+            }
             Self::Pause(response) => {
                 ExecutorTask::Operation(PendingPipelineAction::operation(controller.pause(), Some(response))).submit(operations);
             }
@@ -934,8 +940,7 @@ impl StationCommand {
                 None => send(response, Ok(())),
             },
             Self::PushQueueUpdate(response) => {
-                controller.push_queue_update().await;
-                let _ = response.send(());
+                send(response, controller.push_queue_update().await);
             }
             Self::TrimPlayedItems(response) => {
                 controller.trim_played_items().await;
@@ -966,7 +971,14 @@ impl StationCommand {
                 });
             }
             Self::ResumeResult { attempt_id, result } => {
-                controller.on_resume_result(attempt_id, result);
+                controller.on_resume_result(attempt_id, result.clone());
+                for (id, response) in std::mem::take(resume_play_waiters) {
+                    if id == attempt_id {
+                        send(response, result.clone());
+                    } else {
+                        resume_play_waiters.push((id, response));
+                    }
+                }
             }
             Self::PlayResult { attempt_id, result } => {
                 controller.commit_play(attempt_id, &result);

@@ -20,50 +20,130 @@ use crate::util::url_encode;
 struct SourceStats {
     mount: String,
     listeners: i32,
+    bytes_read: u64,
 }
 
 /// Parses `/admin/stats.xml` into per-mount listener counts.
-fn parse_stats_xml(xml: &str) -> Vec<SourceStats> {
+fn parse_stats_xml(xml: &str) -> Result<Vec<SourceStats>, String> {
     let mut reader = Reader::from_str(xml);
     let mut buf = Vec::new();
     let mut sources = Vec::new();
-    let mut current: Option<(String, Option<i32>)> = None;
+    let mut current: Option<SourceStats> = None;
+    let mut depth = 0usize;
+    let mut complete = false;
 
     loop {
-        match reader.read_event_into(&mut buf) {
-            Ok(Event::Start(ref e)) if e.local_name().as_ref() == b"source" => {
-                let mount = e
-                    .attributes()
-                    .filter_map(|a| a.ok())
-                    .find(|a| a.key.as_ref() == b"mount")
-                    .map(|a| String::from_utf8_lossy(&a.value).into_owned())
-                    .unwrap_or_default();
-                current = Some((mount, None));
-            }
-            Ok(Event::Start(ref e)) if e.local_name().as_ref().eq_ignore_ascii_case(b"listeners") => {
-                if let Some((_, slot)) = current.as_mut() {
-                    *slot = reader.read_text(e.name()).ok().and_then(|t| t.trim().parse().ok());
+        match reader.read_event_into(&mut buf).map_err(|error| error.to_string())? {
+            Event::Start(ref e) => {
+                if depth == 0 && (complete || e.name().as_ref() != b"icestats") {
+                    return Err("Expected Icecast stats XML".into());
                 }
-            }
-            Ok(Event::End(ref e)) if e.local_name().as_ref() == b"source" => {
-                if let Some((mount, listeners)) = current.take() {
-                    sources.push(SourceStats {
-                        mount,
-                        listeners: listeners.unwrap_or(0),
+                if depth == 1 && e.name().as_ref() == b"source" {
+                    let mut mount = None;
+                    for attribute in e.attributes() {
+                        let attribute = attribute.map_err(|error| error.to_string())?;
+                        if attribute.key.as_ref() == b"mount" {
+                            mount = Some(attribute.unescape_value().map_err(|error| error.to_string())?.into_owned());
+                        }
+                    }
+                    current = Some(SourceStats {
+                        mount: mount.filter(|mount| !mount.is_empty()).ok_or("Missing source mount")?,
+                        listeners: 0,
+                        bytes_read: 0,
                     });
                 }
+                if depth == 2 {
+                    if let Some(source) = current.as_mut() {
+                        match e.name().as_ref() {
+                            b"listeners" => {
+                                source.listeners = reader
+                                    .read_text(e.name())
+                                    .map_err(|error| error.to_string())?
+                                    .trim()
+                                    .parse()
+                                    .map_err(|_| "Invalid listener count")?;
+                                continue;
+                            }
+                            b"total_bytes_read" => {
+                                source.bytes_read = reader
+                                    .read_text(e.name())
+                                    .map_err(|error| error.to_string())?
+                                    .trim()
+                                    .parse()
+                                    .map_err(|_| "Invalid source byte count")?;
+                                continue;
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                depth += 1;
             }
-            Ok(Event::Eof) => break,
-            Err(e) => {
-                tracing::warn!("Failed to parse Icecast stats XML: {e}");
-                break;
+            Event::End(ref e) => {
+                depth = depth.checked_sub(1).ok_or("Unexpected closing tag")?;
+                if depth == 1 && e.name().as_ref() == b"source" {
+                    sources.push(current.take().ok_or("Unexpected source end")?);
+                }
+                if depth == 0 {
+                    complete = true;
+                }
             }
+            Event::Empty(ref e) if depth == 1 && e.name().as_ref() == b"source" => {
+                return Err("Incomplete Icecast source stats".into());
+            }
+            Event::Empty(ref e) if depth == 0 => {
+                if complete || e.name().as_ref() != b"icestats" {
+                    return Err("Expected Icecast stats XML".into());
+                }
+                complete = true;
+            }
+            Event::Text(ref text) if depth == 0 && !text.iter().all(u8::is_ascii_whitespace) => {
+                return Err("Unexpected content outside Icecast stats".into())
+            }
+            Event::Eof => break,
             _ => {}
         }
         buf.clear();
     }
 
-    sources
+    if !complete || depth != 0 {
+        return Err("Incomplete Icecast stats XML".into());
+    }
+    Ok(sources)
+}
+
+/// Verify source presence and received audio without opening a listener
+/// connection (which would inflate listener counts). Never interpret an
+/// unavailable, unauthorized or malformed stats response as a stopped source.
+pub(crate) async fn verify_output(db: &PgPool, mount: &str) -> Result<(bool, bool), AppError> {
+    let settings = get_settings(db).await?;
+    let (url, user, password) =
+        stats_endpoint(&settings).ok_or_else(|| AppError::icecast("Icecast admin endpoint is not configured".into()))?;
+    let failure = || AppError::icecast("Could not verify the station output in Icecast".into()).with_code("STREAM_OUTPUT_UNVERIFIED");
+    let response = Client::new()
+        .get(url)
+        .basic_auth(user, Some(password))
+        .timeout(std::time::Duration::from_secs(2))
+        .send()
+        .await
+        .map_err(|_| failure())?;
+    let body = response
+        .error_for_status()
+        .map_err(|_| failure())?
+        .text()
+        .await
+        .map_err(|_| failure())?;
+    let sources = parse_stats_xml(&body).map_err(|error| {
+        tracing::warn!(%error, "Invalid Icecast stats while verifying station output");
+        failure()
+    })?;
+    let mount = mount.trim_start_matches('/');
+    let encoded = url_encode(mount);
+    let source = sources.iter().find(|source| {
+        let candidate = source.mount.trim_start_matches('/');
+        candidate == mount || candidate == encoded
+    });
+    Ok((source.is_some(), source.is_some_and(|source| source.bytes_read > 0)))
 }
 
 fn listener_count_for_mount(by_mount: &HashMap<String, i32>, mount: &str) -> i32 {
@@ -119,7 +199,7 @@ async fn poll_once(db: &PgPool, state: &Arc<ListenersState>, client: &Client, pe
         }
     };
 
-    let sources = parse_stats_xml(&body);
+    let sources = parse_stats_xml(&body).map_err(|error| AppError::icecast(format!("Invalid Icecast stats: {error}")))?;
     let by_mount: HashMap<String, i32> = sources
         .iter()
         .map(|s| (s.mount.trim_start_matches('/').to_string(), s.listeners))
@@ -241,20 +321,22 @@ mod tests {
   </source>
   <listeners>3</listeners>
 </icestats>"#;
-        let sources = parse_stats_xml(xml);
+        let sources = parse_stats_xml(xml).unwrap();
         assert_eq!(sources.len(), 2);
         assert_eq!(
             sources[0],
             SourceStats {
                 mount: "/rock.mp3".into(),
-                listeners: 3
+                listeners: 3,
+                bytes_read: 0,
             }
         );
         assert_eq!(
             sources[1],
             SourceStats {
                 mount: "/jazz.mp3".into(),
-                listeners: 0
+                listeners: 0,
+                bytes_read: 0,
             }
         );
     }
@@ -262,26 +344,50 @@ mod tests {
     #[test]
     fn handles_source_without_listeners() {
         let xml = r#"<icestats><source mount="/silent.mp3"></source></icestats>"#;
-        let sources = parse_stats_xml(xml);
+        let sources = parse_stats_xml(xml).unwrap();
         assert_eq!(sources.len(), 1);
         assert_eq!(
             sources[0],
             SourceStats {
                 mount: "/silent.mp3".into(),
-                listeners: 0
+                listeners: 0,
+                bytes_read: 0,
             }
         );
     }
 
     #[test]
     fn handles_invalid_xml_gracefully() {
-        assert_eq!(parse_stats_xml("<not-closed"), vec![]);
+        for xml in [
+            "<not-closed",
+            "",
+            "<html>Unauthorized</html>",
+            "<icestats><source mount=\"/a\"></source>",
+            "<icestats></icestats><icestats/>",
+        ] {
+            assert!(parse_stats_xml(xml).is_err(), "must not confirm a stopped stream from {xml}");
+        }
+        assert_eq!(parse_stats_xml("<icestats/>"), Ok(vec![]));
+    }
+
+    #[test]
+    fn source_presence_is_not_proof_that_audio_has_arrived() {
+        let sources = parse_stats_xml(
+            r#"<icestats>
+            <source mount="/starting.mp3"><total_bytes_read>0</total_bytes_read></source>
+            <source mount="/live.mp3"><total_bytes_read>16384</total_bytes_read></source>
+        </icestats>"#,
+        )
+        .unwrap();
+        assert_eq!(sources[0].bytes_read, 0);
+        assert_eq!(sources[1].bytes_read, 16384);
+        assert!(parse_stats_xml("<icestats><source/></icestats>").is_err());
     }
 
     #[test]
     fn matches_station_mount_with_or_without_leading_slash() {
         let xml = r#"<icestats><source mount="/main.mp3"><listeners>5</listeners></source></icestats>"#;
-        let sources = parse_stats_xml(xml);
+        let sources = parse_stats_xml(xml).unwrap();
         let by_mount: HashMap<String, i32> = sources
             .iter()
             .map(|s| (s.mount.trim_start_matches('/').to_string(), s.listeners))

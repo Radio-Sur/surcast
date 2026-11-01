@@ -12,7 +12,7 @@ export function StreamConfirmDialog({
   onConfirm,
   onClose,
 }: {
-  action: "pause" | "restart" | null;
+  action: "stop" | "restart" | null;
   isPending: boolean;
   onConfirm: () => void;
   onClose: () => void;
@@ -20,24 +20,31 @@ export function StreamConfirmDialog({
   const { t } = useTranslation();
 
   return (
-    <Dialog open={action !== null} onClose={onClose}>
+    <Dialog open={action !== null} onClose={isPending ? undefined : onClose}>
       <DialogTitle>
-        {action === "pause" ? t("stations:stream_stop_title") : t("stations:stream_restart_title")}
+        {action === "stop" ? t("stations:stream_stop_title") : t("stations:stream_restart_title")}
       </DialogTitle>
       <DialogContent>
         <DialogContentText>
-          {action === "pause" ? t("stations:stream_stop_message") : t("stations:stream_restart_message")}
+          {action === "stop" ? t("stations:stream_stop_message") : t("stations:stream_restart_message")}
         </DialogContentText>
       </DialogContent>
       <DialogActions sx={{ px: 3, pb: 2 }}>
-        <Button onClick={onClose}>{t("common:cancel")}</Button>
+        <Button onClick={onClose} disabled={isPending}>
+          {t("common:cancel")}
+        </Button>
         <Button
           variant="contained"
-          color={action === "pause" ? "error" : "primary"}
+          color={action === "stop" ? "error" : "primary"}
           onClick={onConfirm}
           disabled={isPending}
+          loading={isPending}
         >
-          {action === "pause" ? t("common:stop") : t("common:restart")}
+          {isPending
+            ? t(`stations:stream_${action === "stop" ? "stopping" : "restarting"}`)
+            : action === "stop"
+              ? t("common:stop")
+              : t("common:restart")}
         </Button>
       </DialogActions>
     </Dialog>

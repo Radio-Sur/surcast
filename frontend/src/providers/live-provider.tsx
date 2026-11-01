@@ -19,6 +19,7 @@ interface LiveContextValue {
   skip: (stationId: string) => void;
   play: (stationId: string) => void;
   pause: (stationId: string) => void;
+  updateStatus: (stationId: string, status: StreamStatus) => void;
 }
 
 const LiveContext = createContext<LiveContextValue | null>(null);
@@ -75,6 +76,12 @@ export function LiveProvider({ children }: { children: ReactNode }) {
   const skip = useCallback((stationId: string) => send({ type: "skip", station_id: stationId }), [send]);
   const play = useCallback((stationId: string) => send({ type: "play", station_id: stationId }), [send]);
   const pause = useCallback((stationId: string) => send({ type: "pause", station_id: stationId }), [send]);
+  const updateStatus = useCallback((stationId: string, status: StreamStatus) => {
+    setStations((prev) => {
+      const cur = prev[stationId] ?? { status: null, queue: null, connected: false, listeners: null };
+      return { ...prev, [stationId]: { ...cur, status } };
+    });
+  }, []);
 
   const handleMessage = useCallback(
     (event: MessageEvent) => {
@@ -197,8 +204,8 @@ export function LiveProvider({ children }: { children: ReactNode }) {
   }, [token, handleMessage]);
 
   const value = useMemo(
-    () => ({ socketConnected, stations, subscribe, unsubscribe, skip, play, pause }),
-    [socketConnected, stations, subscribe, unsubscribe, skip, play, pause],
+    () => ({ socketConnected, stations, subscribe, unsubscribe, skip, play, pause, updateStatus }),
+    [socketConnected, stations, subscribe, unsubscribe, skip, play, pause, updateStatus],
   );
 
   return <LiveContext.Provider value={value}>{children}</LiveContext.Provider>;
@@ -224,4 +231,10 @@ export function useLiveSocketConnected(): boolean {
   const ctx = useContext(LiveContext);
   if (!ctx) throw new Error("useLiveSocketConnected must be used within a LiveProvider");
   return ctx.socketConnected;
+}
+
+export function useLiveStatusUpdater() {
+  const ctx = useContext(LiveContext);
+  if (!ctx) throw new Error("useLiveStatusUpdater must be used within a LiveProvider");
+  return ctx.updateStatus;
 }

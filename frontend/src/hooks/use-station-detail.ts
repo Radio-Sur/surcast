@@ -11,10 +11,11 @@ import {
   useReorderQueue,
 } from "@/hooks/use-station-queue";
 import { useStation, useUpdateStation } from "@/hooks/use-stations";
-import { useStreamPause, useStreamPlay, useStreamRestart, useStreamSkip } from "@/hooks/use-stream";
+import { useStreamPlay, useStreamRestart, useStreamSkip, useStreamStop } from "@/hooks/use-stream";
 import { reportHttpError } from "@/lib/report-error";
-import { useLiveStation } from "@/providers/live-provider";
+import { useLiveStation, useLiveStatusUpdater } from "@/providers/live-provider";
 import { useSnackbar } from "@/providers/snackbar-provider";
+import type { StreamStatus } from "@/types";
 
 export function useStationDetail(id: string | undefined) {
   const { t } = useTranslation();
@@ -48,16 +49,17 @@ export function useStationDetail(id: string | undefined) {
   const reorderQueue = useReorderQueue(safeId);
   const removePlaylistFromQueue = useRemovePlaylistFromQueue(safeId);
   const streamPlay = useStreamPlay(safeId);
-  const streamPause = useStreamPause(safeId);
+  const streamStop = useStreamStop(safeId);
   const streamRestart = useStreamRestart(safeId);
   const httpSkip = useStreamSkip(safeId);
   const updateStation = useUpdateStation();
 
   const [tab, setTab] = useState(0);
   const [queueAddOpen, setQueueAddOpen] = useState(false);
-  const [confirmAction, setConfirmAction] = useState<"pause" | "restart" | null>(null);
+  const [confirmAction, setConfirmAction] = useState<"stop" | "restart" | null>(null);
 
   const { status: streamStatus, queue: wsQueue, connected, listeners: liveListeners } = useLiveStation(station?.id);
+  const updateStatus = useLiveStatusUpdater();
 
   const icecastHost =
     useAppConfig().data?.icecast_public_url || import.meta.env.VITE_ICECAST_HOST || "http://localhost:8000";
@@ -96,29 +98,31 @@ export function useStationDetail(id: string | undefined) {
     return `${h}:${m}`;
   }, [queueSections]);
 
-  // Local pause flag: the backend publishes no status on manual pause, so
-  // without this the panel would keep ticking as if still playing. Cleared
-  // on play/restart success; resume continues from the kept backend
-  // position, which the frozen elapsed value already represents.
-  const [pausedOverride, setPausedOverride] = useState(false);
-  const playing = (streamStatus?.playing ?? false) && !pausedOverride;
+  const playing = streamStatus?.playing ?? false;
+  const streamOperation: "starting" | "stopping" | "restarting" | null = streamPlay.isPending
+    ? "starting"
+    : streamStop.isPending
+      ? "stopping"
+      : streamRestart.isPending
+        ? "restarting"
+        : null;
 
   const handleMutationError = (err: unknown, label: string) => {
     reportHttpError(showError, err, `Failed to ${label}`);
   };
 
-  const handleStreamPlaySuccess = () => {
-    setPausedOverride(false);
+  const handleStreamPlaySuccess = (status: StreamStatus) => {
+    if (station) updateStatus(station.id, status);
     showSnackbar(t("stations:stream_started"), "success");
   };
 
-  const handleStreamPauseSuccess = () => {
-    setPausedOverride(true);
-    showSnackbar(t("stations:stream_paused"), "success");
+  const handleStreamStopSuccess = (status: StreamStatus) => {
+    if (station) updateStatus(station.id, status);
+    showSnackbar(t("stations:stream_stopped"), "success");
   };
 
-  const handleStreamRestartSuccess = () => {
-    setPausedOverride(false);
+  const handleStreamRestartSuccess = (status: StreamStatus) => {
+    if (station) updateStatus(station.id, status);
     showSnackbar(t("stations:stream_restarted"), "success");
   };
 
@@ -172,7 +176,7 @@ export function useStationDetail(id: string | undefined) {
     reorderQueue,
     removePlaylistFromQueue,
     streamPlay,
-    streamPause,
+    streamStop,
     streamRestart,
     httpSkip,
     updateStation,
@@ -184,10 +188,9 @@ export function useStationDetail(id: string | undefined) {
     setConfirmAction,
     streamStatus,
     playing,
-    pausedOverride,
-    setPausedOverride,
+    streamOperation,
     handleStreamPlaySuccess,
-    handleStreamPauseSuccess,
+    handleStreamStopSuccess,
     handleStreamRestartSuccess,
     connected,
     liveListeners,

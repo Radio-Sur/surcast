@@ -90,7 +90,13 @@ impl QueueManager {
 
     pub async fn reload_from_db(&self) {
         self.retry_dirty_cursor().await;
-        let (songs, _current_index) = self.repository.load().await;
+        let songs = match self.repository.load().await {
+            Ok(songs) => songs,
+            Err(error) => {
+                tracing::warn!(station_id = %self.station_id(), %error, "queue reload failed; retaining the in-memory queue");
+                return;
+            }
+        };
         let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
         state.replace(songs, true);
     }
@@ -125,7 +131,7 @@ impl QueueManager {
         self.repository.trim_played_items().await;
     }
 
-    pub async fn queue_json(&self) -> String {
+    pub async fn queue_json(&self) -> Result<String, sqlx::Error> {
         self.repository.queue_json().await
     }
 
@@ -335,5 +341,20 @@ mod tests {
         release_refill(&mut attempted_for, &replacement);
         assert!(!reserve_refill(&mut attempted_for, &target));
         assert!(reserve_refill(&mut attempted_for, &replacement));
+    }
+
+    #[tokio::test]
+    async fn failed_database_reload_preserves_the_playing_queue() {
+        let song = crate::streamer::testsupport::queued_song("Kept", 0);
+        let queue = QueueManager::new(
+            crate::streamer::testsupport::unavailable_db(),
+            Uuid::new_v4(),
+            String::new(),
+            vec![song.clone()],
+            0,
+        );
+        queue.reload_from_db().await;
+        assert_eq!(queue.song_count(), 1);
+        assert_eq!(queue.current_song_info().unwrap().queue_item_id, song.queue_item_id);
     }
 }

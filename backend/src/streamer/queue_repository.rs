@@ -19,10 +19,8 @@ impl QueueRepository {
         self.station_id
     }
 
-    pub(crate) async fn load(&self) -> (Vec<SongInfo>, usize) {
-        let rows = repository::find_station_song_info(&self.db, self.station_id)
-            .await
-            .unwrap_or_default();
+    pub(crate) async fn load(&self) -> Result<Vec<SongInfo>, crate::errors::AppError> {
+        let rows = repository::find_station_song_info(&self.db, self.station_id).await?;
         let songs = rows
             .into_iter()
             .map(
@@ -43,16 +41,7 @@ impl QueueRepository {
                 },
             )
             .collect::<Vec<_>>();
-        let saved_index = sqlx::query_scalar::<_, i32>("SELECT current_song_index FROM stations WHERE id = $1")
-            .bind(self.station_id)
-            .fetch_optional(&self.db)
-            .await
-            .ok()
-            .flatten()
-            .unwrap_or(0)
-            .max(0);
-        let current_index = songs.iter().position(|song| song.position >= saved_index).unwrap_or(songs.len());
-        (songs, current_index)
+        Ok(songs)
     }
 
     pub(crate) async fn persist_cursor_if_current(
@@ -423,7 +412,7 @@ impl QueueRepository {
         }
     }
 
-    pub(crate) async fn queue_json(&self) -> String {
+    pub(crate) async fn queue_json(&self) -> Result<String, sqlx::Error> {
         let items: Vec<serde_json::Value> = sqlx::query_as::<
             _,
             (
@@ -436,7 +425,7 @@ impl QueueRepository {
                 String,
                 i32,
                 String,
-                String,
+                bool,
                 Option<Uuid>,
                 Option<String>,
                 bool,
@@ -453,8 +442,7 @@ impl QueueRepository {
         )
         .bind(self.station_id)
         .fetch_all(&self.db)
-        .await
-        .unwrap_or_default()
+        .await?
         .into_iter()
         .map(
             |(
@@ -490,6 +478,55 @@ impl QueueRepository {
             },
         )
         .collect();
-        serde_json::to_string(&items).unwrap_or_else(|_| "[]".into())
+        Ok(serde_json::Value::Array(items).to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[sqlx::test(migrations = "./migrations")]
+    async fn queue_snapshot_preserves_rows_and_boolean_covers(db: PgPool) {
+        let user: Uuid =
+            sqlx::query_scalar("INSERT INTO users (username, password_hash, name) VALUES ('queue-snapshot', 'hash', 'Test') RETURNING id")
+                .fetch_one(&db)
+                .await
+                .unwrap();
+        let station: Uuid = sqlx::query_scalar("INSERT INTO stations (name, created_by) VALUES ('Snapshot', $1) RETURNING id")
+            .bind(user)
+            .fetch_one(&db)
+            .await
+            .unwrap();
+        for (position, has_cover) in [(0, true), (1, false)] {
+            let song: Uuid = sqlx::query_scalar("INSERT INTO songs (title, file_path, has_cover) VALUES ($1, 'test.mp3', $2) RETURNING id")
+                .bind(format!("Song {position}"))
+                .bind(has_cover)
+                .fetch_one(&db)
+                .await
+                .unwrap();
+            sqlx::query("INSERT INTO station_queue (station_id, song_id, position, is_auto_dj) VALUES ($1, $2, $3, true)")
+                .bind(station)
+                .bind(song)
+                .bind(position)
+                .execute(&db)
+                .await
+                .unwrap();
+        }
+        let repository = QueueRepository::new(db, station, String::new());
+        let queue: serde_json::Value = serde_json::from_str(&repository.queue_json().await.unwrap()).unwrap();
+        assert_eq!(queue.as_array().unwrap().len(), 2);
+        assert_eq!(queue[0]["title"], "Song 0");
+        assert_eq!(queue[0]["has_cover"], true);
+        assert_eq!(queue[1]["has_cover"], false);
+        assert_eq!(queue[0]["is_auto_dj"], true);
+    }
+
+    #[tokio::test]
+    async fn queue_snapshot_does_not_turn_database_errors_into_an_empty_queue() {
+        let db = crate::streamer::testsupport::unavailable_db();
+        db.close().await;
+        let repository = QueueRepository::new(db, Uuid::new_v4(), String::new());
+        assert!(repository.queue_json().await.is_err());
     }
 }

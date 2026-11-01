@@ -113,9 +113,11 @@ impl IcecastManager {
         let binary = self.binary_path()?;
         tracing::info!(?binary, port, dir = %self.dir().display(), "Starting Icecast");
 
-        kill_zombie_icecast().await;
-        kill_by_port(port as u16).await;
+        kill_zombie_icecast(&self.config_path()).await;
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        if port_is_listening(port as u16).await {
+            return Err(format!("Port {port} is already in use by another process"));
+        }
 
         self.prepare_directories()?;
         self.copy_share_files();
@@ -297,15 +299,40 @@ fn is_icecast_executable(path: &Path) -> bool {
     matches!(path.file_name().and_then(|name| name.to_str()), Some("icecast" | "icecast2"))
 }
 
-async fn kill_zombie_icecast() {
+fn uses_config(cmdline: &[u8], cwd: &Path, config: &Path) -> bool {
+    use std::os::unix::ffi::OsStrExt;
+
+    let args: Vec<_> = cmdline.split(|byte| *byte == 0).collect();
+    args.windows(2).any(|args| {
+        if args[0] != b"-c" {
+            return false;
+        }
+        let path = cwd.join(std::ffi::OsStr::from_bytes(args[1]));
+        let path = path.canonicalize().unwrap_or(path);
+        let config = config.canonicalize().unwrap_or_else(|_| config.to_path_buf());
+        path == config
+    })
+}
+
+/// Reclaim only a previous child using this manager's configuration. Other
+/// stations, development servers and parallel integration tests are not ours.
+async fn kill_zombie_icecast(config: &Path) {
+    let config = std::env::current_dir().unwrap_or_default().join(config);
     if let Ok(proc) = std::fs::read_dir("/proc") {
         for entry in proc.flatten() {
             let pid_str = entry.file_name().to_string_lossy().to_string();
             if let Ok(pid) = pid_str.parse::<i32>() {
                 if let Ok(exe) = std::fs::read_link(format!("/proc/{pid}/exe")) {
                     if is_icecast_executable(&exe) {
-                        tracing::warn!("Killing zombie icecast PID {pid}");
-                        let _ = std::process::Command::new("kill").arg("-9").arg(pid.to_string()).output();
+                        if let (Ok(cmdline), Ok(cwd)) = (
+                            std::fs::read(format!("/proc/{pid}/cmdline")),
+                            std::fs::read_link(format!("/proc/{pid}/cwd")),
+                        ) {
+                            if uses_config(&cmdline, &cwd, &config) {
+                                tracing::warn!(pid, config = %config.display(), "Killing previous Icecast instance for this configuration");
+                                let _ = std::process::Command::new("kill").arg("-9").arg(pid.to_string()).output();
+                            }
+                        }
                     }
                 }
             }
@@ -339,30 +366,6 @@ async fn port_is_listening(port: u16) -> bool {
             out.lines().skip(1).any(|line| !line.trim().is_empty())
         })
         .unwrap_or(false)
-}
-
-async fn kill_by_port(port: u16) {
-    if let Ok(output) = std::process::Command::new("ss")
-        .args(["-lptn", "sport", "=", &format!(":{}", port)])
-        .output()
-    {
-        let out = String::from_utf8_lossy(&output.stdout);
-        for line in out.lines().skip(1) {
-            if let Some(pid_field) = line.split_whitespace().find(|s| s.starts_with("users:")) {
-                if let Some(pid_str) = pid_field.split(',').find(|p| p.contains("pid=")) {
-                    if let Some(pid) = pid_str
-                        .split("pid=")
-                        .nth(1)
-                        .and_then(|s| s.split(',').next())
-                        .and_then(|s| s.parse::<i32>().ok())
-                    {
-                        tracing::warn!("Killing PID {pid} on port {port}");
-                        let _ = std::process::Command::new("kill").arg("-9").arg(pid.to_string()).output();
-                    }
-                }
-            }
-        }
-    }
 }
 
 #[cfg(test)]
@@ -409,8 +412,38 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_kill_by_port_non_existent_does_not_panic() {
-        kill_by_port(65535).await;
+    async fn start_does_not_kill_another_process_using_the_requested_port() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let dir = tempfile::tempdir().unwrap();
+        let manager = IcecastManager::new(dir.path().to_path_buf());
+        // No real Icecast binary is needed: the occupied-port check runs
+        // before spawning anything.
+        *manager.binary.lock().unwrap() = Some("icecast".into());
+        let error = manager.start(port.into(), "pw", "admin", "pw").await.unwrap_err();
+        assert!(error.contains("already in use"));
+        assert!(tokio::net::TcpStream::connect(("127.0.0.1", port)).await.is_ok());
+    }
+
+    #[test]
+    fn cleanup_matches_only_the_same_icecast_configuration() {
+        let cwd = Path::new("/workspace/backend");
+        assert!(uses_config(
+            b"icecast\0-c\0/workspace/.icecast/icecast.xml\0",
+            cwd,
+            Path::new("/workspace/.icecast/icecast.xml")
+        ));
+        assert!(uses_config(
+            b"icecast\0-c\0.icecast/icecast.xml\0",
+            cwd,
+            Path::new("/workspace/backend/.icecast/icecast.xml")
+        ));
+        assert!(!uses_config(
+            b"icecast\0-c\0/tmp/test/icecast.xml\0",
+            cwd,
+            Path::new("/workspace/.icecast/icecast.xml")
+        ));
+        assert!(!uses_config(b"icecast\0", cwd, Path::new("/workspace/.icecast/icecast.xml")));
     }
 
     #[test]
