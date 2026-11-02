@@ -51,6 +51,7 @@ enum Outbound {
         /// connection can attribute them.
         #[serde(skip_serializing_if = "Option::is_none")]
         station_id: Option<Uuid>,
+        code: &'static str,
         data: String,
     },
     Status {
@@ -72,6 +73,7 @@ enum Outbound {
 /// Single global WebSocket endpoint for live station state and listener counts.
 pub async fn global_ws(
     ws: WebSocketUpgrade,
+    State(state): State<crate::api::router::AppState>,
     State(db): State<PgPool>,
     State(streamers): State<StreamersMap>,
     State(lifecycle): State<Arc<StationLifecycleLocks>>,
@@ -80,51 +82,119 @@ pub async fn global_ws(
     Query(query): Query<WsQuery>,
 ) -> Result<impl IntoResponse, AppError> {
     if let Some(ref token) = query.token {
-        crate::auth::middleware::verify_token(token, &config.jwt_secret).map_err(|_| AppError::unauthorized("Invalid token".into()))?;
+        if !allowed_ws_token(&db, token, &config.jwt_secret).await {
+            return Err(AppError::unauthorized("Invalid token or unavailable demo sandbox".into()));
+        }
     }
 
     let music_dir = config.music_dir.clone();
     let jwt_secret = config.jwt_secret.clone();
     let token_from_query = query.token.clone();
 
-    Ok(
-        ws.on_upgrade(move |socket| {
-            handle_connection(socket, db, streamers, lifecycle, music_dir, jwt_secret, token_from_query, listeners)
-        }),
-    )
+    Ok(ws.on_upgrade(move |socket| {
+        handle_connection(
+            socket,
+            db,
+            streamers,
+            lifecycle,
+            music_dir,
+            jwt_secret,
+            token_from_query,
+            listeners,
+            state,
+        )
+    }))
 }
 
 async fn handle_connection(
     socket: WebSocket,
-    db: PgPool,
-    streamers: StreamersMap,
-    lifecycle: Arc<StationLifecycleLocks>,
-    music_dir: String,
+    mut db: PgPool,
+    mut streamers: StreamersMap,
+    mut lifecycle: Arc<StationLifecycleLocks>,
+    mut music_dir: String,
     jwt_secret: String,
     token_from_query: Option<String>,
-    listeners: Arc<ListenersState>,
+    mut listeners: Arc<ListenersState>,
+    state: crate::api::router::AppState,
 ) {
     let (mut sender, mut receiver) = socket.split();
 
-    if token_from_query.is_none() {
-        match authenticate(&mut sender, &mut receiver, &jwt_secret).await {
-            Ok(()) => {}
+    let token = if let Some(token) = token_from_query {
+        token
+    } else {
+        match authenticate(&mut sender, &mut receiver, &db, &jwt_secret).await {
+            Ok(token) => token,
             Err(msg) => {
                 let _ = sender.send(error_msg(&msg)).await;
                 return;
             }
         }
+    };
+
+    let mut demo_cancel = None;
+    let mut demo_workspace = None;
+    let identity;
+    if let Ok(verified) = crate::auth::middleware::verify_token(&token, &jwt_secret) {
+        if let Ok(Some(user)) = crate::auth::repository::find_user_by_id(&state.auth_db, verified.id).await {
+            identity = (user.id, user.role.clone());
+            if user.role == crate::auth::models::Role::Demo {
+                let Ok(workspace) = crate::demo::workspace(&state, user.id).await else {
+                    return;
+                };
+                let scoped = crate::demo::scoped(&state, user.id, &workspace);
+                db = scoped.db;
+                streamers = scoped.streamers;
+                lifecycle = scoped.lifecycle;
+                music_dir = scoped.config.music_dir;
+                listeners = scoped.listeners;
+                demo_cancel = Some(workspace.cancelled.subscribe());
+                demo_workspace = Some(workspace);
+            }
+        } else {
+            return;
+        }
+    } else {
+        return;
     }
 
     let (out_tx, out_rx) = mpsc::unbounded_channel();
     let mut send_task = tokio::spawn(ws_send_task(sender, out_rx));
     let mut listeners_task = tokio::spawn(forward_listeners(listeners, out_tx.clone()));
-    let mut recv_task = tokio::spawn(ws_recv_task(receiver, db, streamers, lifecycle, music_dir, jwt_secret, out_tx));
+    let auth_db = state.auth_db.clone();
+    let session_token = token.clone();
+    let mut recv_task = tokio::spawn(ws_recv_task(
+        receiver,
+        db,
+        streamers,
+        lifecycle,
+        music_dir,
+        token,
+        out_tx,
+        demo_workspace,
+        auth_db.clone(),
+        identity.clone(),
+    ));
 
     tokio::select! {
         _ = &mut send_task => {},
         _ = &mut listeners_task => {},
         _ = &mut recv_task => {},
+        _ = async {
+            loop {
+                tokio::time::sleep(Duration::from_secs(1)).await;
+                if crate::auth::middleware::verify_token(&session_token, &jwt_secret).is_err() { break; }
+                match crate::auth::repository::find_user_by_id(&auth_db, identity.0).await {
+                    Ok(Some(user)) if user.role == identity.1 => {},
+                    _ => break,
+                }
+            }
+        } => {},
+        _ = async {
+            match &mut demo_cancel {
+                Some(rx) => { if !*rx.borrow() { let _ = rx.changed().await; } },
+                None => std::future::pending::<()>().await,
+            }
+        } => {},
     }
 
     send_task.abort();
@@ -136,8 +206,9 @@ async fn handle_connection(
 async fn authenticate(
     sender: &mut SplitSink<WebSocket, Message>,
     receiver: &mut SplitStream<WebSocket>,
+    db: &PgPool,
     jwt_secret: &str,
-) -> Result<(), String> {
+) -> Result<String, String> {
     let timeout_dur = Duration::from_secs(10);
     let msg = timeout(timeout_dur, receiver.next())
         .await
@@ -160,18 +231,35 @@ async fn authenticate(
     if auth.msg_type != "auth" {
         return Err("expected auth message".to_string());
     }
-    if crate::auth::middleware::verify_token(&auth.token, jwt_secret).is_err() {
+    if !allowed_ws_token(db, &auth.token, jwt_secret).await {
         return Err("unauthorized".to_string());
     }
 
     sender
         .send(Message::Text(serde_json::json!({"type": "auth_ok"}).to_string().into()))
         .await
-        .map_err(|_| "send failed".to_string())
+        .map_err(|_| "send failed".to_string())?;
+    Ok(auth.token)
+}
+
+async fn allowed_ws_token(db: &PgPool, token: &str, secret: &str) -> bool {
+    let Ok(user) = crate::auth::middleware::verify_token(token, secret) else {
+        return false;
+    };
+    sqlx::query_scalar::<_, crate::auth::models::Role>("SELECT role FROM users WHERE id = $1")
+        .bind(user.id)
+        .fetch_optional(db)
+        .await
+        .is_ok_and(|role| role.is_some_and(|role| role == crate::auth::models::Role::Admin))
+        || crate::demo::ready(db, user.id).await.unwrap_or(false)
 }
 
 fn error_msg(data: &str) -> Message {
-    Message::Text(serde_json::json!({"type":"error","data":data}).to_string().into())
+    Message::Text(
+        serde_json::json!({"type":"error","code":"UNAUTHORIZED","data":data})
+            .to_string()
+            .into(),
+    )
 }
 
 /// Drains the per-connection outbound queue and forwards it to the socket,
@@ -260,12 +348,40 @@ async fn ws_recv_task(
     streamers: StreamersMap,
     lifecycle: Arc<StationLifecycleLocks>,
     music_dir: String,
-    jwt_secret: String,
+    expected_token: String,
     out_tx: mpsc::UnboundedSender<Outbound>,
+    demo_workspace: Option<Arc<crate::demo::Workspace>>,
+    auth_db: PgPool,
+    identity: (Uuid, crate::auth::models::Role),
 ) {
-    let mut subs: HashMap<Uuid, JoinHandle<()>> = HashMap::new();
+    // Tokio JoinHandle's Drop detaches a task. Explicitly abort subscriptions
+    // even when a reset aborts this receive task rather than ending its loop.
+    struct Subscriptions(HashMap<Uuid, JoinHandle<()>>);
+    impl Drop for Subscriptions {
+        fn drop(&mut self) {
+            for task in self.0.values() {
+                task.abort();
+            }
+        }
+    }
+    let mut subscriptions = Subscriptions(HashMap::new());
+    let subs = &mut subscriptions.0;
 
     while let Some(Ok(msg)) = receiver.next().await {
+        match crate::auth::repository::find_user_by_id(&auth_db, identity.0).await {
+            Ok(Some(user)) if user.role == identity.1 => {}
+            _ => break,
+        }
+        let _operation = match &demo_workspace {
+            Some(workspace) => {
+                let guard = workspace.gate.read().await;
+                if *workspace.cancelled.borrow() {
+                    break;
+                }
+                Some(guard)
+            }
+            None => None,
+        };
         let Message::Text(text) = msg else { continue };
 
         let cmd: Inbound = match serde_json::from_str(&text) {
@@ -274,6 +390,7 @@ async fn ws_recv_task(
                 let _ = out_tx.send(Outbound::Error {
                     station_id: None,
                     data: "invalid message".into(),
+                    code: "WS_INVALID_MESSAGE",
                 });
                 continue;
             }
@@ -281,12 +398,13 @@ async fn ws_recv_task(
 
         match cmd {
             Inbound::Auth { token } => {
-                if crate::auth::middleware::verify_token(&token, &jwt_secret).is_ok() {
+                if token == expected_token {
                     let _ = out_tx.send(Outbound::AuthOk);
                 } else {
                     let _ = out_tx.send(Outbound::Error {
                         station_id: None,
                         data: "unauthorized".into(),
+                        code: "UNAUTHORIZED",
                     });
                 }
             }
@@ -297,6 +415,7 @@ async fn ws_recv_task(
                         let _ = out_tx.send(Outbound::Error {
                             station_id: None,
                             data: "unknown station".into(),
+                            code: "NOT_FOUND",
                         });
                         continue;
                     }
@@ -310,6 +429,7 @@ async fn ws_recv_task(
                         let _ = out_tx.send(Outbound::Error {
                             station_id: None,
                             data: "unknown station".into(),
+                            code: "NOT_FOUND",
                         });
                         continue;
                     }
@@ -317,6 +437,7 @@ async fn ws_recv_task(
                         let _ = out_tx.send(Outbound::Error {
                             station_id: None,
                             data: "no active stream".into(),
+                            code: "STREAM_NOT_PLAYING",
                         });
                         continue;
                     }
@@ -354,6 +475,7 @@ async fn ws_recv_task(
                             let _ = out_tx.send(Outbound::Error {
                                 station_id: Some(id),
                                 data: format!("skip failed: {error}"),
+                                code: "STREAM_PLAYBACK_FAILED",
                             });
                         }
                     }
@@ -365,6 +487,7 @@ async fn ws_recv_task(
                         let _ = out_tx.send(Outbound::Error {
                             station_id: Some(id),
                             data: format!("play failed: {error}"),
+                            code: error.code(),
                         });
                     }
                 }
@@ -376,6 +499,7 @@ async fn ws_recv_task(
                             let _ = out_tx.send(Outbound::Error {
                                 station_id: Some(id),
                                 data: format!("pause failed: {error}"),
+                                code: "STREAM_PLAYBACK_FAILED",
                             });
                         }
                     }
@@ -384,7 +508,7 @@ async fn ws_recv_task(
         }
     }
 
-    for (_, handle) in subs {
+    for (_, handle) in subs.drain() {
         handle.abort();
     }
 }
@@ -609,6 +733,7 @@ async fn no_runtime_snapshot(
                 .send(Outbound::Error {
                     station_id: Some(station_id),
                     data: "unknown station".into(),
+                    code: "NOT_FOUND",
                 })
                 .is_err()
             {
@@ -624,6 +749,7 @@ async fn no_runtime_snapshot(
                 .send(Outbound::Error {
                     station_id: Some(station_id),
                     data: format!("station lookup failed: {error}"),
+                    code: "DB_ERROR",
                 })
                 .is_err()
             {
@@ -647,6 +773,7 @@ async fn no_runtime_snapshot(
                 .send(Outbound::Error {
                     station_id: Some(station_id),
                     data: "station is started but no runtime is available".into(),
+                    code: "STREAM_NOT_PLAYING",
                 })
                 .is_err()
             {
@@ -679,6 +806,7 @@ async fn no_runtime_snapshot(
                     .send(Outbound::Error {
                         station_id: Some(station_id),
                         data: "station queue unavailable".into(),
+                        code: "DB_ERROR",
                     })
                     .is_err()
                 {
@@ -730,6 +858,7 @@ async fn attach_snapshot_and_forward(
                 .send(Outbound::Error {
                     station_id: Some(station_id),
                     data: format!("stream status unavailable: {error}"),
+                    code: "STREAM_PLAYBACK_FAILED",
                 })
                 .is_err()
             {
@@ -744,6 +873,7 @@ async fn attach_snapshot_and_forward(
             Outbound::Error {
                 station_id: Some(station_id),
                 data: "station queue unavailable".into(),
+                code: "DB_ERROR",
             }
         }
     };

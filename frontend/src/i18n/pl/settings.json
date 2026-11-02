@@ -1,4 +1,5 @@
 {
+  "icecast_demo_readonly": "Podgląd ustawień Icecasta. Ta funkcja jest niedostępna w wersji demo — nie można zmieniać konfiguracji ani sterować serwerem. Hasła są ukryte.",
   "theme": "Motyw",
   "light": "Jasny",
   "dark": "Ciemny",

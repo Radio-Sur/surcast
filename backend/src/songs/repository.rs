@@ -760,9 +760,8 @@ mod tests {
         crate::test_db::run_with_test_db(async |db| {
             let user_id = Uuid::new_v4();
             let username = format!("affected-query-test-{user_id}");
-            sqlx::query("INSERT INTO users (id, username, password_hash, name) VALUES ($1, $2, 'x', $3)")
+            sqlx::query("INSERT INTO users (id, username, password_hash) VALUES ($1, $2, 'x')")
                 .bind(user_id)
-                .bind(&username)
                 .bind(&username)
                 .execute(&db.pool)
                 .await

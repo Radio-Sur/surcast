@@ -488,11 +488,10 @@ mod tests {
 
     #[sqlx::test(migrations = "./migrations")]
     async fn queue_snapshot_preserves_rows_and_boolean_covers(db: PgPool) {
-        let user: Uuid =
-            sqlx::query_scalar("INSERT INTO users (username, password_hash, name) VALUES ('queue-snapshot', 'hash', 'Test') RETURNING id")
-                .fetch_one(&db)
-                .await
-                .unwrap();
+        let user: Uuid = sqlx::query_scalar("INSERT INTO users (username, password_hash) VALUES ('queue-snapshot', 'hash') RETURNING id")
+            .fetch_one(&db)
+            .await
+            .unwrap();
         let station: Uuid = sqlx::query_scalar("INSERT INTO stations (name, created_by) VALUES ('Snapshot', $1) RETURNING id")
             .bind(user)
             .fetch_one(&db)

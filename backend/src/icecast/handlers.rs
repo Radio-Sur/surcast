@@ -47,13 +47,37 @@ async fn reconnect_streamers(active: Vec<(Arc<StationStreamer>, bool)>) {
     .await;
 }
 
-pub async fn get_settings(State(db): State<PgPool>, State(icecast_manager): State<IcecastManager>) -> Result<impl IntoResponse, AppError> {
-    let settings = models::get_settings(&db).await?;
+pub async fn get_settings(
+    axum::Extension(user): axum::Extension<crate::auth::middleware::AuthUser>,
+    State(db): State<PgPool>,
+    State(icecast_manager): State<IcecastManager>,
+) -> Result<impl IntoResponse, AppError> {
+    let mut settings = models::get_settings(&db).await?;
     let running = if settings.mode == IcecastMode::External {
         check_external_reachable(&settings).await
     } else {
         icecast_manager.is_running_on_port(settings.port as u16).await
     };
+    if user.role == crate::auth::models::Role::Demo {
+        settings.source_password.clear();
+        settings.admin_password.clear();
+        settings.external_source_pw = None;
+        settings.external_admin_pw = None;
+        if let Some(url) = &settings.external_url {
+            let url = if url.contains("://") {
+                url.clone()
+            } else {
+                format!("http://{url}")
+            };
+            settings.external_url = reqwest::Url::parse(&url).ok().and_then(|mut url| {
+                url.set_username("").ok()?;
+                url.set_password(None).ok()?;
+                url.set_query(None);
+                url.set_fragment(None);
+                Some(url.to_string())
+            });
+        }
+    }
     Ok(Json(json!({
         "settings": settings,
         "running": running,

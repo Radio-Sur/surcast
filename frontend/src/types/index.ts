@@ -1,8 +1,7 @@
 export interface User {
   id: string;
   username: string;
-  name: string;
-  role: "admin" | "manager" | "viewer";
+  role: "admin" | "demo";
   created_at: string;
 }
 
@@ -74,6 +73,7 @@ export interface DuplicateSong {
 }
 
 export interface UploadJobStatus {
+  error_code?: string | null;
   id: string;
   status: UploadJobStatusValue;
   total: number;

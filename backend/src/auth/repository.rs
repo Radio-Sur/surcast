@@ -35,12 +35,11 @@ pub async fn find_all_users(db: &PgPool) -> Result<Vec<User>, AppError> {
         .db_error("failed to list users")
 }
 
-pub async fn insert_user(db: &PgPool, id: Uuid, username: &str, password_hash: &str, name: &str, role: &Role) -> Result<(), AppError> {
-    sqlx::query("INSERT INTO users (id, username, password_hash, name, role) VALUES ($1, $2, $3, $4, $5)")
+pub async fn insert_user(db: &PgPool, id: Uuid, username: &str, password_hash: &str, role: &Role) -> Result<(), AppError> {
+    sqlx::query("INSERT INTO users (id, username, password_hash, role) VALUES ($1, $2, $3, $4)")
         .bind(id)
         .bind(username)
         .bind(password_hash)
-        .bind(name)
         .bind(role)
         .execute(db)
         .await
@@ -48,9 +47,8 @@ pub async fn insert_user(db: &PgPool, id: Uuid, username: &str, password_hash: &
     Ok(())
 }
 
-pub async fn update_user(db: &PgPool, id: Uuid, name: &str, role: &Role) -> Result<User, AppError> {
-    sqlx::query_as::<_, User>("UPDATE users SET name = $1, role = $2, updated_at = NOW() WHERE id = $3 RETURNING *")
-        .bind(name)
+pub async fn update_user(db: &PgPool, id: Uuid, role: &Role) -> Result<User, AppError> {
+    sqlx::query_as::<_, User>("UPDATE users SET role = $1, updated_at = NOW() WHERE id = $2 RETURNING *")
         .bind(role)
         .bind(id)
         .fetch_one(db)

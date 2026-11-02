@@ -10,6 +10,7 @@ export function IcecastExternalForm({
   onExternalUrlChange,
   onSourcePasswordChange,
   onAdminPasswordChange,
+  disabled = false,
 }: {
   externalUrl: string;
   sourcePassword: string;
@@ -17,19 +18,31 @@ export function IcecastExternalForm({
   onExternalUrlChange: (v: string) => void;
   onSourcePasswordChange: (v: string) => void;
   onAdminPasswordChange: (v: string) => void;
+  disabled?: boolean;
 }) {
   const { t } = useTranslation("settings");
   return (
     <Box sx={{ display: "flex", flexDirection: "column", gap: 2, maxWidth: 400 }}>
       <TextField
         label={t("icecast_external_url")}
+        disabled={disabled}
         placeholder={t("external_url_placeholder")}
         value={externalUrl}
         onChange={(e) => onExternalUrlChange(e.target.value)}
         size="small"
       />
-      <PasswordField label={t("icecast_source_password")} value={sourcePassword} onChange={onSourcePasswordChange} />
-      <PasswordField label={t("icecast_admin_password")} value={adminPassword} onChange={onAdminPasswordChange} />
+      <PasswordField
+        disabled={disabled}
+        label={t("icecast_source_password")}
+        value={sourcePassword}
+        onChange={onSourcePasswordChange}
+      />
+      <PasswordField
+        disabled={disabled}
+        label={t("icecast_admin_password")}
+        value={adminPassword}
+        onChange={onAdminPasswordChange}
+      />
     </Box>
   );
 }

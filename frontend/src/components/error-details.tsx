@@ -11,6 +11,7 @@ import Typography from "@mui/material/Typography";
 import { type Ref, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { CopyButton } from "@/components/copy-button";
+import { codeFromStatus, errorMessage } from "@/lib/error-codes";
 
 export interface ErrorDetailsInfo {
   message: string;
@@ -34,8 +35,8 @@ function formatRaw(raw: unknown): string {
 
 /**
  * Alert with a text-only "details" toggle: clicking the notification (or
- * the button) expands a code block with the backend cause (status, code,
- * category, details) and a copy button. Exactly one pictogram — the
+ * the button) expands localized metadata and a diagnostics copy button.
+ * Raw backend prose never becomes visible UI text. Exactly one pictogram — the
  * severity icon — never an icon pair.
  */
 export function ErrorDetails({
@@ -58,7 +59,11 @@ export function ErrorDetails({
   const body = details?.details || formatRaw(details?.raw);
   const hasDetails = Boolean(details && (details.code ?? details.status ?? details.category ?? body));
   const meta = details
-    ? [details.status !== undefined && `HTTP ${details.status}`, details.code, details.category]
+    ? [
+        details.status !== undefined && `HTTP ${details.status}`,
+        details.code,
+        details.category && t(`errors:category_${details.category}`, { defaultValue: "" }),
+      ]
         .filter(Boolean)
         .join(" · ")
     : "";
@@ -90,7 +95,9 @@ export function ErrorDetails({
           minHeight: 37,
         }}
       >
-        <Box sx={{ lineHeight: 1.5, flex: 1 }}>{title}</Box>
+        <Box sx={{ lineHeight: 1.5, flex: 1 }}>
+          {details?.code || details?.status ? errorMessage(details.code, codeFromStatus(details.status)) : title}
+        </Box>
         {hasDetails && (
           <Button
             size="small"
@@ -150,7 +157,7 @@ export function ErrorDetails({
                   fontFamily: "monospace",
                 }}
               >
-                {body}
+                {t("errors:technical_details")}
               </Typography>
             )}
           </Box>

@@ -241,11 +241,7 @@ export function useScheduleEventForm({
       const httpErr = isHttpError(err);
       const msg = httpErr?.message || t("schedule:dialog_validation_save_failed");
       setErrorDetails(httpErr);
-      if (msg.includes("overlap") || msg.includes("Conflict")) {
-        setError(t("schedule:dialog_validation_overlap", { message: msg }));
-      } else {
-        setError(msg);
-      }
+      setError(msg);
     }
   }, [form, editingEvent, events, t, updateEvent, createEvent, onClose]);
 

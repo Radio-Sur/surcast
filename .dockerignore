@@ -3,5 +3,6 @@ node_modules
 frontend/dist
 test-results
 uploads
+**/*.sandboxes
 .pgdata
 .git

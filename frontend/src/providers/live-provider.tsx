@@ -1,7 +1,10 @@
+import { useQueryClient } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { useAuth } from "@/hooks/use-auth";
 import { WS_RECONNECT_BASE_MS, WS_RECONNECT_MAX_MS } from "@/lib/constants";
+import { reportHttpError } from "@/lib/report-error";
+import { useSnackbar } from "@/providers/snackbar-provider";
 import type { LiveListeners, QueueItem, StreamStatus } from "@/types";
 
 export interface LiveStationState {
@@ -27,7 +30,10 @@ const LiveContext = createContext<LiveContextValue | null>(null);
 const wsUrl = () => `${window.location.protocol === "https:" ? "wss:" : "ws:"}//${window.location.host}/api/ws`;
 
 export function LiveProvider({ children }: { children: ReactNode }) {
-  const { token } = useAuth();
+  const { token, user } = useAuth();
+  const queryClient = useQueryClient();
+  const { showError } = useSnackbar();
+  const isDemo = user?.role === "demo";
   const [stations, setStations] = useState<Record<string, LiveStationState>>({});
   const [socketConnected, setSocketConnected] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
@@ -89,6 +95,9 @@ export function LiveProvider({ children }: { children: ReactNode }) {
         const msg: Record<string, unknown> = JSON.parse(event.data as string);
         switch (msg.type) {
           case "auth_ok": {
+            // Reset closes old sandbox sockets. On reconnect, refresh the
+            // restored playlists/library and the isolated output URL too.
+            if (isDemo) queryClient.invalidateQueries();
             setSocketConnected(true);
             retryCount.current = 0;
             for (const stationId of Object.keys(subCountsRef.current)) {
@@ -97,7 +106,13 @@ export function LiveProvider({ children }: { children: ReactNode }) {
             return;
           }
           case "error": {
-            console.warn("Live WS error:", msg.data);
+            if (msg.code !== "STREAM_NOT_PLAYING") {
+              reportHttpError(
+                showError,
+                { code: msg.code ?? "STREAM_ERROR", diagnostic: msg.data },
+                "Live WebSocket error",
+              );
+            }
             return;
           }
           case "status": {
@@ -158,7 +173,7 @@ export function LiveProvider({ children }: { children: ReactNode }) {
         console.warn("Live WS message parse error:", event.data);
       }
     },
-    [send],
+    [send, isDemo, queryClient, showError],
   );
 
   useEffect(() => {

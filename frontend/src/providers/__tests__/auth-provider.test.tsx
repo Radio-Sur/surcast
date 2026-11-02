@@ -103,7 +103,7 @@ describe("AuthProvider", () => {
         HttpResponse.json({
           access_token: "login-access",
           refresh_token: "login-refresh",
-          user: { id: "2", username: "jdoe", name: "John", role: "viewer", created_at: "2026-01-01T00:00:00Z" },
+          user: { id: "2", username: "jdoe", role: "demo", created_at: "2026-01-01T00:00:00Z" },
         }),
       ),
     );

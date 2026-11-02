@@ -27,7 +27,6 @@ export function fakeUser(overrides?: Partial<User>): User {
   return {
     id: genId(),
     username: "admin",
-    name: "Admin User",
     role: "admin",
     created_at: "2026-01-01T00:00:00Z",
     ...overrides,

@@ -139,12 +139,12 @@ export function QueueSection(props: QueueSectionProps) {
 
     if (failed > 0) {
       console.error(`${failed} deletion(s) failed`);
-      showSnackbar(`${failed} item(s) could not be deleted`, "error");
+      showSnackbar(t("errors:items_failed", { count: failed }), "error");
     }
 
     setSelectedIds(new Set());
     setBulkDeleteOpen(false);
-  }, [selectedIds, removePlaylistFromQueue, handleRemoveFromQueue, showSnackbar]);
+  }, [selectedIds, removePlaylistFromQueue, handleRemoveFromQueue, showSnackbar, t]);
 
   const nowPlayingGroup = useNowPlayingGroup(queueSections);
 

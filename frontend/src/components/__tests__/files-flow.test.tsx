@@ -76,8 +76,8 @@ describe("Files Page", () => {
     );
     render(<FilesPage />, { route: "/files" });
     await waitFor(() => expect(screen.getByText("rock")).toBeInTheDocument(), { timeout: 5000 });
-    expect(document.querySelectorAll('img[src="/api/songs/c1/cover"]')).toHaveLength(1);
-    expect(document.querySelectorAll('img[src="/api/songs/c2/cover"]')).toHaveLength(1);
+    expect(document.querySelectorAll('img[src^="/api/songs/c1/cover?"]')).toHaveLength(1);
+    expect(document.querySelectorAll('img[src^="/api/songs/c2/cover?"]')).toHaveLength(1);
   });
 
   it("lists missing songs and purges them", async () => {

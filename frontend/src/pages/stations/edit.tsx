@@ -1,4 +1,5 @@
 import ArrowBack from "@mui/icons-material/ArrowBack";
+import Alert from "@mui/material/Alert";
 import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
 import Card from "@mui/material/Card";
@@ -10,6 +11,7 @@ import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate, useParams } from "react-router-dom";
 import { ErrorDetails } from "@/components/error-details";
+import { useAuth } from "@/hooks/use-auth";
 import { useStation, useUpdateStation } from "@/hooks/use-stations";
 import { type HttpErrorInfo, isHttpError } from "@/lib/is-http-error";
 
@@ -19,6 +21,7 @@ export function EditStationPage() {
   const { data: station, isLoading } = useStation(id ?? "");
   const updateStation = useUpdateStation();
   const navigate = useNavigate();
+  const isDemo = useAuth().user?.role === "demo";
 
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
@@ -44,6 +47,7 @@ export function EditStationPage() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isDemo) return;
     setError(null);
 
     try {
@@ -104,10 +108,12 @@ export function EditStationPage() {
           </Typography>
 
           <Box component="form" onSubmit={handleSubmit} sx={{ display: "flex", flexDirection: "column", gap: 2.5 }}>
+            {isDemo && <Alert severity="info">{t("errors:codes.DEMO_STATION_READONLY")}</Alert>}
             {error && <ErrorDetails title={error.message} details={error} onClose={() => setError(null)} />}
 
             <TextField
               label={t("stations:name_label")}
+              disabled={isDemo}
               value={name}
               onChange={(e) => setName(e.target.value)}
               required
@@ -115,6 +121,7 @@ export function EditStationPage() {
             />
             <TextField
               label={t("stations:description_label")}
+              disabled={isDemo}
               value={description}
               onChange={(e) => setDescription(e.target.value)}
               fullWidth
@@ -123,6 +130,7 @@ export function EditStationPage() {
             />
             <TextField
               label={t("stations:mount_label")}
+              disabled={isDemo}
               value={streamUrl}
               onChange={(e) => setStreamUrl(e.target.value)}
               placeholder={t("stations:mount_placeholder_edit")}
@@ -133,7 +141,7 @@ export function EditStationPage() {
               <Button variant="outlined" onClick={() => navigate("/stations")}>
                 {t("common:cancel")}
               </Button>
-              <Button type="submit" variant="contained" disabled={updateStation.isPending}>
+              <Button type="submit" variant="contained" disabled={isDemo || updateStation.isPending}>
                 {updateStation.isPending ? t("common:saving") : t("stations:save_changes")}
               </Button>
             </Box>

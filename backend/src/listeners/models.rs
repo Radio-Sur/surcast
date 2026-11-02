@@ -161,7 +161,7 @@ mod tests {
     async fn aggregate_history_sums_per_station_averages_not_raw_samples() {
         crate::test_db::run_with_test_db(async |db| {
             let user_id = Uuid::new_v4();
-            sqlx::query("INSERT INTO users (id, username, password_hash, name) VALUES ($1, 'agg-test', 'x', 'agg')")
+            sqlx::query("INSERT INTO users (id, username, password_hash) VALUES ($1, 'agg-test', 'x')")
                 .bind(user_id)
                 .execute(&db.pool)
                 .await

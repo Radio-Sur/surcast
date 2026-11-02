@@ -46,7 +46,7 @@ async fn get_auto_fill_response(db: &PgPool, station_id: Uuid) -> Result<AutoFil
         mode: AutoDjMode::Random,
         source_type: SourceType::StationLibrary,
         source_playlist_id: None,
-        avoid_artist_repeat: true,
+        avoid_artist_repeat: false,
         min_song_gap: 3,
         songs_ahead: 4,
     });
@@ -115,7 +115,7 @@ pub async fn update_auto_fill(
         .unwrap_or(current.as_ref().and_then(|c| c.source_playlist_id));
     let avoid_artist_repeat = req
         .avoid_artist_repeat
-        .unwrap_or(current.as_ref().map(|c| c.avoid_artist_repeat).unwrap_or(true));
+        .unwrap_or(current.as_ref().map(|c| c.avoid_artist_repeat).unwrap_or(false));
     let min_song_gap = req.min_song_gap.unwrap_or(current.as_ref().map(|c| c.min_song_gap).unwrap_or(3));
     let songs_ahead = req.songs_ahead.unwrap_or(current.as_ref().map(|c| c.songs_ahead).unwrap_or(4));
 

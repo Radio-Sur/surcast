@@ -1,5 +1,5 @@
 import { HttpResponse, http } from "msw";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { server } from "@/mocks/server";
 import { AdminIcecastPage } from "@/pages/admin/icecast";
 import { render, screen, setupAuth, userEvent, waitFor } from "@/test/test-utils";
@@ -25,6 +25,39 @@ const defaultSettings = {
 };
 
 describe("Admin Icecast Page", () => {
+  it("shows a disabled, password-free Icecast preview for demo users", async () => {
+    const mutation = vi.fn();
+    server.use(
+      http.get("/api/auth/me", () =>
+        HttpResponse.json({ id: "demo", username: "demo", role: "demo", created_at: "2026-01-01T00:00:00Z" }),
+      ),
+      http.get("/api/admin/icecast", () => HttpResponse.json(defaultSettings)),
+      http.patch("/api/admin/icecast", () => {
+        mutation();
+        return HttpResponse.json({});
+      }),
+      http.post("/api/admin/icecast/start", () => {
+        mutation();
+        return HttpResponse.json({});
+      }),
+    );
+    render(<AdminIcecastPage />, { route: "/admin/icecast" });
+    await screen.findByText(/Icecast settings preview/i);
+    expect(screen.getByRole("combobox")).toHaveAttribute("aria-disabled", "true");
+    expect(screen.getByLabelText("Port")).toBeDisabled();
+    const sourcePassword = screen.getByLabelText("Source password");
+    expect(sourcePassword).toBeDisabled();
+    expect(sourcePassword).toHaveValue("");
+    expect(screen.getByLabelText("Admin password")).toBeDisabled();
+    const save = screen.getByRole("button", { name: /^save$/i });
+    const start = screen.getByRole("button", { name: /^start$/i });
+    expect(save).toBeDisabled();
+    expect(start).toBeDisabled();
+    fireEvent.click(save);
+    fireEvent.click(start);
+    expect(mutation).not.toHaveBeenCalled();
+  });
+
   it("renders icecast settings form and shows stopped status", async () => {
     server.use(http.get("/api/admin/icecast", () => HttpResponse.json(defaultSettings)));
     render(<AdminIcecastPage />, { route: "/admin/icecast" });
@@ -56,3 +89,5 @@ describe("Admin Icecast Page", () => {
     expect(screen.getByRole("button", { name: /save/i })).toBeInTheDocument();
   });
 });
+
+import { fireEvent } from "@testing-library/react";

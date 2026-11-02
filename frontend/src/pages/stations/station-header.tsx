@@ -4,6 +4,7 @@ import Button from "@mui/material/Button";
 import Chip from "@mui/material/Chip";
 import Typography from "@mui/material/Typography";
 import { useTranslation } from "react-i18next";
+import { useAuth } from "@/hooks/use-auth";
 import type { Station } from "@/types";
 
 export function StationHeader({
@@ -25,6 +26,7 @@ export function StationHeader({
 }) {
   const { t } = useTranslation();
   const busy = !!operation;
+  const isDemo = useAuth().user?.role === "demo";
 
   return (
     <Box sx={{ display: "flex", alignItems: "center", gap: 2 }}>
@@ -74,7 +76,7 @@ export function StationHeader({
       <Button variant="outlined" size="small" onClick={onRestart} disabled={busy} loading={operation === "restarting"}>
         {operation === "restarting" ? t("stations:stream_restarting") : t("common:restart")}
       </Button>
-      <Button variant="outlined" size="small" onClick={onEdit} disabled={busy}>
+      <Button variant="outlined" size="small" onClick={onEdit} disabled={busy || isDemo}>
         {t("common:edit")}
       </Button>
     </Box>

@@ -31,9 +31,10 @@ export interface IcecastSettingsUpdate {
   external_admin_pw?: string | null;
 }
 
-export function useIcecastStatus() {
+export function useIcecastStatus(scope = "admin", enabled = true) {
   return useQuery<IcecastStatusResponse>({
-    queryKey: ["icecast"],
+    queryKey: ["icecast", scope],
+    enabled,
     queryFn: () => icecastService.status(),
   });
 }

@@ -5,7 +5,8 @@ use serde_json::json;
 
 /// Machine-readable error categories. One per icon/color on the frontend.
 /// Kept generic on purpose: the UI maps category -> presentation, `code`
-/// pinpoints the case, `message` stays human-readable.
+/// pinpoints the case. Human-readable text is diagnostic only; clients must
+/// translate the stable code instead of displaying server prose.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ErrorCategory {
     Auth,
@@ -199,7 +200,7 @@ impl AppError {
         }
     }
 
-    fn code(&self) -> &'static str {
+    pub fn code(&self) -> &'static str {
         match self {
             Self::Unauthorized { code, .. }
             | Self::Forbidden { code, .. }
@@ -211,6 +212,44 @@ impl AppError {
             | Self::Internal { code, .. } => code,
         }
     }
+}
+
+/// Axum extractors, body limits and method routing can reject a request before
+/// a handler creates AppError. Give those responses the same code contract.
+pub async fn normalize_errors(req: axum::http::Request<axum::body::Body>, next: axum::middleware::Next) -> Response {
+    let response = next.run(req).await;
+    let status = response.status();
+    if !status.is_client_error() && !status.is_server_error() {
+        return response;
+    }
+    let (mut parts, body) = response.into_parts();
+    let bytes = axum::body::to_bytes(body, 64 * 1024).await.unwrap_or_default();
+    if serde_json::from_slice::<serde_json::Value>(&bytes)
+        .ok()
+        .is_some_and(|body| body.get("code").is_some_and(serde_json::Value::is_string))
+    {
+        return Response::from_parts(parts, axum::body::Body::from(bytes));
+    }
+    let (code, category) = match status.as_u16() {
+        400 | 422 => ("BAD_REQUEST", "validation"),
+        401 => ("UNAUTHORIZED", "auth"),
+        403 => ("FORBIDDEN", "auth"),
+        404 => ("NOT_FOUND", "not_found"),
+        405 => ("METHOD_NOT_ALLOWED", "validation"),
+        408 | 504 => ("REQUEST_TIMEOUT", "server"),
+        409 => ("CONFLICT", "conflict"),
+        413 => ("PAYLOAD_TOO_LARGE", "validation"),
+        415 => ("UNSUPPORTED_MEDIA_TYPE", "validation"),
+        429 => ("RATE_LIMITED", "validation"),
+        502 | 503 => ("SERVICE_UNAVAILABLE", "server"),
+        _ => ("INTERNAL", "server"),
+    };
+    parts.headers.remove(axum::http::header::CONTENT_LENGTH);
+    parts.headers.insert(
+        axum::http::header::CONTENT_TYPE,
+        axum::http::HeaderValue::from_static("application/json"),
+    );
+    Response::from_parts(parts, axum::body::Body::from(json!({"code":code,"category":category}).to_string()))
 }
 
 impl std::fmt::Display for AppError {

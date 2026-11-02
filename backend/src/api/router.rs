@@ -34,6 +34,9 @@ pub type StreamersMap = Arc<Mutex<HashMap<Uuid, Arc<StationStreamer>>>>;
 #[derive(Clone)]
 pub struct AppState {
     pub db: PgPool,
+    pub auth_db: PgPool,
+    pub demos: Arc<crate::demo::Registry>,
+    pub sandbox: Option<Uuid>,
     pub config: Config,
     pub streamers: StreamersMap,
     pub lifecycle: Arc<StationLifecycleLocks>,
@@ -87,7 +90,30 @@ pub fn create_router(
     icecast_manager: IcecastManager,
     listeners: Arc<ListenersState>,
 ) -> Router {
+    create_router_with_demos(
+        db,
+        config,
+        streamers,
+        lifecycle,
+        icecast_manager,
+        listeners,
+        Arc::new(crate::demo::Registry::default()),
+    )
+}
+
+pub fn create_router_with_demos(
+    db: PgPool,
+    config: Config,
+    streamers: StreamersMap,
+    lifecycle: Arc<StationLifecycleLocks>,
+    icecast_manager: IcecastManager,
+    listeners: Arc<ListenersState>,
+    demos: Arc<crate::demo::Registry>,
+) -> Router {
     let state = AppState {
+        auth_db: db.clone(),
+        demos,
+        sandbox: None,
         db,
         config,
         streamers,
@@ -96,11 +122,17 @@ pub fn create_router(
         listeners,
     };
 
+    router_for_state(state.clone()).layer(middleware::from_fn_with_state(state, crate::demo::dispatch))
+}
+
+pub(crate) fn router_for_state(state: AppState) -> Router {
     let cors = CorsLayer::new().allow_origin(Any).allow_methods(Any).allow_headers(Any);
 
     let protected_routes = Router::new()
+        .route("/api/admin/icecast", get(icecast::handlers::get_settings))
+        .route("/api/songs/{id}/file", get(songs::handlers::serve_song_file))
+        .route("/api/songs/{id}/cover", get(songs::handlers::serve_song_cover))
         .route("/api/auth/me", get(auth::handlers::me))
-        .route("/api/users", get(auth::handlers::list_users))
         .route(
             "/api/stations",
             get(stations::handlers::list_stations).post(stations::handlers::create_station),
@@ -266,14 +298,14 @@ pub fn create_router(
         .route_layer(middleware::from_fn_with_state(state.clone(), auth::middleware::auth_middleware));
 
     let admin_routes = Router::new()
+        .route("/api/users/{id}/sandbox", get(crate::demo::status).post(crate::demo::configure))
+        .route("/api/users/{id}/sandbox/reset", post(crate::demo::reset))
+        .route("/api/users", get(auth::handlers::list_users).post(auth::handlers::create_user))
         .route(
             "/api/users/{id}",
             put(auth::handlers::update_user).delete(auth::handlers::delete_user),
         )
-        .route(
-            "/api/admin/icecast",
-            get(icecast::handlers::get_settings).patch(icecast::handlers::patch_settings),
-        )
+        .route("/api/admin/icecast", axum::routing::patch(icecast::handlers::patch_settings))
         .route("/api/admin/icecast/start", post(icecast::handlers::start_icecast))
         .route("/api/admin/icecast/stop", post(icecast::handlers::stop_icecast))
         .route("/api/admin/icecast/test", post(icecast::handlers::test_connection))
@@ -287,8 +319,6 @@ pub fn create_router(
         .route("/api/setup/init", axum::routing::post(auth::handlers::setup_init))
         .route("/api/auth/login", axum::routing::post(auth::handlers::login))
         .route("/api/auth/refresh", axum::routing::post(auth::handlers::refresh))
-        .route("/api/songs/{id}/file", get(songs::handlers::serve_song_file))
-        .route("/api/songs/{id}/cover", get(songs::handlers::serve_song_cover))
         .route("/api/ws", get(stations::handlers::global_ws))
         .merge(protected_routes)
         .merge(admin_routes)
@@ -296,6 +326,7 @@ pub fn create_router(
         .route("/api/docs", get(docs_page))
         .fallback(fallback_handler)
         .layer(CatchPanicLayer::new())
+        .layer(middleware::from_fn(crate::errors::normalize_errors))
         .layer(TraceLayer::new_for_http())
         .layer(cors)
         .with_state(state)

@@ -9,10 +9,12 @@ export function PasswordField({
   label,
   value,
   onChange,
+  disabled = false,
 }: {
   label: string;
   value: string;
   onChange: (v: string) => void;
+  disabled?: boolean;
 }) {
   const [show, setShow] = useState(false);
 
@@ -21,13 +23,14 @@ export function PasswordField({
       label={label}
       type={show ? "text" : "password"}
       value={value}
+      disabled={disabled}
       onChange={(e) => onChange(e.target.value)}
       size="small"
       slotProps={{
         input: {
           endAdornment: (
             <InputAdornment position="end">
-              <IconButton onClick={() => setShow(!show)} edge="end" size="small">
+              <IconButton disabled={disabled} onClick={() => setShow(!show)} edge="end" size="small">
                 {show ? <VisibilityOff /> : <Visibility />}
               </IconButton>
             </InputAdornment>

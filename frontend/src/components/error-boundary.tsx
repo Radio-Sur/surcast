@@ -2,6 +2,7 @@ import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
 import Typography from "@mui/material/Typography";
 import { Component, type ErrorInfo, type ReactNode } from "react";
+import { useTranslation } from "react-i18next";
 
 interface Props {
   children: ReactNode;
@@ -13,7 +14,10 @@ interface State {
   error: Error | null;
 }
 
-export class ErrorBoundary extends Component<Props, State> {
+class ErrorBoundaryImpl extends Component<
+  Props & { labels: { title: string; message: string; retry: string; reload: string } },
+  State
+> {
   state: State = { hasError: false, error: null };
 
   static getDerivedStateFromError(error: Error): State {
@@ -44,17 +48,17 @@ export class ErrorBoundary extends Component<Props, State> {
           }}
         >
           <Typography variant="h5" sx={{ fontWeight: 600 }}>
-            Something went wrong
+            {this.props.labels.title}
           </Typography>
           <Typography variant="body2" color="text.secondary" sx={{ maxWidth: 400, textAlign: "center" }}>
-            {this.state.error?.message || "An unexpected error occurred."}
+            {this.props.labels.message}
           </Typography>
           <Box sx={{ display: "flex", gap: 1 }}>
             <Button variant="contained" onClick={this.handleRetry}>
-              Retry
+              {this.props.labels.retry}
             </Button>
             <Button variant="outlined" onClick={() => window.location.reload()}>
-              Reload page
+              {this.props.labels.reload}
             </Button>
           </Box>
         </Box>
@@ -62,4 +66,14 @@ export class ErrorBoundary extends Component<Props, State> {
     }
     return this.props.children;
   }
+}
+
+export function ErrorBoundary(props: Props) {
+  const { t } = useTranslation("errors");
+  return (
+    <ErrorBoundaryImpl
+      {...props}
+      labels={{ title: t("boundary_title"), message: t("codes.UNKNOWN"), retry: t("retry"), reload: t("reload") }}
+    />
+  );
 }

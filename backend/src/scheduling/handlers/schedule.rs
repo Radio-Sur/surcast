@@ -60,15 +60,15 @@ fn validate_schedule_input(
     playlist_id: Option<Uuid>,
 ) -> Result<(), AppError> {
     if !(0..=6).contains(&day_of_week) {
-        return Err(AppError::bad_request("day_of_week must be 0-6".into()));
+        return Err(AppError::bad_request("day_of_week must be 0-6".into()).with_code("INVALID_DAY_OF_WEEK"));
     }
 
     if end_time == start_time {
-        return Err(AppError::bad_request("end_time must differ from start_time".into()));
+        return Err(AppError::bad_request("end_time must differ from start_time".into()).with_code("INVALID_TIME_RANGE"));
     }
 
     if *source_type == SourceType::Playlist && playlist_id.is_none() {
-        return Err(AppError::bad_request("playlist_id is required when source_type is playlist".into()));
+        return Err(AppError::bad_request("playlist_id is required when source_type is playlist".into()).with_code("PLAYLIST_REQUIRED"));
     }
 
     Ok(())
@@ -137,10 +137,10 @@ pub async fn create_schedule(
                     .unwrap_or_else(|| s.source_type.to_string())
             })
             .collect();
-        return Err(AppError::conflict(format!(
-            "Time range overlaps with existing schedule(s): {}",
-            names.join(", ")
-        )));
+        return Err(
+            AppError::conflict(format!("Time range overlaps with existing schedule(s): {}", names.join(", ")))
+                .with_code("SCHEDULE_OVERLAP"),
+        );
     }
 
     let row = repository::insert_schedule(
@@ -198,10 +198,10 @@ pub async fn update_schedule(
                     .unwrap_or_else(|| s.source_type.to_string())
             })
             .collect();
-        return Err(AppError::conflict(format!(
-            "Time range overlaps with existing schedule(s): {}",
-            names.join(", ")
-        )));
+        return Err(
+            AppError::conflict(format!("Time range overlaps with existing schedule(s): {}", names.join(", ")))
+                .with_code("SCHEDULE_OVERLAP"),
+        );
     }
 
     let auto_dj_mode = req.auto_dj_mode.unwrap_or(existing.auto_dj_mode);

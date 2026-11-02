@@ -45,9 +45,7 @@ describe("useUsers", () => {
   it("returns users list", async () => {
     server.use(
       http.get("/api/users", () =>
-        HttpResponse.json([
-          { id: "1", username: "admin", name: "Admin User", role: "admin", created_at: "2026-01-01T00:00:00Z" },
-        ]),
+        HttpResponse.json([{ id: "1", username: "admin", role: "admin", created_at: "2026-01-01T00:00:00Z" }]),
       ),
     );
     const { result } = renderHook(() => useUsers(), { wrapper: createWrapper() });

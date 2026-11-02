@@ -3,6 +3,7 @@ pub mod api_keys;
 pub mod auth;
 pub mod config;
 pub mod db;
+pub mod demo;
 pub mod errors;
 pub mod icecast;
 pub mod listeners;

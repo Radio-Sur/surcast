@@ -214,7 +214,42 @@ async fn test_get_auto_fill_returns_200(pool: PgPool) {
         .get(&format!("/api/stations/{station_id}/auto-fill"))
         .add_header("Authorization", &format!("Bearer {token}"))
         .await;
-    assert!(resp.status_code() == 200 || resp.status_code() == 404);
+    assert_eq!(resp.status_code(), 200);
+    assert_eq!(resp.json::<serde_json::Value>()["avoid_artist_repeat"], false);
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn artist_repeat_defaults_off_without_overwriting_saved_preferences(pool: PgPool) {
+    let (server, token, station_id) = setup_with_station(pool.clone()).await;
+    let path = format!("/api/stations/{station_id}/auto-fill");
+    // The database default for newly created stations is off too.
+    assert!(
+        !sqlx::query_scalar::<_, bool>("SELECT avoid_artist_repeat FROM station_auto_fill WHERE station_id=$1")
+            .bind(station_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+    );
+    sqlx::query("DELETE FROM station_auto_fill WHERE station_id=$1")
+        .bind(station_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let response = server.get(&path).add_header("Authorization", &format!("Bearer {token}")).await;
+    assert_eq!(response.json::<serde_json::Value>()["avoid_artist_repeat"], false);
+    for (body, expected) in [
+        (json!({"songs_ahead":7}), false),
+        (json!({"avoid_artist_repeat":true}), true),
+        (json!({"songs_ahead":8}), true),
+    ] {
+        let response = server
+            .put(&path)
+            .add_header("Authorization", &format!("Bearer {token}"))
+            .json(&body)
+            .await;
+        assert_eq!(response.status_code(), 200);
+        assert_eq!(response.json::<serde_json::Value>()["avoid_artist_repeat"], expected);
+    }
 }
 
 #[sqlx::test(migrations = "./migrations")]

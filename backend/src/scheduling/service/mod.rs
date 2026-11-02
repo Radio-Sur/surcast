@@ -117,7 +117,7 @@ async fn fill_from_schedule_entry_locked(
                         source_type: SourceType::Playlist,
                         source_playlist_id: Some(pid),
                         mode: auto_dj_mode.unwrap_or_default(),
-                        avoid_repeat: auto_dj_avoid_repeat.unwrap_or(true),
+                        avoid_repeat: auto_dj_avoid_repeat.unwrap_or(false),
                         min_gap: auto_dj_min_gap.unwrap_or(3),
                         songs_ahead: auto_dj_songs_ahead.unwrap_or(5),
                     };
@@ -132,7 +132,7 @@ async fn fill_from_schedule_entry_locked(
                 source_type: source_type.clone(),
                 source_playlist_id: None,
                 mode: auto_dj_mode.unwrap_or(AutoDjMode::Random),
-                avoid_repeat: auto_dj_avoid_repeat.unwrap_or(true),
+                avoid_repeat: auto_dj_avoid_repeat.unwrap_or(false),
                 min_gap: auto_dj_min_gap.unwrap_or(3),
                 songs_ahead: auto_dj_songs_ahead.unwrap_or(5),
             };

@@ -28,13 +28,7 @@ export function Header() {
   const [anchorEl, setAnchorEl] = useState<HTMLElement | null>(null);
   const [langAnchorEl, setLangAnchorEl] = useState<HTMLElement | null>(null);
 
-  const initials =
-    user?.name
-      ?.split(" ")
-      .map((n) => n[0])
-      .join("")
-      .toUpperCase()
-      .slice(0, 2) ?? "U";
+  const initials = user?.username?.slice(0, 2).toUpperCase() ?? "U";
 
   const handleLangChange = (code: string) => {
     i18n.changeLanguage(code);
@@ -125,7 +119,7 @@ export function Header() {
         }}
       >
         <Typography variant="body2" sx={{ fontWeight: 600 }}>
-          {user?.name}
+          {user?.username}
         </Typography>
         <Avatar
           sx={{
@@ -152,9 +146,6 @@ export function Header() {
       >
         <Box sx={{ px: 2, py: 1.5 }}>
           <Typography variant="body2" sx={{ fontWeight: 700 }}>
-            {user?.name}
-          </Typography>
-          <Typography variant="caption" color="text.secondary">
             @{user?.username}
           </Typography>
         </Box>

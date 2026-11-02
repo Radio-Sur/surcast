@@ -9,7 +9,7 @@ async fn setup(pool: PgPool) -> (TestServer, String) {
     let server = TestServer::new(app);
     server
         .post("/api/setup/init")
-        .json(&json!({"username": "admin", "password": "admin123", "name": "Admin"}))
+        .json(&json!({"username": "admin", "password": "admin123"}))
         .await;
     let resp = server
         .post("/api/auth/login")
@@ -121,7 +121,7 @@ async fn test_non_admin_user_cannot_access_icecast(pool: PgPool) {
     let server = TestServer::new(app);
     server
         .post("/api/setup/init")
-        .json(&json!({"username": "admin", "password": "admin123", "name": "Admin"}))
+        .json(&json!({"username": "admin", "password": "admin123"}))
         .await;
     // Create a non-admin user
     let admin_resp = server

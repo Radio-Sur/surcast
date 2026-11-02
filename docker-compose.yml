@@ -33,6 +33,7 @@ services:
       - "8000:8000"
     volumes:
       - music:/workspace/music
+      - sandbox_music:/workspace/music.sandboxes
     networks:
       - surcast
     depends_on:
@@ -48,6 +49,7 @@ services:
 volumes:
   pgdata:
   music:
+  sandbox_music:
 
 networks:
   surcast:

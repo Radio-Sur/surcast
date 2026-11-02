@@ -36,11 +36,11 @@ fn validate_event_input(
     _recurrence_type: &RecurrenceType,
 ) -> Result<(), AppError> {
     if end_time == start_time {
-        return Err(AppError::bad_request("end_time must differ from start_time".into()));
+        return Err(AppError::bad_request("end_time must differ from start_time".into()).with_code("INVALID_TIME_RANGE"));
     }
 
     if *source_type == SourceType::Playlist && playlist_id.is_none() {
-        return Err(AppError::bad_request("playlist_id is required when source_type is playlist".into()));
+        return Err(AppError::bad_request("playlist_id is required when source_type is playlist".into()).with_code("PLAYLIST_REQUIRED"));
     }
 
     Ok(())
@@ -103,10 +103,10 @@ async fn check_event_overlap(params: &EventOverlapParams) -> Result<(), AppError
     }
 
     if !conflicts.is_empty() {
-        return Err(AppError::conflict(format!(
-            "Time range overlaps with existing event(s): {}",
-            conflicts.join(", ")
-        )));
+        return Err(
+            AppError::conflict(format!("Time range overlaps with existing event(s): {}", conflicts.join(", ")))
+                .with_code("SCHEDULE_OVERLAP"),
+        );
     }
 
     Ok(())

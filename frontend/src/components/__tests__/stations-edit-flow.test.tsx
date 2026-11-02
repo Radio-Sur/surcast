@@ -26,6 +26,25 @@ const mockStation = {
 };
 
 describe("Edit Station Page", () => {
+  it("disables station identity editing for demo accounts", async () => {
+    server.use(
+      http.get("/api/auth/me", () =>
+        HttpResponse.json({ id: "demo", username: "demo", role: "demo", created_at: "2026-01-01T00:00:00Z" }),
+      ),
+      http.get("/api/stations/s1", () => HttpResponse.json(mockStation)),
+    );
+    render(
+      <Routes>
+        <Route path="/stations/:id/edit" element={<EditStationPage />} />
+      </Routes>,
+      { route: "/stations/s1/edit" },
+    );
+    await screen.findByText(/station name, description and mountpoint cannot be changed/i);
+    expect(screen.getByDisplayValue("Pop Radio")).toBeDisabled();
+    expect(screen.getByDisplayValue("Top 40 hits")).toBeDisabled();
+    expect(screen.getByDisplayValue("main")).toBeDisabled();
+    expect(screen.getByRole("button", { name: /save/i })).toBeDisabled();
+  });
   it("shows not found when station does not exist", async () => {
     server.use(http.get("/api/stations/unknown", () => HttpResponse.json(null, { status: 404 })));
     render(

@@ -6,7 +6,7 @@
 //! and delete them. Song rows and `library_files` entries are kept in sync on
 //! mutations so the lazy scanner does not mistake them for external changes.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
@@ -14,7 +14,7 @@ use sha2::{Digest, Sha256};
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::errors::AppError;
+use crate::errors::{AppError, DbResult};
 use crate::songs::cover;
 use crate::songs::handlers::is_audio_file;
 use crate::songs::models::Song;
@@ -188,7 +188,75 @@ pub async fn list_directory(
     sort: FileSort,
     order: SortOrder,
 ) -> Result<DirectoryListing, AppError> {
+    list_directory_scoped(db, music_dir, path, sort, order, None).await
+}
+
+async fn playlist_visible_songs(db: &PgPool) -> Result<Vec<Song>, AppError> {
+    sqlx::query_as::<_, Song>(
+        "SELECT s.* FROM songs s WHERE EXISTS (SELECT 1 FROM playlist_songs ps WHERE ps.song_id=s.id) ORDER BY s.file_path, s.id",
+    )
+    .fetch_all(db)
+    .await
+    .db_error("list playlist-visible files")
+}
+
+/// Demo browsing is an allowlist derived from its own playlists, not a view
+/// of every file physically present in its library directory.
+pub async fn list_playlist_directory(
+    db: &PgPool,
+    music_dir: &str,
+    path: &str,
+    sort: FileSort,
+    order: SortOrder,
+) -> Result<DirectoryListing, AppError> {
+    let songs = playlist_visible_songs(db).await?;
+    list_directory_scoped(db, music_dir, path, sort, order, Some(&songs)).await
+}
+
+pub async fn list_playlist_folders(db: &PgPool, music_dir: &str) -> Result<Vec<String>, AppError> {
+    let songs = playlist_visible_songs(db).await?;
+    let mut candidates = HashSet::new();
+    for song in songs {
+        let path = validate_relative_path(&song.file_path)?;
+        if path.split('/').any(|part| part.starts_with('.')) {
+            continue;
+        }
+        let mut parent = parent_of(&path);
+        while let Some(path) = parent.filter(|path| !path.is_empty()) {
+            parent = parent_of(&path);
+            candidates.insert(path);
+        }
+    }
+    let mut folders = Vec::new();
+    for path in candidates {
+        let absolute = resolve_library_path(music_dir, &path)?;
+        if tokio::fs::symlink_metadata(absolute)
+            .await
+            .is_ok_and(|metadata| metadata.is_dir() && !metadata.file_type().is_symlink())
+        {
+            folders.push(path);
+        }
+    }
+    folders.sort_by_cached_key(|path| path.to_lowercase());
+    Ok(folders)
+}
+
+async fn list_directory_scoped(
+    db: &PgPool,
+    music_dir: &str,
+    path: &str,
+    sort: FileSort,
+    order: SortOrder,
+    visible_songs: Option<&[Song]>,
+) -> Result<DirectoryListing, AppError> {
     let rel = validate_relative_path(path)?;
+    let allowed_paths: Option<HashSet<&str>> = visible_songs.map(|songs| songs.iter().map(|song| song.file_path.as_str()).collect());
+    if let Some(paths) = &allowed_paths {
+        let prefix = format!("{rel}/");
+        if !rel.is_empty() && !paths.iter().any(|path| path.starts_with(&prefix)) {
+            return Err(AppError::not_found("Folder not found".into()));
+        }
+    }
     let dir = resolve_library_path(music_dir, &rel)?;
     let metadata = tokio::fs::symlink_metadata(&dir)
         .await
@@ -213,13 +281,19 @@ pub async fn list_directory(
         if name.starts_with('.') {
             continue;
         }
+        let entry_path = join_relative(&rel, &name);
+        if let Some(paths) = &allowed_paths {
+            let prefix = format!("{entry_path}/");
+            if !paths.contains(entry_path.as_str()) && !paths.iter().any(|path| path.starts_with(&prefix)) {
+                continue;
+            }
+        }
         let entry_meta = tokio::fs::symlink_metadata(entry.path())
             .await
             .map_err(|e| AppError::internal(format!("Failed to stat entry: {e}")))?;
         if entry_meta.file_type().is_symlink() {
             continue;
         }
-        let entry_path = join_relative(&rel, &name);
         if entry_meta.is_dir() {
             folders.push(FolderEntry {
                 name,
@@ -246,8 +320,14 @@ pub async fn list_directory(
     }
 
     if !audio_paths.is_empty() {
-        let songs = repository::find_songs_by_paths(db, &audio_paths).await?;
-        let by_path: std::collections::HashMap<&str, &Song> = songs.iter().map(|song| (song.file_path.as_str(), song)).collect();
+        let loaded;
+        let songs = if let Some(songs) = visible_songs {
+            songs
+        } else {
+            loaded = repository::find_songs_by_paths(db, &audio_paths).await?;
+            &loaded
+        };
+        let by_path: HashMap<&str, &Song> = songs.iter().map(|song| (song.file_path.as_str(), song)).collect();
         for file in &mut files {
             if let Some(song) = by_path.get(file.path.as_str()) {
                 file.song = Some(FileSong::from(*song));
@@ -255,7 +335,21 @@ pub async fn list_directory(
         }
     }
 
-    attach_folder_covers(db, music_dir, &rel, &mut folders).await?;
+    if let Some(songs) = visible_songs {
+        // Do not reuse the unrestricted folder-cover cache: it could contain
+        // IDs and artwork belonging to songs outside the demo playlists.
+        for folder in &mut folders {
+            let prefix = format!("{}/", folder.path);
+            let candidates = songs
+                .iter()
+                .filter(|song| song.has_cover && song.file_path.starts_with(&prefix))
+                .map(|song| (song.id, song.file_path.clone()))
+                .collect();
+            folder.covers = read_distinct_covers(music_dir, candidates).await?;
+        }
+    } else {
+        attach_folder_covers(db, music_dir, &rel, &mut folders).await?;
+    }
 
     folders.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()).then_with(|| a.name.cmp(&b.name)));
     files.sort_by(|a, b| compare_files(a, b, sort, order));
@@ -313,6 +407,10 @@ async fn attach_folder_covers(db: &PgPool, music_dir: &str, rel: &str, folders: 
 /// tags are read so folders with one repeated cover stay cheap.
 async fn compute_folder_covers(db: &PgPool, music_dir: &str, folder_path: &str) -> Result<Vec<Uuid>, AppError> {
     let songs = repository::find_cover_songs_under_path(db, folder_path).await?;
+    read_distinct_covers(music_dir, songs).await
+}
+
+async fn read_distinct_covers(music_dir: &str, songs: Vec<(Uuid, String)>) -> Result<Vec<Uuid>, AppError> {
     let mut seen: Vec<[u8; 32]> = Vec::new();
     let mut covers = Vec::new();
 

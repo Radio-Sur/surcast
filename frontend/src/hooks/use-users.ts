@@ -8,11 +8,21 @@ export function useUsers() {
   });
 }
 
+export function useCreateUser() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: usersService.create,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["users"] });
+    },
+  });
+}
+
 export function useUpdateUser() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: ({ id, data }: { id: string; data: { name?: string; role?: string } }) => usersService.update(id, data),
+    mutationFn: ({ id, data }: { id: string; data: { role?: string } }) => usersService.update(id, data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["users"] });
     },

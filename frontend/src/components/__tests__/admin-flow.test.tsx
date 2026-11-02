@@ -22,11 +22,10 @@ describe("Users Page", () => {
           {
             id: "1",
             username: "admin",
-            name: "Admin User",
             role: "admin" as const,
             created_at: "2026-01-01T00:00:00Z",
           },
-          { id: "2", username: "jdoe", name: "John Doe", role: "manager" as const, created_at: "2026-01-01T00:00:00Z" },
+          { id: "2", username: "jdoe", role: "demo" as const, created_at: "2026-01-01T00:00:00Z" },
         ]),
       ),
     );

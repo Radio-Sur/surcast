@@ -54,7 +54,7 @@ export function DashboardPage() {
   return (
     <Box sx={{ display: "flex", flexDirection: "column", gap: 3 }}>
       <Box>
-        <Typography variant="h4">{t("dashboard:welcome", { name: user?.name })}</Typography>
+        <Typography variant="h4">{t("dashboard:welcome", { name: user?.username })}</Typography>
         <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
           {t("dashboard:subtitle")}
         </Typography>

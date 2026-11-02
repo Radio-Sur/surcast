@@ -22,7 +22,6 @@ export function setupAuth() {
       HttpResponse.json({
         id: "1",
         username: "admin",
-        name: "Admin",
         role: "admin",
         created_at: "2026-01-01T00:00:00Z",
       }),
@@ -57,9 +56,9 @@ function createWrapper(route = "/") {
           <ThemeProvider>
             <MemoryRouter initialEntries={[route]}>
               <AuthProvider>
-                <LiveProvider>
-                  <SnackbarProvider>{children}</SnackbarProvider>
-                </LiveProvider>
+                <SnackbarProvider>
+                  <LiveProvider>{children}</LiveProvider>
+                </SnackbarProvider>
               </AuthProvider>
             </MemoryRouter>
           </ThemeProvider>

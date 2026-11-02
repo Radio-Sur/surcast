@@ -10,6 +10,7 @@ import { fakeQueueItem, fakeStreamStatus } from "@/mocks/data";
 import { server } from "@/mocks/server";
 import { AuthProvider } from "@/providers/auth-provider";
 import { LiveProvider, useLiveSocketConnected, useLiveStation, useLiveStatusUpdater } from "@/providers/live-provider";
+import { SnackbarProvider } from "@/providers/snackbar-provider";
 import { ThemeProvider } from "@/providers/theme-provider";
 import { setupAuth } from "@/test/test-utils";
 
@@ -22,7 +23,9 @@ function createWrapper() {
           <ThemeProvider>
             <MemoryRouter>
               <AuthProvider>
-                <LiveProvider>{children}</LiveProvider>
+                <SnackbarProvider>
+                  <LiveProvider>{children}</LiveProvider>
+                </SnackbarProvider>
               </AuthProvider>
             </MemoryRouter>
           </ThemeProvider>

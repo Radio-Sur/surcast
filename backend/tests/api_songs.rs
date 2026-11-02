@@ -183,16 +183,12 @@ async fn test_get_song_wrong_id_returns_404(pool: PgPool) {
 }
 
 #[sqlx::test(migrations = "./migrations")]
-async fn test_get_song_file_no_auth_returns_200_or_404(pool: PgPool) {
+async fn test_get_song_file_requires_auth(pool: PgPool) {
     let (server, token) = setup_auth(pool).await;
     let (song_id, _) = create_song(&server, &token).await;
 
     let resp = server.get(&format!("/api/songs/{song_id}/file")).await;
-    let status = resp.status_code();
-    assert!(
-        status == 200 || status == 404,
-        "Expected 200 (file served) or 404 (no file on disk), got {status}"
-    );
+    assert_eq!(resp.status_code(), 401);
 }
 
 async fn setup_auth_with_music(pool: PgPool) -> (TestServer, String, String, PgPool) {
@@ -467,12 +463,12 @@ async fn insert_song(pool: &PgPool, id: Uuid, file_path: &str, has_cover: bool) 
 
 #[sqlx::test(migrations = "./migrations")]
 async fn test_serve_cover_reads_embedded_art(pool: PgPool) {
-    let (server, _token, music_dir, db) = setup_auth_with_music(pool).await;
+    let (server, token, music_dir, db) = setup_auth_with_music(pool).await;
     let song_id = Uuid::new_v4();
     write_mp3_with_cover(&format!("{music_dir}/cover.mp3"));
     insert_song(&db, song_id, "cover.mp3", true).await;
 
-    let resp = server.get(&format!("/api/songs/{song_id}/cover")).await;
+    let resp = server.get(&format!("/api/songs/{song_id}/cover?token={token}")).await;
     assert_eq!(resp.status_code(), 200);
     assert_eq!(resp.headers().get("content-type").unwrap(), "image/png");
     assert_eq!(resp.headers().get("etag").unwrap(), "\"coverhash\"");
@@ -480,6 +476,7 @@ async fn test_serve_cover_reads_embedded_art(pool: PgPool) {
 
     let cached = server
         .get(&format!("/api/songs/{song_id}/cover"))
+        .add_header("Authorization", &format!("Bearer {token}"))
         .add_header("If-None-Match", "\"coverhash\"")
         .await;
     assert_eq!(cached.status_code(), 304);
@@ -488,22 +485,22 @@ async fn test_serve_cover_reads_embedded_art(pool: PgPool) {
 
 #[sqlx::test(migrations = "./migrations")]
 async fn test_serve_cover_404_when_flag_absent(pool: PgPool) {
-    let (server, _token, music_dir, db) = setup_auth_with_music(pool).await;
+    let (server, token, music_dir, db) = setup_auth_with_music(pool).await;
     let song_id = Uuid::new_v4();
     write_mp3_with_cover(&format!("{music_dir}/noflag.mp3"));
     insert_song(&db, song_id, "noflag.mp3", false).await;
 
-    let resp = server.get(&format!("/api/songs/{song_id}/cover")).await;
+    let resp = server.get(&format!("/api/songs/{song_id}/cover?token={token}")).await;
     assert_eq!(resp.status_code(), 404);
 }
 
 #[sqlx::test(migrations = "./migrations")]
 async fn test_serve_cover_404_when_file_has_no_art(pool: PgPool) {
-    let (server, _token, music_dir, db) = setup_auth_with_music(pool).await;
+    let (server, token, music_dir, db) = setup_auth_with_music(pool).await;
     let song_id = Uuid::new_v4();
     std::fs::write(format!("{music_dir}/plain.mp3"), mpeg_silent_frame()).unwrap();
     insert_song(&db, song_id, "plain.mp3", true).await;
 
-    let resp = server.get(&format!("/api/songs/{song_id}/cover")).await;
+    let resp = server.get(&format!("/api/songs/{song_id}/cover?token={token}")).await;
     assert_eq!(resp.status_code(), 404);
 }

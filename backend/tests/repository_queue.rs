@@ -11,7 +11,7 @@ use uuid::Uuid;
 
 async fn make_user(db: &PgPool) -> Uuid {
     let id = Uuid::new_v4();
-    auth_repo::insert_user(db, id, &format!("user_{id}"), "hash", "Queue Tester", &Role::Admin)
+    auth_repo::insert_user(db, id, &format!("user_{id}"), "hash", &Role::Admin)
         .await
         .unwrap();
     id

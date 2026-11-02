@@ -58,6 +58,7 @@ import {
 } from "@/hooks/use-files";
 import { usePurgeMissingSongs, useSongs } from "@/hooks/use-songs";
 import { formatBytes } from "@/lib/format-bytes";
+import { isHttpError } from "@/lib/is-http-error";
 import { reportHttpError } from "@/lib/report-error";
 import { useSnackbar } from "@/providers/snackbar-provider";
 import type { FileEntry, FileSortKey, FolderEntry, SortOrder } from "@/types";
@@ -518,7 +519,7 @@ export function FilesPage() {
           </Breadcrumbs>
 
           {isError ? (
-            <Typography color="error">{error instanceof Error ? error.message : t("load_error")}</Typography>
+            <Typography color="error">{isHttpError(error).message}</Typography>
           ) : isLoading || !listing ? (
             <Skeleton variant="rounded" height={300} />
           ) : (

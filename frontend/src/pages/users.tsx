@@ -1,3 +1,4 @@
+import Add from "@mui/icons-material/Add";
 import MoreVert from "@mui/icons-material/MoreVert";
 import Alert from "@mui/material/Alert";
 import Box from "@mui/material/Box";
@@ -22,6 +23,8 @@ import TextField from "@mui/material/TextField";
 import Typography from "@mui/material/Typography";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
+import { ConfigureSandboxDialog } from "@/components/configure-sandbox-dialog";
+import { CreateUserDialog } from "@/components/create-user-dialog";
 import { ErrorDetails } from "@/components/error-details";
 import { RoleChip } from "@/components/role-chip";
 import { useAuth } from "@/hooks/use-auth";
@@ -38,11 +41,12 @@ export function UsersPage() {
   const deleteUser = useDeleteUser();
   const { user: currentUser } = useAuth();
   const isAdmin = currentUser?.role === "admin";
+  const [createOpen, setCreateOpen] = useState(false);
+  const [sandboxUser, setSandboxUser] = useState<string | null>(null);
 
   const [menuAnchor, setMenuAnchor] = useState<null | HTMLElement>(null);
   const [menuUser, setMenuUser] = useState<string | null>(null);
   const [editUser, setEditUser] = useState<string | null>(null);
-  const [editName, setEditName] = useState("");
   const [editRole, setEditRole] = useState("");
   const [deleteId, setDeleteId] = useState<string | null>(null);
 
@@ -53,13 +57,13 @@ export function UsersPage() {
 
   const handleMenuClose = () => {
     setMenuAnchor(null);
-    setMenuUser(null);
+    // Keep the selected account throughout the exit animation. The next
+    // opening replaces it, without changing the closing menu's contents.
   };
 
   const handleEditOpen = (userId: string) => {
     const u = users?.find((u) => u.id === userId);
     if (u) {
-      setEditName(u.name);
       setEditRole(u.role);
       setEditUser(userId);
     }
@@ -69,7 +73,7 @@ export function UsersPage() {
   const handleEditSave = async () => {
     if (!editUser) return;
     try {
-      await updateUser.mutateAsync({ id: editUser, data: { name: editName, role: editRole } });
+      await updateUser.mutateAsync({ id: editUser, data: { role: editRole } });
       setEditUser(null);
     } catch (err) {
       reportHttpError(showError, err, "Failed to update user");
@@ -117,11 +121,24 @@ export function UsersPage() {
 
   return (
     <Box sx={{ display: "flex", flexDirection: "column", gap: 3 }}>
-      <Box>
-        <Typography variant="h4">{t("users:title")}</Typography>
-        <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
-          {t("users:subtitle")}
-        </Typography>
+      <Box
+        sx={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+        }}
+      >
+        <Box>
+          <Typography variant="h4">{t("users:title")}</Typography>
+          <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
+            {t("users:subtitle")}
+          </Typography>
+        </Box>
+        {isAdmin && (
+          <Button variant="contained" startIcon={<Add />} onClick={() => setCreateOpen(true)}>
+            {t("users:add")}
+          </Button>
+        )}
       </Box>
 
       <TableContainer component={Paper} variant="outlined" sx={{ borderRadius: 3 }}>
@@ -129,7 +146,6 @@ export function UsersPage() {
           <TableHead>
             <TableRow>
               <TableCell sx={{ fontWeight: 600, pl: 6 }}>{t("users:table_username")}</TableCell>
-              <TableCell sx={{ fontWeight: 600 }}>{t("users:table_name")}</TableCell>
               <TableCell sx={{ fontWeight: 600 }}>{t("users:table_role")}</TableCell>
               <TableCell sx={{ fontWeight: 600 }}>{t("users:table_created")}</TableCell>
               {isAdmin && <TableCell sx={{ fontWeight: 600, width: 60, pr: 6 }} />}
@@ -140,7 +156,6 @@ export function UsersPage() {
               users.map((user) => (
                 <TableRow key={user.id} hover>
                   <TableCell sx={{ fontWeight: 500, pl: 6 }}>{user.username}</TableCell>
-                  <TableCell>{user.name}</TableCell>
                   <TableCell>
                     <RoleChip roleName={user.role} />
                   </TableCell>
@@ -161,7 +176,7 @@ export function UsersPage() {
             ) : (
               <TableRow>
                 <TableCell
-                  colSpan={isAdmin ? 5 : 4}
+                  colSpan={isAdmin ? 4 : 3}
                   align="center"
                   sx={{ py: 6, color: "text.secondary", pl: 6, pr: 6 }}
                 >
@@ -172,8 +187,20 @@ export function UsersPage() {
           </TableBody>
         </Table>
       </TableContainer>
+      {createOpen && <CreateUserDialog onClose={() => setCreateOpen(false)} />}
+      {sandboxUser && <ConfigureSandboxDialog userId={sandboxUser} onClose={() => setSandboxUser(null)} />}
 
       <Menu anchorEl={menuAnchor} open={!!menuAnchor} onClose={handleMenuClose}>
+        {users?.find((user) => user.id === menuUser)?.role === "demo" && (
+          <MenuItem
+            onClick={() => {
+              setSandboxUser(menuUser);
+              handleMenuClose();
+            }}
+          >
+            {t("users:sandbox_title")}
+          </MenuItem>
+        )}
         <MenuItem onClick={() => menuUser && handleEditOpen(menuUser)}>{t("users:edit")}</MenuItem>
         <MenuItem
           onClick={() => {
@@ -191,12 +218,6 @@ export function UsersPage() {
         <DialogContent>
           <Box sx={{ display: "flex", flexDirection: "column", gap: 2, mt: 1 }}>
             <TextField
-              label={t("users:name_label")}
-              value={editName}
-              onChange={(e) => setEditName(e.target.value)}
-              fullWidth
-            />
-            <TextField
               label={t("users:role_label")}
               value={editRole}
               onChange={(e) => setEditRole(e.target.value)}
@@ -205,8 +226,7 @@ export function UsersPage() {
               slotProps={{ select: { native: true } }}
             >
               <option value="admin">{t("users:role_admin")}</option>
-              <option value="manager">{t("users:role_manager")}</option>
-              <option value="viewer">{t("users:role_viewer")}</option>
+              <option value="demo">{t("users:role_demo")}</option>
             </TextField>
           </Box>
         </DialogContent>

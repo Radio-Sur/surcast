@@ -1,5 +1,5 @@
-import { FullConfig } from "@playwright/test";
-import { writeFileSync, mkdirSync } from "fs";
+import type { FullConfig } from "@playwright/test";
+import { mkdirSync, writeFileSync } from "fs";
 import path from "path";
 
 const AUTH_FILE = path.join(__dirname, ".auth", "user.json");
@@ -15,7 +15,7 @@ async function globalSetup(_config: FullConfig) {
     const initRes = await fetch(`${baseURL}/api/setup/init`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ username: "admin", password: "password123", name: "Admin" }),
+      body: JSON.stringify({ username: "admin", password: "password123" }),
     });
     if (!initRes.ok) {
       throw new Error(`Setup init failed: ${initRes.status} ${await initRes.text()}`);

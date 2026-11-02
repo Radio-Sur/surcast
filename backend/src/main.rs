@@ -37,13 +37,15 @@ async fn main() {
     listeners::spawn_poller(pool.clone(), listeners_state.clone());
     let streamers: StreamersMap = Arc::new(Mutex::new(HashMap::new()));
     let lifecycle = Arc::new(StationLifecycleLocks::default());
-    let app = api::router::create_router(
+    let demos = Arc::new(surcast_backend::demo::Registry::default());
+    let app = api::router::create_router_with_demos(
         pool.clone(),
         config.clone(),
         streamers.clone(),
         lifecycle.clone(),
         icecast_manager.clone(),
         listeners_state,
+        demos.clone(),
     );
 
     let settings = icecast::models::get_settings(&pool).await;
@@ -82,6 +84,7 @@ async fn main() {
     let shutdown = async move {
         tokio::signal::ctrl_c().await.ok();
         tracing::info!("Shutting down...");
+        demos.shutdown().await;
         let active = {
             let mut streamers = shutdown_streamers.lock().unwrap_or_else(|error| error.into_inner());
             streamers.drain().map(|(_, streamer)| streamer).collect::<Vec<_>>()

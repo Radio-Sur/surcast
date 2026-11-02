@@ -8,10 +8,8 @@ use uuid::Uuid;
 pub enum Role {
     #[serde(rename = "admin")]
     Admin,
-    #[serde(rename = "manager")]
-    Manager,
-    #[serde(rename = "viewer")]
-    Viewer,
+    #[serde(rename = "demo")]
+    Demo,
 }
 
 impl Type<Postgres> for Role {
@@ -44,8 +42,7 @@ impl std::fmt::Display for Role {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Role::Admin => write!(f, "admin"),
-            Role::Manager => write!(f, "manager"),
-            Role::Viewer => write!(f, "viewer"),
+            Role::Demo => write!(f, "demo"),
         }
     }
 }
@@ -55,8 +52,7 @@ impl std::str::FromStr for Role {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "admin" => Ok(Role::Admin),
-            "manager" => Ok(Role::Manager),
-            "viewer" => Ok(Role::Viewer),
+            "demo" => Ok(Role::Demo),
             _ => Err(()),
         }
     }
@@ -67,7 +63,6 @@ pub struct User {
     pub id: Uuid,
     pub username: String,
     pub password_hash: String,
-    pub name: String,
     pub role: Role,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -94,7 +89,6 @@ pub struct SetupStatus {
 pub struct UserResponse {
     pub id: Uuid,
     pub username: String,
-    pub name: String,
     pub role: Role,
     pub created_at: DateTime<Utc>,
 }
@@ -104,7 +98,6 @@ impl From<User> for UserResponse {
         Self {
             id: u.id,
             username: u.username,
-            name: u.name,
             role: u.role,
             created_at: u.created_at,
         }
@@ -120,8 +113,15 @@ pub struct AuthResponse {
 
 #[derive(Debug, Deserialize)]
 pub struct UpdateUserRequest {
-    pub name: Option<String>,
-    pub role: Option<Role>,
+    pub role: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CreateUserRequest {
+    pub username: String,
+    pub password: String,
+    pub role: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

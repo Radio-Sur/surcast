@@ -54,7 +54,7 @@ pub async fn serve_song_cover(
         [
             (header::CONTENT_TYPE, cover.mime),
             (header::ETAG, etag),
-            (header::CACHE_CONTROL, "public, max-age=86400".to_string()),
+            (header::CACHE_CONTROL, "private, max-age=86400".to_string()),
         ],
         cover.data,
     )

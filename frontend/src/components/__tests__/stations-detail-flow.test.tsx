@@ -40,7 +40,9 @@ describe("Station Detail Page", () => {
       </Routes>,
       { route: "/stations/station-1" },
     );
-    await waitFor(() => expect(screen.getByText(/Request failed/)).toBeInTheDocument(), { timeout: 5000 });
+    await waitFor(() => expect(screen.getByText("The requested resource was not found.")).toBeInTheDocument(), {
+      timeout: 5000,
+    });
   });
 
   it("renders station name and tabs", async () => {

@@ -2,6 +2,7 @@ import MusicNote from "@mui/icons-material/MusicNote";
 import Box from "@mui/material/Box";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
+import { localTokenStorage } from "@/lib/token-storage";
 
 export function SongCover({
   songId,
@@ -20,7 +21,8 @@ export function SongCover({
   const img = (
     <Box
       component="img"
-      src={`/api/songs/${songId}/cover`}
+      src={`/api/songs/${songId}/cover?token=${encodeURIComponent(localTokenStorage.getAccessToken() ?? "")}`}
+      referrerPolicy="no-referrer"
       alt=""
       loading="lazy"
       decoding="async"

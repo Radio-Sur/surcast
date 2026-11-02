@@ -24,19 +24,19 @@ pub async fn setup_init(
     Json(req): Json<SetupRequest>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), AppError> {
     if req.username.is_empty() || req.password.is_empty() {
-        return Err(AppError::bad_request("Username and password are required".into()));
+        return Err(AppError::bad_request("Username and password are required".into()).with_code("AUTH_USERNAME_REQUIRED"));
     }
 
     let count = repository::count_users(&db).await?;
 
     if count > 0 {
-        return Err(AppError::bad_request("Setup already completed".into()));
+        return Err(AppError::bad_request("Setup already completed".into()).with_code("SETUP_ALREADY_COMPLETE"));
     }
 
     let password_hash = hash(&req.password, DEFAULT_COST).db_error("failed to hash password")?;
 
     let user_id = Uuid::new_v4();
-    repository::insert_user(&db, user_id, &req.username, &password_hash, &req.username, &Role::Admin).await?;
+    repository::insert_user(&db, user_id, &req.username, &password_hash, &Role::Admin).await?;
 
     Ok((
         StatusCode::CREATED,
@@ -51,12 +51,16 @@ pub async fn login(
 ) -> Result<Json<AuthResponse>, AppError> {
     let user = repository::find_user_by_username(&db, &req.username)
         .await?
-        .ok_or_else(|| AppError::unauthorized("Invalid username or password".into()))?;
+        .ok_or_else(|| AppError::unauthorized("Invalid username or password".into()).with_code("AUTH_INVALID_CREDENTIALS"))?;
 
     let valid = verify(&req.password, &user.password_hash).db_error("failed to verify password")?;
 
     if !valid {
-        return Err(AppError::unauthorized("Invalid username or password".into()));
+        return Err(AppError::unauthorized("Invalid username or password".into()).with_code("AUTH_INVALID_CREDENTIALS"));
+    }
+
+    if user.role == Role::Demo && !crate::demo::ready(&db, user.id).await? {
+        return Err(AppError::forbidden("Demo sandbox is not yet configured".into()).with_code("DEMO_NOT_READY"));
     }
 
     let (access_token, refresh_token) = generate_tokens(&user, &config)?;
@@ -76,20 +80,24 @@ pub async fn refresh(
     let refresh_token = body
         .get("refresh_token")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| AppError::bad_request("refresh_token required".into()))?;
+        .ok_or_else(|| AppError::bad_request("refresh_token required".into()).with_code("AUTH_REFRESH_REQUIRED"))?;
 
     let token_data = decode::<Claims>(
         refresh_token,
         &DecodingKey::from_secret(config.jwt_secret.as_bytes()),
         &Validation::default(),
     )
-    .map_err(|_| AppError::unauthorized("Invalid refresh token".into()))?;
+    .map_err(|_| AppError::unauthorized("Invalid refresh token".into()).with_code("AUTH_REFRESH_INVALID"))?;
 
     let user_id = Uuid::parse_str(&token_data.claims.sub).map_err(|_| AppError::unauthorized("Invalid token".into()))?;
 
     let user = repository::find_user_by_id(&db, user_id)
         .await?
         .ok_or_else(|| AppError::unauthorized("User not found".into()))?;
+
+    if user.role == Role::Demo && !crate::demo::ready(&db, user.id).await? {
+        return Err(AppError::forbidden("Demo sandbox is not yet configured".into()).with_code("DEMO_NOT_READY"));
+    }
 
     let (access_token, new_refresh_token) = generate_tokens(&user, &config)?;
 
@@ -114,7 +122,48 @@ pub async fn list_users(State(db): State<PgPool>) -> Result<Json<Vec<UserRespons
     Ok(Json(users.into_iter().map(|u| u.into()).collect()))
 }
 
+pub async fn create_user(
+    State(db): State<PgPool>,
+    Json(req): Json<CreateUserRequest>,
+) -> Result<(StatusCode, Json<UserResponse>), AppError> {
+    let username = req.username.trim();
+    if username.is_empty() || username.len() > 255 {
+        return Err(AppError::bad_request("Username must contain 1–255 characters".into()).with_code("USERNAME_INVALID"));
+    }
+    if req.password.len() < 8 || req.password.len() > 72 {
+        return Err(AppError::bad_request("Password must contain 8–72 bytes".into()).with_code("PASSWORD_INVALID"));
+    }
+    let role = req
+        .role
+        .parse::<Role>()
+        .map_err(|_| AppError::bad_request("Role must be administrator or demo".into()).with_code("ROLE_INVALID"))?;
+    let password = req.password;
+    let password_hash = tokio::task::spawn_blocking(move || hash(password, DEFAULT_COST))
+        .await
+        .map_err(|_| AppError::internal("Password hashing task failed".into()))?
+        .db_error("failed to hash password")?;
+    let id = Uuid::new_v4();
+    let result = sqlx::query("INSERT INTO users (id, username, password_hash, role) VALUES ($1,$2,$3,$4)")
+        .bind(id)
+        .bind(username)
+        .bind(password_hash)
+        .bind(role)
+        .execute(&db)
+        .await;
+    if let Err(sqlx::Error::Database(ref error)) = result {
+        if error.is_unique_violation() {
+            return Err(AppError::conflict("Username already exists".into()).with_code("USERNAME_TAKEN"));
+        }
+    }
+    result.db_error("failed to create user")?;
+    let user = repository::find_user_by_id(&db, id)
+        .await?
+        .ok_or_else(|| AppError::internal("Created user not found".into()))?;
+    Ok((StatusCode::CREATED, Json(user.into())))
+}
+
 pub async fn update_user(
+    State(state): State<crate::api::router::AppState>,
     State(db): State<PgPool>,
     axum::extract::Path(id): axum::extract::Path<Uuid>,
     Json(req): Json<UpdateUserRequest>,
@@ -123,15 +172,28 @@ pub async fn update_user(
         .await?
         .ok_or_else(|| AppError::not_found("User not found".into()))?;
 
-    let name = req.name.unwrap_or(user.name);
-    let role = req.role.unwrap_or(user.role);
+    let role = match req.role {
+        Some(raw) => raw
+            .parse::<Role>()
+            .map_err(|_| AppError::bad_request("Role must be administrator or demo".into()).with_code("ROLE_INVALID"))?,
+        None => user.role.clone(),
+    };
 
-    let updated = repository::update_user(&db, id, &name, &role).await?;
+    let promoting_demo = user.role == Role::Demo && role == Role::Admin;
+    let updated = repository::update_user(&db, id, &role).await?;
+    if promoting_demo {
+        crate::demo::retire(&state, id).await?;
+    }
 
     Ok(Json(updated.into()))
 }
 
-pub async fn delete_user(State(db): State<PgPool>, axum::extract::Path(id): axum::extract::Path<Uuid>) -> Result<StatusCode, AppError> {
+pub async fn delete_user(
+    State(db): State<PgPool>,
+    State(state): State<crate::api::router::AppState>,
+    axum::extract::Path(id): axum::extract::Path<Uuid>,
+) -> Result<StatusCode, AppError> {
+    crate::demo::retire(&state, id).await?;
     let affected = repository::delete_user(&db, id).await?;
 
     if affected == 0 {

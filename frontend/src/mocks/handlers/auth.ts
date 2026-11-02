@@ -13,15 +13,18 @@ export const authHandlers = [
   }),
 
   http.post("/api/setup/init", async ({ request }) => {
-    const body = (await request.json()) as { username: string; password: string; name: string };
+    const body = (await request.json()) as { username: string; password: string };
     setupComplete = true;
-    return HttpResponse.json(fakeAuthResponse({ user: { username: body.username, name: body.name, role: "admin" } }));
+    return HttpResponse.json(fakeAuthResponse({ user: { username: body.username, role: "admin" } }));
   }),
 
   http.post("/api/auth/login", async ({ request }) => {
     const body = (await request.json()) as { username: string; password: string };
     if (body.username === "fail" || body.password === "wrong") {
-      return HttpResponse.json({ error: "Invalid credentials" }, { status: 401 });
+      return HttpResponse.json(
+        { code: "AUTH_INVALID_CREDENTIALS", error: "Invalid credentials", category: "auth" },
+        { status: 401 },
+      );
     }
     return HttpResponse.json(fakeAuthResponse());
   }),

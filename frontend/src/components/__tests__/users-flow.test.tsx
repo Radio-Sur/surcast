@@ -1,3 +1,4 @@
+import { fireEvent, within } from "@testing-library/react";
 import { HttpResponse, http } from "msw";
 import { beforeEach, describe, expect, it } from "vitest";
 import { server } from "@/mocks/server";
@@ -10,6 +11,31 @@ beforeEach(() => {
 });
 
 describe("Users Page", () => {
+  it("keeps demo actions visible during menu dismissal and updates them for the next account", async () => {
+    server.use(
+      http.get("/api/users", () =>
+        HttpResponse.json([
+          { id: "1", username: "admin", role: "admin", created_at: "2026-01-01T00:00:00Z" },
+          { id: "2", username: "demo", role: "demo", created_at: "2026-01-01T00:00:00Z" },
+        ]),
+      ),
+    );
+    render(<UsersPage />, { route: "/users" });
+    const user = userEvent.setup();
+    const demoRow = (await screen.findByText("demo")).closest("tr")!;
+    await user.click(within(demoRow).getByRole("button"));
+    const menu = screen.getByRole("menu");
+    expect(within(menu).getByText("Configure sandbox")).toBeInTheDocument();
+    const backdrop = document.querySelector(".MuiBackdrop-root")!;
+    fireEvent.click(backdrop);
+    // Check synchronously, while the closing animation still renders the menu.
+    expect(within(menu).getByText("Configure sandbox")).toBeInTheDocument();
+    await waitFor(() => expect(menu).not.toBeInTheDocument());
+    const adminRow = screen.getByRole("cell", { name: "admin" }).closest("tr")!;
+    await user.click(within(adminRow).getByRole("button"));
+    expect(within(screen.getByRole("menu")).queryByText("Configure sandbox")).not.toBeInTheDocument();
+  });
+
   it("shows empty state when no users exist", async () => {
     server.use(http.get("/api/users", () => HttpResponse.json([])));
     render(<UsersPage />, { route: "/users" });
@@ -20,20 +46,20 @@ describe("Users Page", () => {
     server.use(
       http.get("/api/users", () =>
         HttpResponse.json([
-          { id: "1", username: "admin", name: "Admin User", role: "admin", created_at: "2026-01-01T00:00:00Z" },
-          { id: "2", username: "jdoe", name: "John Doe", role: "viewer", created_at: "2026-02-01T00:00:00Z" },
+          { id: "1", username: "admin", role: "admin", created_at: "2026-01-01T00:00:00Z" },
+          { id: "2", username: "jdoe", role: "demo", created_at: "2026-02-01T00:00:00Z" },
         ]),
       ),
     );
     render(<UsersPage />, { route: "/users" });
     await waitFor(() => expect(screen.getByText("jdoe")).toBeInTheDocument(), { timeout: 5000 });
-    expect(screen.getByText("John Doe")).toBeInTheDocument();
+    expect(screen.queryByText(/^name$/i)).not.toBeInTheDocument();
   });
 
-  it("opens edit dialog, changes name and role, and saves", async () => {
+  it("opens edit dialog, changes role, and saves", async () => {
     const testUsers = [
-      { id: "1", username: "admin", name: "Admin User", role: "admin", created_at: "2026-01-01T00:00:00Z" },
-      { id: "2", username: "jdoe", name: "John Doe", role: "viewer", created_at: "2026-02-01T00:00:00Z" },
+      { id: "1", username: "admin", role: "admin", created_at: "2026-01-01T00:00:00Z" },
+      { id: "2", username: "jdoe", role: "demo", created_at: "2026-02-01T00:00:00Z" },
     ];
     let updatedUser: any = null;
     server.use(
@@ -57,19 +83,16 @@ describe("Users Page", () => {
     await user.click(menuBtn!);
     await user.click(screen.getByText(/edit/i));
     await screen.findByRole("dialog");
-    const nameInput = screen.getByLabelText(/name/i);
-    await user.clear(nameInput);
-    await user.type(nameInput, "Jane Doe");
     const roleSelect = screen.getByLabelText(/role/i);
     await user.selectOptions(roleSelect, "admin");
     await user.click(screen.getByRole("button", { name: /save/i }));
-    await waitFor(() => expect(updatedUser?.name).toBe("Jane Doe"), { timeout: 3000 });
+    await waitFor(() => expect(updatedUser?.role).toBe("admin"), { timeout: 3000 });
   });
 
   it("opens delete dialog and deletes user", async () => {
     const testUsers = [
-      { id: "1", username: "admin", name: "Admin User", role: "admin", created_at: "2026-01-01T00:00:00Z" },
-      { id: "2", username: "jdoe", name: "John Doe", role: "viewer", created_at: "2026-02-01T00:00:00Z" },
+      { id: "1", username: "admin", role: "admin", created_at: "2026-01-01T00:00:00Z" },
+      { id: "2", username: "jdoe", role: "demo", created_at: "2026-02-01T00:00:00Z" },
     ];
     let deleteCalled = false;
     server.use(

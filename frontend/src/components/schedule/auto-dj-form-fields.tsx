@@ -49,7 +49,7 @@ export function AutoDJFormFields({
             control={
               <Switch
                 size="small"
-                checked={autoDjAvoidRepeat ?? true}
+                checked={autoDjAvoidRepeat ?? false}
                 onChange={(e) => onChange("auto_dj_avoid_repeat", e.target.checked)}
                 disabled={readOnly}
               />

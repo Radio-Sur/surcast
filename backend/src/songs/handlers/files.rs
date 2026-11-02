@@ -56,7 +56,7 @@ pub struct SongDetailsResponse {
 
 /// Browse the music directory.
 pub async fn list_files(
-    Extension(_auth_user): Extension<AuthUser>,
+    Extension(auth_user): Extension<AuthUser>,
     State(db): State<PgPool>,
     State(config): State<Config>,
     Query(params): Query<ListFilesParams>,
@@ -64,13 +64,26 @@ pub async fn list_files(
     let path = params.path.unwrap_or_default();
     let sort = FileSort::parse(params.sort.as_deref());
     let order = SortOrder::parse(params.order.as_deref());
-    let listing = files::list_directory(&db, &config.music_dir, &path, sort, order).await?;
+    let listing = if auth_user.role == crate::auth::models::Role::Demo {
+        files::list_playlist_directory(&db, &config.music_dir, &path, sort, order).await?
+    } else {
+        files::list_directory(&db, &config.music_dir, &path, sort, order).await?
+    };
     Ok(Json(listing))
 }
 
 /// All folders under the library (used by the move picker).
-pub async fn list_folders(Extension(_auth_user): Extension<AuthUser>, State(config): State<Config>) -> Result<Json<Vec<String>>, AppError> {
-    Ok(Json(files::list_all_folders(&config.music_dir).await?))
+pub async fn list_folders(
+    Extension(auth_user): Extension<AuthUser>,
+    State(db): State<PgPool>,
+    State(config): State<Config>,
+) -> Result<Json<Vec<String>>, AppError> {
+    let folders = if auth_user.role == crate::auth::models::Role::Demo {
+        files::list_playlist_folders(&db, &config.music_dir).await?
+    } else {
+        files::list_all_folders(&config.music_dir).await?
+    };
+    Ok(Json(folders))
 }
 
 pub async fn create_folder(

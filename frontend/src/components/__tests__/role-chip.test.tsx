@@ -3,18 +3,13 @@ import { RoleChip } from "@/components/role-chip";
 import { render, screen } from "@/test/test-utils";
 
 describe("RoleChip", () => {
-  it("renders admin role", () => {
+  it("renders admin role capitalized", () => {
     render(<RoleChip roleName="admin" />);
-    expect(screen.getByText("admin")).toBeInTheDocument();
+    expect(screen.getByText("Admin")).toBeInTheDocument();
   });
 
-  it("renders manager role", () => {
-    render(<RoleChip roleName="manager" />);
-    expect(screen.getByText("manager")).toBeInTheDocument();
-  });
-
-  it("renders viewer role", () => {
-    render(<RoleChip roleName="viewer" />);
-    expect(screen.getByText("viewer")).toBeInTheDocument();
+  it("renders demo role capitalized", () => {
+    render(<RoleChip roleName="demo" />);
+    expect(screen.getByText("Demo")).toBeInTheDocument();
   });
 });

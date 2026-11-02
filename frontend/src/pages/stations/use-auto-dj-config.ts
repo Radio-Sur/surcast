@@ -24,7 +24,7 @@ export function useAutoDjConfig(stationId: string, playlists: Playlist[]) {
   const [localMode, setLocalMode] = useState("random");
   const [localSourceType, setLocalSourceType] = useState<ScheduleSourceType>("station_library");
   const [localPlaylistId, setLocalPlaylistId] = useState<string | null>(null);
-  const [localAvoidRepeat, setLocalAvoidRepeat] = useState(true);
+  const [localAvoidRepeat, setLocalAvoidRepeat] = useState(false);
   const [localMinGap, setLocalMinGap] = useState(3);
   const [localSongsAhead, setLocalSongsAhead] = useState(5);
   const [saving, setSaving] = useState(false);

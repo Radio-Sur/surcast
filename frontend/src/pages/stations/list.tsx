@@ -24,12 +24,14 @@ import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 import { CreateStationDialog } from "@/components/create-station-dialog";
 import { ErrorDetails } from "@/components/error-details";
+import { useAuth } from "@/hooks/use-auth";
 import { useDeleteStation, useStations } from "@/hooks/use-stations";
 import { isHttpError, serverMessage } from "@/lib/is-http-error";
 import { reportHttpError } from "@/lib/report-error";
 import { useSnackbar } from "@/providers/snackbar-provider";
 
 export function StationsListPage() {
+  const isDemo = useAuth().user?.role === "demo";
   const { t } = useTranslation();
   const { showError } = useSnackbar();
   const { data: stations, isLoading, isError, error } = useStations();
@@ -141,6 +143,7 @@ export function StationsListPage() {
                   <TableCell sx={{ pr: 6 }}>
                     <Box sx={{ display: "flex", gap: 0.5 }}>
                       <IconButton
+                        disabled={isDemo}
                         size="small"
                         onClick={(e) => {
                           e.stopPropagation();

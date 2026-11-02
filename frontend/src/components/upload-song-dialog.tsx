@@ -119,7 +119,11 @@ export function UploadSongDialog({
         } else if (status.status === "error") {
           setStarting(false);
           setJobId(null);
-          reportHttpError(showErrorRef.current, status.error, tRef.current("songs:upload_failed"));
+          reportHttpError(
+            showErrorRef.current,
+            { code: status.error_code ?? "UPLOAD_FAILED", error: status.error },
+            tRef.current("songs:upload_failed"),
+          );
         }
       } catch (err) {
         if (!cancelled) {

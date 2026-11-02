@@ -9,9 +9,9 @@ beforeEach(() => {
 });
 
 describe("Header", () => {
-  it("renders user name", async () => {
+  it("renders username", async () => {
     render(<Header />, { route: "/" });
-    expect(await screen.findByText("Admin")).toBeInTheDocument();
+    expect(await screen.findByText("admin")).toBeInTheDocument();
   });
 
   it("renders language switcher button", async () => {

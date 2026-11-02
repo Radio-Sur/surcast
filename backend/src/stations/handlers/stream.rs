@@ -1478,9 +1478,8 @@ mod tests {
             // A stopped station with zero runtime.
             let user_id = Uuid::new_v4();
             let username = format!("committed-delete-{user_id}");
-            sqlx::query("INSERT INTO users (id, username, password_hash, name) VALUES ($1, $2, 'x', $3)")
+            sqlx::query("INSERT INTO users (id, username, password_hash) VALUES ($1, $2, 'x')")
                 .bind(user_id)
-                .bind(&username)
                 .bind(&username)
                 .execute(&pool.pool)
                 .await
@@ -1550,9 +1549,8 @@ mod tests {
             // A station persisted as started with a live runtime.
             let user_id = Uuid::new_v4();
             let username = format!("committed-stop-{user_id}");
-            sqlx::query("INSERT INTO users (id, username, password_hash, name) VALUES ($1, $2, 'x', $3)")
+            sqlx::query("INSERT INTO users (id, username, password_hash) VALUES ($1, $2, 'x')")
                 .bind(user_id)
-                .bind(&username)
                 .bind(&username)
                 .execute(&pool.pool)
                 .await

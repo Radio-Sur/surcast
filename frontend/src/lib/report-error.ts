@@ -1,12 +1,10 @@
-import axios from "axios";
 import { isHttpError } from "@/lib/is-http-error";
 import type { ShowErrorOptions } from "@/providers/snackbar-provider";
 
 /**
  * Reports a failure as an expandable error notification: the title is the
- * server message when the backend provided one, otherwise the caller
- * fallback; the (i) details carry the status code, backend code, category
- * and raw payload.
+ * localized code translation. Caller context and raw server prose are for
+ * diagnostics only, never for the notification title.
  */
 export function reportHttpError(
   showError: (options: ShowErrorOptions) => void,
@@ -17,13 +15,8 @@ export function reportHttpError(
   // eslint-disable-next-line no-console
   console.error(fallbackTitle, err);
   const info = isHttpError(err);
-  const responseError = axios.isAxiosError(err)
-    ? (err.response?.data as { error?: unknown } | undefined)?.error
-    : undefined;
-  const serverMessage =
-    (typeof responseError === "string" && responseError) || (typeof err === "string" && err) || undefined;
   showError({
-    title: serverMessage || fallbackTitle,
+    title: info.message,
     details: {
       message: info.message,
       code: info.code,

@@ -1,4 +1,5 @@
 {
+  "icecast_demo_readonly": "Icecast settings preview. Configuration and server controls are unavailable in demo mode. Passwords are hidden.",
   "theme": "Theme",
   "light": "Light",
   "dark": "Dark",

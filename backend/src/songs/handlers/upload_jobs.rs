@@ -29,6 +29,7 @@ pub struct UploadJobStatus {
     pub skipped: i32,
     pub current_file: Option<String>,
     pub error: Option<String>,
+    pub error_code: Option<&'static str>,
     pub song_ids: Vec<Uuid>,
     pub duplicates: Vec<DuplicateInfo>,
 }
@@ -172,6 +173,7 @@ pub async fn get_upload_job(
         failed,
         skipped,
         current_file,
+        error_code: error.as_ref().map(|_| "UPLOAD_FAILED"),
         error,
         song_ids,
         duplicates,

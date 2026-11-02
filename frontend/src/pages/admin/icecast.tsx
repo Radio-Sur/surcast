@@ -22,6 +22,7 @@ import { useTranslation } from "react-i18next";
 import { IcecastExternalForm } from "@/components/admin/icecast-external-form";
 import { IcecastManagedForm } from "@/components/admin/icecast-managed-form";
 import { ErrorDetails } from "@/components/error-details";
+import { useAuth } from "@/hooks/use-auth";
 import {
   useIcecastStatus,
   useStartIcecast,
@@ -36,7 +37,12 @@ import { useSnackbar } from "@/providers/snackbar-provider";
 export function AdminIcecastPage() {
   const { t } = useTranslation();
   const { showError } = useSnackbar();
-  const { data, isLoading, isError, error, refetch } = useIcecastStatus();
+  const { user } = useAuth();
+  const isDemo = user?.role === "demo";
+  const { data, isLoading, isError, error, refetch } = useIcecastStatus(
+    user ? `${user.id}:${user.role}` : "pending",
+    !!user,
+  );
   const updateMutation = useUpdateIcecast();
   const startMutation = useStartIcecast();
   const stopMutation = useStopIcecast();
@@ -57,16 +63,17 @@ export function AdminIcecastPage() {
       setMode(data.settings.mode);
       setEnabled(data.settings.enabled);
       setPort(data.settings.port);
-      setSourcePassword(data.settings.source_password);
+      setSourcePassword(isDemo ? "" : data.settings.source_password);
       setAdminUser(data.settings.admin_user);
-      setAdminPassword(data.settings.admin_password);
+      setAdminPassword(isDemo ? "" : data.settings.admin_password);
       setExternalUrl(data.settings.external_url ?? "");
-      setExternalSourcePw(data.settings.external_source_pw ?? "");
-      setExternalAdminPw(data.settings.external_admin_pw ?? "");
+      setExternalSourcePw(isDemo ? "" : (data.settings.external_source_pw ?? ""));
+      setExternalAdminPw(isDemo ? "" : (data.settings.external_admin_pw ?? ""));
     }
-  }, [data]);
+  }, [data, isDemo]);
 
   const handleSave = () => {
+    if (isDemo) return;
     updateMutation.mutate(
       {
         mode,
@@ -126,6 +133,7 @@ export function AdminIcecastPage() {
         </Typography>
       </Box>
 
+      {isDemo && <Alert severity="info">{t("settings:icecast_demo_readonly")}</Alert>}
       {data && (
         <Box sx={{ display: "flex", alignItems: "center", gap: 2 }}>
           <Chip
@@ -133,7 +141,7 @@ export function AdminIcecastPage() {
             color={data.running ? "success" : "error"}
             variant="outlined"
           />
-          <Button size="small" variant="outlined" startIcon={<Refresh />} onClick={() => refetch()}>
+          <Button disabled={isDemo} size="small" variant="outlined" startIcon={<Refresh />} onClick={() => refetch()}>
             {t("common:refresh")}
           </Button>
         </Box>
@@ -151,17 +159,17 @@ export function AdminIcecastPage() {
         })()}
       {startMutation.isSuccess && (
         <Alert severity="success" onClose={startMutation.reset}>
-          {startMutation.data?.message || t("settings:icecast_started")}
+          {t("settings:icecast_started")}
         </Alert>
       )}
       {stopMutation.isSuccess && (
         <Alert severity="info" onClose={stopMutation.reset}>
-          {stopMutation.data?.message || t("settings:icecast_stopped_msg")}
+          {t("settings:icecast_stopped_msg")}
         </Alert>
       )}
       {testMutation.isSuccess && (
         <Alert severity="success" onClose={testMutation.reset}>
-          {testMutation.data?.message || t("settings:icecast_connection_ok")}
+          {t("settings:icecast_connection_ok")}
         </Alert>
       )}
       {testMutation.isError &&
@@ -182,19 +190,25 @@ export function AdminIcecastPage() {
         >
           <FormControl size="small" sx={{ maxWidth: 300 }}>
             <InputLabel>{t("settings:icecast_mode")}</InputLabel>
-            <Select value={mode} label={t("settings:icecast_mode")} onChange={(e) => setMode(e.target.value)}>
+            <Select
+              disabled={isDemo}
+              value={mode}
+              label={t("settings:icecast_mode")}
+              onChange={(e) => setMode(e.target.value)}
+            >
               <MenuItem value="managed">{t("settings:icecast_mode_managed")}</MenuItem>
               <MenuItem value="external">{t("settings:icecast_mode_external")}</MenuItem>
             </Select>
           </FormControl>
 
           <FormControlLabel
-            control={<Switch checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />}
+            control={<Switch disabled={isDemo} checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />}
             label={t("settings:icecast_auto_start")}
           />
 
           {mode === "managed" ? (
             <IcecastManagedForm
+              disabled={isDemo}
               port={port}
               sourcePassword={sourcePassword}
               adminUser={adminUser}
@@ -206,6 +220,7 @@ export function AdminIcecastPage() {
             />
           ) : (
             <IcecastExternalForm
+              disabled={isDemo}
               externalUrl={externalUrl}
               sourcePassword={externalSourcePw}
               adminPassword={externalAdminPw}
@@ -218,7 +233,7 @@ export function AdminIcecastPage() {
       </Card>
 
       <Box sx={{ display: "flex", gap: 2 }}>
-        <Button variant="contained" startIcon={<Save />} onClick={handleSave} disabled={pending}>
+        <Button variant="contained" startIcon={<Save />} onClick={handleSave} disabled={isDemo || pending}>
           {pending ? t("common:saving") : t("common:save")}
         </Button>
         {mode === "managed" &&
@@ -234,7 +249,7 @@ export function AdminIcecastPage() {
                   },
                 })
               }
-              disabled={pending}
+              disabled={isDemo || pending}
             >
               {t("common:stop")}
             </Button>
@@ -250,7 +265,7 @@ export function AdminIcecastPage() {
                   },
                 })
               }
-              disabled={pending}
+              disabled={isDemo || pending}
             >
               {t("common:start")}
             </Button>
@@ -266,7 +281,7 @@ export function AdminIcecastPage() {
                 },
               })
             }
-            disabled={testMutation.isPending}
+            disabled={isDemo || testMutation.isPending}
           >
             {testMutation.isPending ? t("common:testing") : t("settings:icecast_test_connection")}
           </Button>

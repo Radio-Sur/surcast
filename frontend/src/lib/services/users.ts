@@ -5,7 +5,8 @@ import type { User } from "@/types";
 export function createUsersService(client: HttpClient) {
   return {
     list: () => client.get<User[]>("/users"),
-    update: (id: string, data: { name?: string; role?: string }) => client.put<User>(`/users/${id}`, data),
+    create: (data: { username: string; password: string; role: "admin" | "demo" }) => client.post<User>("/users", data),
+    update: (id: string, data: { role?: string }) => client.put<User>(`/users/${id}`, data),
     delete: (id: string) => client.delete(`/users/${id}`),
   };
 }

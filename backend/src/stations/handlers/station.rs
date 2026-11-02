@@ -52,10 +52,9 @@ pub async fn create_station(
         .to_string();
     for station in repository::find_all_stations(&db).await? {
         if station.mount().trim_start_matches('/') == new_mount {
-            return Err(AppError::conflict(format!(
-                "Mount /{new_mount} is already used by station '{}'",
-                station.name
-            )));
+            return Err(
+                AppError::conflict(format!("Mount /{new_mount} is already used by station '{}'", station.name)).with_code("MOUNT_IN_USE"),
+            );
         }
     }
 
@@ -93,12 +92,15 @@ pub async fn create_station(
 }
 
 pub async fn update_station(
-    Extension(_auth_user): Extension<AuthUser>,
+    Extension(auth_user): Extension<AuthUser>,
     State(db): State<PgPool>,
     State(streamers): State<StreamersMap>,
     Path(id): Path<String>,
     Json(req): Json<UpdateStationRequest>,
 ) -> Result<Json<StationResponse>, AppError> {
+    if auth_user.role == crate::auth::models::Role::Demo && (req.name.is_some() || req.description.is_some() || req.stream_url.is_some()) {
+        return Err(AppError::forbidden("Station identity is read-only in demo mode".into()).with_code("DEMO_STATION_READONLY"));
+    }
     let id = resolve_station_id(&db, &id).await?;
     let station = repository::find_station_by_id(&db, id)
         .await?
@@ -110,14 +112,17 @@ pub async fn update_station(
         .to_string();
     for other in repository::find_all_stations(&db).await? {
         if other.id != id && other.mount().trim_start_matches('/') == new_mount {
-            return Err(AppError::conflict(format!(
-                "Mount /{new_mount} is already used by station '{}'",
-                other.name
-            )));
+            return Err(
+                AppError::conflict(format!("Mount /{new_mount} is already used by station '{}'", other.name)).with_code("MOUNT_IN_USE"),
+            );
         }
     }
     let description = req.description.unwrap_or(station.description);
-    let slug = slugify(&name);
+    let slug = if name == station.name {
+        station.slug.clone()
+    } else {
+        slugify(&name)
+    };
     let stream_url = req.stream_url.or(station.stream_url);
     let prebuffer_bytes = req.prebuffer_bytes.unwrap_or(station.prebuffer_bytes);
     let played_limit = req.played_limit.unwrap_or(station.played_limit).clamp(0, 500);

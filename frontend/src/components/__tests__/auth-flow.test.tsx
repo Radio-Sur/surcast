@@ -38,7 +38,7 @@ describe("Login Page", () => {
     await user.click(screen.getByText("Sign in"));
 
     await waitFor(() => {
-      expect(screen.getByText("Invalid credentials")).toBeInTheDocument();
+      expect(screen.getByText("Invalid username or password")).toBeInTheDocument();
     });
   });
 });

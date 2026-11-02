@@ -10,7 +10,7 @@ async fn setup(db: PgPool) -> (TestServer, String) {
     let token = {
         server
             .post("/api/setup/init")
-            .json(&serde_json::json!({"username": "admin", "password": "admin123", "name": "Admin"}))
+            .json(&serde_json::json!({"username": "admin", "password": "admin123"}))
             .await;
         let resp = server
             .post("/api/auth/login")

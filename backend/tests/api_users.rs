@@ -1,5 +1,73 @@
 mod api_common;
 
+#[sqlx::test(migrations = "./migrations")]
+async fn create_admin_and_fail_closed_demo(pool: PgPool) {
+    let (server, token, _) = setup_two_users(pool).await;
+    for role in ["admin", "demo"] {
+        let response = server
+            .post("/api/users")
+            .add_header("Authorization", &format!("Bearer {token}"))
+            .json(&json!({"username": format!("new-{role}"), "password": "safe-password", "role": role}))
+            .await;
+        assert_eq!(response.status_code(), 201);
+        let user = response.json::<serde_json::Value>();
+        assert_eq!(user["role"], role);
+        assert!(user.get("password_hash").is_none());
+        assert!(user.get("password").is_none());
+        let login = server
+            .post("/api/auth/login")
+            .json(&json!({"username": format!("new-{role}"), "password": "safe-password"}))
+            .await;
+        assert_eq!(login.status_code().as_u16(), if role == "demo" { 403 } else { 200 });
+    }
+    let duplicate = server
+        .post("/api/users")
+        .add_header("Authorization", &format!("Bearer {token}"))
+        .json(&json!({"username":"new-admin", "password":"safe-password", "role":"admin"}))
+        .await;
+    assert_eq!(duplicate.status_code(), 409);
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn create_users_requires_admin_and_validates_input(pool: PgPool) {
+    let (server, token, _) = setup_two_users(pool.clone()).await;
+    let body = json!({"username":"new", "password":"safe-password", "role":"admin"});
+    assert_eq!(server.post("/api/users").json(&body).await.status_code(), 401);
+    for body in [
+        json!({"username":"", "password":"safe-password", "role":"admin"}),
+        json!({"username":"new", "password":"short", "role":"admin"}),
+        json!({"username":"new", "password":"safe-password", "role":"viewer"}),
+    ] {
+        assert_eq!(
+            server
+                .post("/api/users")
+                .add_header("Authorization", &format!("Bearer {token}"))
+                .json(&body)
+                .await
+                .status_code(),
+            400
+        );
+    }
+    sqlx::query("UPDATE users SET role = 'demo'").execute(&pool).await.unwrap();
+    assert_eq!(
+        server
+            .post("/api/users")
+            .add_header("Authorization", &format!("Bearer {token}"))
+            .json(&body)
+            .await
+            .status_code(),
+        403
+    );
+    assert_eq!(
+        server
+            .get("/api/users")
+            .add_header("Authorization", &format!("Bearer {token}"))
+            .await
+            .status_code(),
+        403
+    );
+}
+
 use axum_test::TestServer;
 use serde_json::json;
 use sqlx::PgPool;
@@ -82,10 +150,10 @@ async fn test_update_user_role_returns_200(pool: PgPool) {
     let resp = server
         .put(&format!("/api/users/{target_id}"))
         .add_header("Authorization", &format!("Bearer {admin_token}"))
-        .json(&json!({"role": "viewer"}))
+        .json(&json!({"role": "demo"}))
         .await;
     assert_eq!(resp.status_code(), 200);
-    assert_eq!(resp.json::<serde_json::Value>()["role"].as_str().unwrap(), "viewer");
+    assert_eq!(resp.json::<serde_json::Value>()["role"].as_str().unwrap(), "demo");
 }
 
 #[sqlx::test(migrations = "./migrations")]

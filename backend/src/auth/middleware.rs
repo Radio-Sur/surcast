@@ -21,7 +21,7 @@ pub fn verify_token(token: &str, jwt_secret: &str) -> Result<AuthUser, TokenVeri
     let user_id = Uuid::parse_str(&token_data.claims.sub).map_err(|_| TokenVerificationFailed)?;
     Ok(AuthUser {
         id: user_id,
-        role: Role::Viewer,
+        role: Role::Demo,
     })
 }
 
@@ -112,7 +112,7 @@ pub async fn auth_middleware(State(state): State<AppState>, mut req: Request<axu
             "SELECT ak.id, u.id, u.role FROM api_keys ak JOIN users u ON u.id = ak.user_id WHERE ak.key_hash = $1 AND ak.is_active = true AND (ak.expires_at IS NULL OR ak.expires_at > NOW())",
         )
         .bind(&hash)
-        .fetch_optional(&state.db)
+        .fetch_optional(&state.auth_db)
         .await
         else {
             return auth_error(StatusCode::INTERNAL_SERVER_ERROR, "DB_ERROR", "Database error");
@@ -126,13 +126,16 @@ pub async fn auth_middleware(State(state): State<AppState>, mut req: Request<axu
 
         if let Err(e) = sqlx::query("UPDATE api_keys SET last_used_at = NOW() WHERE key_hash = $1")
             .bind(&hash)
-            .execute(&state.db)
+            .execute(&state.auth_db)
             .await
         {
             tracing::warn!("Failed to update API key last_used_at: {e}");
         }
 
         let auth_user = AuthUser { id: user_id, role };
+        if auth_user.role == Role::Demo {
+            return crate::demo::unavailable().into_response();
+        }
         req.extensions_mut().insert(auth_user);
         next.run(req).await
     } else {
@@ -150,7 +153,7 @@ pub async fn auth_middleware(State(state): State<AppState>, mut req: Request<axu
 
         let Ok(user_opt) = sqlx::query_as::<_, (Uuid, Role)>("SELECT id, role FROM users WHERE id = $1")
             .bind(user_id)
-            .fetch_optional(&state.db)
+            .fetch_optional(&state.auth_db)
             .await
         else {
             return auth_error(StatusCode::INTERNAL_SERVER_ERROR, "DB_ERROR", "Database error");
@@ -163,6 +166,9 @@ pub async fn auth_middleware(State(state): State<AppState>, mut req: Request<axu
         let (id, role) = user;
 
         let auth_user = AuthUser { id, role };
+        if auth_user.role == Role::Demo && state.sandbox != Some(id) && req.uri().path() != "/api/auth/me" {
+            return auth_error(StatusCode::FORBIDDEN, "DEMO_NOT_READY", "Demo sandbox is not yet configured");
+        }
         req.extensions_mut().insert(auth_user);
         next.run(req).await
     }

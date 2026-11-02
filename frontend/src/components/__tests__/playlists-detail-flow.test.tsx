@@ -34,7 +34,9 @@ describe("Playlist Detail Page", () => {
       </Routes>,
       { route: "/playlists/playlist-1" },
     );
-    await waitFor(() => expect(screen.getByText("Not found")).toBeInTheDocument(), { timeout: 5000 });
+    await waitFor(() => expect(screen.getByText("The requested resource was not found.")).toBeInTheDocument(), {
+      timeout: 5000,
+    });
   });
 
   it("renders playlist name description and songs", async () => {

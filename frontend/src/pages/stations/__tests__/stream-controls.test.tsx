@@ -78,11 +78,13 @@ describe("station stream controls", () => {
 
   it("shows a failed command as an error, clears the spinner and permits retry without a success notification", async () => {
     server.use(
-      http.post("/api/stations/s1/stream/play", () => HttpResponse.json({ error: "Output failed" }, { status: 500 })),
+      http.post("/api/stations/s1/stream/play", () =>
+        HttpResponse.json({ code: "STREAM_OUTPUT_UNVERIFIED", error: "Output failed" }, { status: 500 }),
+      ),
     );
     const user = renderPage();
     await user.click(await screen.findByRole("button", { name: "Start" }));
-    expect(await screen.findByText("Output failed")).toBeVisible();
+    expect(await screen.findByText("Could not confirm the station output in Icecast.")).toBeVisible();
     expect(screen.getByRole("button", { name: "Start" })).toBeEnabled();
     expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
     expect(screen.queryByText("Station started")).not.toBeInTheDocument();

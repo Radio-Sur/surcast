@@ -2576,7 +2576,7 @@ impl ReconnectRuntimeTest {
 /// the songs/station_queue tables so the commit's reload keeps the
 /// in-memory queue in sync with the persisted one.
 async fn seed_station(db: &sqlx::PgPool, station_id: Uuid, current: Option<Uuid>, songs: &[SongInfo]) {
-    sqlx::query("INSERT INTO users (id, username, password_hash, name) VALUES ($1, 'skip-regression', 'unused', 'skip regression')")
+    sqlx::query("INSERT INTO users (id, username, password_hash) VALUES ($1, 'skip-regression', 'unused')")
         .bind(station_id)
         .execute(db)
         .await
