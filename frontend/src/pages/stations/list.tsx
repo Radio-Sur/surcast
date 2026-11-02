@@ -23,12 +23,14 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 import { CreateStationDialog } from "@/components/create-station-dialog";
+import { EditStationDialog } from "@/components/edit-station-dialog";
 import { ErrorDetails } from "@/components/error-details";
 import { useAuth } from "@/hooks/use-auth";
 import { useDeleteStation, useStations } from "@/hooks/use-stations";
 import { isHttpError, serverMessage } from "@/lib/is-http-error";
 import { reportHttpError } from "@/lib/report-error";
 import { useSnackbar } from "@/providers/snackbar-provider";
+import type { Station } from "@/types";
 
 export function StationsListPage() {
   const isDemo = useAuth().user?.role === "demo";
@@ -39,6 +41,7 @@ export function StationsListPage() {
   const navigate = useNavigate();
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
+  const [editingStation, setEditingStation] = useState<Station | null>(null);
 
   const stationToDelete = deleteId ? stations?.find((s) => s.id === deleteId) : null;
 
@@ -143,16 +146,18 @@ export function StationsListPage() {
                   <TableCell sx={{ pr: 6 }}>
                     <Box sx={{ display: "flex", gap: 0.5 }}>
                       <IconButton
+                        aria-label={t("common:edit")}
                         disabled={isDemo}
                         size="small"
                         onClick={(e) => {
                           e.stopPropagation();
-                          navigate(`/stations/${station.slug || station.id}/edit`);
+                          setEditingStation(station);
                         }}
                       >
                         <Edit fontSize="small" />
                       </IconButton>
                       <IconButton
+                        aria-label={t("common:delete")}
                         size="small"
                         onClick={(e) => {
                           e.stopPropagation();
@@ -178,6 +183,7 @@ export function StationsListPage() {
       </TableContainer>
 
       <CreateStationDialog open={createOpen} onClose={() => setCreateOpen(false)} />
+      <EditStationDialog open={!!editingStation} station={editingStation} onClose={() => setEditingStation(null)} />
 
       <Dialog open={!!deleteId} onClose={() => setDeleteId(null)} slotProps={{ paper: { sx: { borderRadius: 3 } } }}>
         <DialogTitle>{t("stations:delete_title")}</DialogTitle>

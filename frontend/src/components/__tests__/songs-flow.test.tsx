@@ -187,7 +187,12 @@ describe("Songs Page", () => {
     render(<SongsPage />, { route: "/songs" });
     await waitFor(() => expect(screen.getByText("Present Song")).toBeInTheDocument(), { timeout: 5000 });
     const user = userEvent.setup();
-    await user.click(screen.getByRole("button", { name: /show missing only/i }));
+    const toggle = screen.getByRole("button", { name: /show missing only/i });
+    await user.click(toggle);
+    // Active filter uses the accent fill with contrast text, not accent text
+    // on an accent background.
+    expect(toggle).toHaveClass("MuiChip-filled", "MuiChip-colorPrimary");
+    expect(getComputedStyle(toggle).color).not.toBe(getComputedStyle(toggle).backgroundColor);
     expect(screen.getByText("Gone Song")).toBeInTheDocument();
     expect(screen.queryByText("Present Song")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: /delete all missing/i })).toBeInTheDocument();

@@ -112,9 +112,16 @@ describe("Files Page", () => {
     const user = userEvent.setup();
     render(<FilesPage />, { route: "/files" });
     await waitFor(() => expect(screen.getByText("rock")).toBeInTheDocument(), { timeout: 5000 });
-    await user.click(screen.getByRole("button", { name: /show missing/i }));
+    const purgeButton = await screen.findByRole("button", { name: /delete all missing/i });
+    const toggle = screen.getByRole("button", { name: /show missing/i });
+    await user.click(toggle);
     await waitFor(() => expect(screen.getByText("Missing Song")).toBeInTheDocument(), { timeout: 5000 });
-    await user.click(screen.getByRole("button", { name: /delete all missing/i }));
+    // The purge action must not move into the missing-files panel when the
+    // filter is enabled; it stays in the header at the same position.
+    expect(screen.getByRole("button", { name: /delete all missing/i })).toBe(purgeButton);
+    expect(toggle).toHaveClass("MuiChip-filled", "MuiChip-colorPrimary");
+    expect(getComputedStyle(toggle).color).not.toBe(getComputedStyle(toggle).backgroundColor);
+    await user.click(purgeButton);
     const dialog = await screen.findByRole("dialog");
     await user.click(within(dialog).getByRole("button", { name: /delete/i }));
     await waitFor(() => expect(purged).toBe(true), { timeout: 5000 });

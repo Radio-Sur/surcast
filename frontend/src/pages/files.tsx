@@ -429,7 +429,7 @@ export function FilesPage() {
             {t("subtitle")}
           </Typography>
         </Box>
-        <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
+        <Stack direction="row" spacing={1} sx={{ alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" }}>
           <Chip
             icon={<FilterAlt />}
             label={t("show_missing")}
@@ -437,30 +437,22 @@ export function FilesPage() {
             color={missingMode ? "primary" : "default"}
             variant={missingMode ? "filled" : "outlined"}
           />
-          {!missingMode && (
-            <Button variant="contained" startIcon={<CreateNewFolder />} onClick={() => setNewFolderOpen(true)}>
-              {t("new_folder")}
+          {missingSongs.length > 0 && (
+            <Button variant="outlined" color="error" startIcon={<Delete />} onClick={() => setPurgeOpen(true)}>
+              {t("delete_all_missing")}
             </Button>
           )}
+          <Button variant="contained" startIcon={<CreateNewFolder />} onClick={() => setNewFolderOpen(true)}>
+            {t("new_folder")}
+          </Button>
         </Stack>
       </Box>
 
       {missingMode ? (
         <Box sx={{ display: "flex", flexDirection: "column", gap: 2 }}>
-          <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-            <Typography variant="subtitle1">
-              {t("missing_mode")} <Chip size="small" label={missingSongs.length} sx={{ ml: 1 }} />
-            </Typography>
-            <Button
-              variant="outlined"
-              color="error"
-              startIcon={<Delete />}
-              disabled={missingSongs.length === 0}
-              onClick={() => setPurgeOpen(true)}
-            >
-              {t("delete_all_missing")}
-            </Button>
-          </Box>
+          <Typography variant="subtitle1">
+            {t("missing_mode")} <Chip size="small" label={missingSongs.length} sx={{ ml: 1 }} />
+          </Typography>
           <TableContainer component={Paper} variant="outlined" sx={{ ...TABLE_SX }}>
             <Table>
               <TableHead>

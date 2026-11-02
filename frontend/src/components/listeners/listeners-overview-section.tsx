@@ -3,6 +3,7 @@ import Card from "@mui/material/Card";
 import CardContent from "@mui/material/CardContent";
 import CircularProgress from "@mui/material/CircularProgress";
 import Divider from "@mui/material/Divider";
+import { useTheme } from "@mui/material/styles";
 import ToggleButton from "@mui/material/ToggleButton";
 import ToggleButtonGroup from "@mui/material/ToggleButtonGroup";
 import Typography from "@mui/material/Typography";
@@ -29,6 +30,8 @@ function formatTime(value: number | Date) {
 
 export function ListenersOverviewSection() {
   const { t } = useTranslation();
+  const theme = useTheme();
+  const chartColor = theme.palette.primary.main;
   const [range, setRange] = useState<ListenerRange>("7d");
   const { data, isLoading, isError, error } = useListenersOverview(range);
 
@@ -104,7 +107,15 @@ export function ListenersOverviewSection() {
                   },
                 ]}
                 yAxis={[{ min: 0 }]}
-                series={[{ dataKey: "listeners", area: true, showMark: false, label: t("stations:listeners") }]}
+                series={[
+                  {
+                    dataKey: "listeners",
+                    area: true,
+                    showMark: false,
+                    label: t("stations:listeners"),
+                    color: chartColor,
+                  },
+                ]}
                 margin={{ top: 10, right: 20, bottom: 30, left: 45 }}
               />
             ) : (
@@ -131,6 +142,7 @@ export function ListenersOverviewSection() {
                         dataKey: "avg_listeners",
                         label: t("stations:listeners"),
                         valueFormatter: (v) => `${Math.round((v as number) ?? 0)}`,
+                        color: chartColor,
                       },
                     ]}
                     margin={{ top: 10, right: 10, bottom: 30, left: 40 }}
@@ -154,6 +166,7 @@ export function ListenersOverviewSection() {
                         dataKey: "avg_listeners",
                         label: t("stations:listeners"),
                         valueFormatter: (v) => `${Math.round((v as number) ?? 0)}`,
+                        color: chartColor,
                       },
                     ]}
                     margin={{ top: 10, right: 10, bottom: 30, left: 40 }}

@@ -12,7 +12,6 @@ import { PlaylistsListPage } from "@/pages/playlists/list";
 import { SetupPage } from "@/pages/setup";
 import { SongsPage } from "@/pages/songs";
 import { StationDetailPage } from "@/pages/stations/detail";
-import { EditStationPage } from "@/pages/stations/edit";
 import { StationsListPage } from "@/pages/stations/list";
 import { UsersPage } from "@/pages/users";
 import { AuthProvider } from "@/providers/auth-provider";
@@ -54,7 +53,6 @@ function App() {
                         <Route path="/" element={<DashboardPage />} />
                         <Route path="/stations" element={<StationsListPage />} />
                         <Route path="/stations/:id" element={<StationDetailPage />} />
-                        <Route path="/stations/:id/edit" element={<EditStationPage />} />
                         <Route path="/songs" element={<SongsPage />} />
                         <Route path="/files" element={<FilesPage />} />
                         <Route path="/playlists" element={<PlaylistsListPage />} />

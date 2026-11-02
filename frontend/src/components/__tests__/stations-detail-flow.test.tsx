@@ -3,7 +3,7 @@ import { Route, Routes } from "react-router-dom";
 import { beforeEach, describe, expect, it } from "vitest";
 import { server } from "@/mocks/server";
 import { StationDetailPage } from "@/pages/stations/detail";
-import { render, screen, setupAuth, waitFor } from "@/test/test-utils";
+import { render, screen, setupAuth, userEvent, waitFor } from "@/test/test-utils";
 
 beforeEach(() => {
   server.resetHandlers();
@@ -83,5 +83,31 @@ describe("Station Detail Page", () => {
     await waitFor(() => expect(screen.getByText("Test Station")).toBeInTheDocument(), { timeout: 5000 });
     expect(screen.getByRole("button", { name: "Start" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /restart/i })).toBeInTheDocument();
+  });
+
+  it("opens the edit dialog from the header instead of navigating away", async () => {
+    server.use(
+      http.get("/api/stations/station-1", () => HttpResponse.json(mockStation)),
+      http.get("/api/stations/station-1/songs", () => HttpResponse.json([])),
+      http.get("/api/stations/station-1/queue", () => HttpResponse.json([])),
+      http.get("/api/songs", () => HttpResponse.json([])),
+      http.get("/api/playlists", () => HttpResponse.json([])),
+    );
+    render(
+      <Routes>
+        <Route path="/stations/:id" element={<StationDetailPage />} />
+      </Routes>,
+      { route: "/stations/station-1" },
+    );
+    await waitFor(() => expect(screen.getByText("Test Station")).toBeInTheDocument(), { timeout: 5000 });
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: /edit/i }));
+
+    expect(await screen.findByRole("dialog")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /edit station/i })).toBeInTheDocument();
+    expect(screen.getByDisplayValue("Test Station")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("A test station")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("main")).toBeInTheDocument();
   });
 });

@@ -2,6 +2,7 @@ import Box from "@mui/material/Box";
 import Card from "@mui/material/Card";
 import CardContent from "@mui/material/CardContent";
 import CircularProgress from "@mui/material/CircularProgress";
+import { useTheme } from "@mui/material/styles";
 import ToggleButton from "@mui/material/ToggleButton";
 import ToggleButtonGroup from "@mui/material/ToggleButtonGroup";
 import Typography from "@mui/material/Typography";
@@ -28,6 +29,7 @@ function formatTime(value: number | Date) {
 
 export function ListenersTab({ stationId }: { stationId: string }) {
   const { t } = useTranslation();
+  const theme = useTheme();
   const [range, setRange] = useState<ListenerRange>("7d");
   const { listeners } = useLiveStation(stationId);
   const { data, isLoading, isError, error } = useStationListenersHistory(stationId, range);
@@ -88,7 +90,15 @@ export function ListenersTab({ stationId }: { stationId: string }) {
               },
             ]}
             yAxis={[{ min: 0 }]}
-            series={[{ dataKey: "listeners", area: true, showMark: false, label: t("stations:listeners") }]}
+            series={[
+              {
+                dataKey: "listeners",
+                area: true,
+                showMark: false,
+                label: t("stations:listeners"),
+                color: theme.palette.primary.main,
+              },
+            ]}
             margin={{ top: 10, right: 20, bottom: 30, left: 45 }}
           />
         )}

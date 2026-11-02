@@ -12,8 +12,10 @@ import Skeleton from "@mui/material/Skeleton";
 import Tab from "@mui/material/Tab";
 import Tabs from "@mui/material/Tabs";
 import Typography from "@mui/material/Typography";
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate, useParams } from "react-router-dom";
+import { EditStationDialog } from "@/components/edit-station-dialog";
 import { ErrorDetails } from "@/components/error-details";
 import { ScheduleSection } from "@/components/schedule/schedule-section";
 import { useStationDetail } from "@/hooks/use-station-detail";
@@ -31,6 +33,7 @@ export function StationDetailPage() {
   const { t } = useTranslation();
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const [editOpen, setEditOpen] = useState(false);
 
   const d = useStationDetail(id);
 
@@ -101,7 +104,7 @@ export function StationDetailPage() {
           }
         }}
         onRestart={() => d.setConfirmAction("restart")}
-        onEdit={() => navigate(`/stations/${station.slug || id}/edit`)}
+        onEdit={() => setEditOpen(true)}
       />
 
       <Tabs value={d.tab} onChange={(_, v) => d.setTab(v)} sx={{ borderBottom: 1, borderColor: "divider" }}>
@@ -246,6 +249,8 @@ export function StationDetailPage() {
           if (!d.streamOperation) d.setConfirmAction(null);
         }}
       />
+
+      <EditStationDialog open={editOpen} station={station} onClose={() => setEditOpen(false)} />
     </Box>
   );
 }

@@ -216,7 +216,11 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
         MuiChip: {
           styleOverrides: {
             root: { borderRadius: 8, fontWeight: 500 },
-            filled: { bgcolor: `rgba(${r}, ${g}, ${b}, 0.1)`, color: scheme.primary },
+            // Tint only the default (uncoloured) filled chip. Coloured chips
+            // keep MUI's contrast text so an active filter stays readable.
+            filled: {
+              "&.MuiChip-colorDefault": { bgcolor: `rgba(${r}, ${g}, ${b}, 0.1)`, color: scheme.primary },
+            },
           },
         },
         MuiTableRow: {
