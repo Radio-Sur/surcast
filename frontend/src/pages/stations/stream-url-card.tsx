@@ -25,7 +25,7 @@ export function StreamUrlCard({ streamUrl }: { streamUrl: string }) {
 
   return (
     <Card variant="outlined" sx={{ borderRadius: 3 }}>
-      <CardContent sx={{ p: 4, "&:last-child": { pb: 4 } }}>
+      <CardContent sx={{ p: { xs: 2, sm: 4 }, "&:last-child": { pb: { xs: 2, sm: 4 } } }}>
         <Box sx={{ display: "flex", alignItems: "center", gap: 1, mb: 2 }}>
           <LinkIcon color="primary" fontSize="small" />
           <Typography variant="body2" sx={{ fontWeight: 500, flex: 1 }}>

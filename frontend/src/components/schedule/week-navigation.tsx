@@ -21,8 +21,10 @@ export function WeekNavigation({
   i18n: any;
 }) {
   return (
-    <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", mb: 2 }}>
-      <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+    <Box
+      sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", mb: 2, flexWrap: "wrap", gap: 1.5 }}
+    >
+      <Box sx={{ display: "flex", alignItems: "center", gap: 1, flexWrap: "wrap" }}>
         <Button size="small" startIcon={<ArrowBack />} onClick={onPrevWeek}>
           {t("schedule:prev")}
         </Button>

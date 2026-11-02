@@ -118,15 +118,16 @@ export function SetupPage() {
   return (
     <Box
       sx={{
-        minHeight: "100vh",
+        minHeight: "100dvh",
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
         bgcolor: "background.default",
+        py: 3,
       }}
     >
       <Card sx={{ width: "100%", maxWidth: 420, mx: 2 }}>
-        <CardContent sx={{ p: 4 }}>
+        <CardContent sx={{ p: { xs: 3, sm: 4 } }}>
           {logo}
           <Typography variant="body2" color="text.secondary" align="center" sx={{ mb: 3 }}>
             {t("auth:setup_title")}

@@ -5,6 +5,8 @@ import Visibility from "@mui/icons-material/Visibility";
 import Alert from "@mui/material/Alert";
 import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
+import Card from "@mui/material/Card";
+import CardContent from "@mui/material/CardContent";
 import Dialog from "@mui/material/Dialog";
 import DialogActions from "@mui/material/DialogActions";
 import DialogContent from "@mui/material/DialogContent";
@@ -24,6 +26,10 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 import { ErrorDetails } from "@/components/error-details";
+import { MobileList } from "@/components/mobile-list";
+import { PageHeader } from "@/components/page-header";
+import { RowActionsMenu } from "@/components/row-actions-menu";
+import { useIsMobile } from "@/hooks/use-is-mobile";
 import { useCreatePlaylist, useDeletePlaylist, usePlaylists } from "@/hooks/use-playlists";
 import { isHttpError, serverMessage } from "@/lib/is-http-error";
 import { reportHttpError } from "@/lib/report-error";
@@ -36,6 +42,7 @@ export function PlaylistsListPage() {
   const createPlaylist = useCreatePlaylist();
   const deletePlaylist = useDeletePlaylist();
   const navigate = useNavigate();
+  const isMobile = useIsMobile();
   const [createOpen, setCreateOpen] = useState(false);
   const [newName, setNewName] = useState("");
   const [newDesc, setNewDesc] = useState("");
@@ -96,19 +103,15 @@ export function PlaylistsListPage() {
 
   return (
     <Box sx={{ display: "flex", flexDirection: "column", gap: 3 }}>
-      <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-        <Box>
-          <Typography variant="h4" sx={{ fontWeight: 700 }}>
-            {t("playlists:title")}
-          </Typography>
-          <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
-            {t("playlists:subtitle")}
-          </Typography>
-        </Box>
-        <Button variant="contained" startIcon={<Add />} onClick={() => setCreateOpen(true)}>
-          {t("playlists:new")}
-        </Button>
-      </Box>
+      <PageHeader
+        title={t("playlists:title")}
+        subtitle={t("playlists:subtitle")}
+        actions={
+          <Button variant="contained" startIcon={<Add />} onClick={() => setCreateOpen(true)}>
+            {t("playlists:new")}
+          </Button>
+        }
+      />
 
       {!playlists || playlists.length === 0 ? (
         <Paper variant="outlined" sx={{ p: 6, textAlign: "center", borderRadius: 3 }}>
@@ -118,6 +121,54 @@ export function PlaylistsListPage() {
             {t("playlists:empty_hint")}
           </Typography>
         </Paper>
+      ) : isMobile ? (
+        <MobileList>
+          {playlists.map((p) => (
+            <Card
+              key={p.id}
+              variant="outlined"
+              tabIndex={0}
+              sx={{ borderRadius: 3, cursor: "pointer" }}
+              onClick={() => navigate(`/playlists/${p.slug || p.id}`)}
+              onKeyDown={(e) => {
+                if (e.target !== e.currentTarget) return;
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  navigate(`/playlists/${p.slug || p.id}`);
+                }
+              }}
+            >
+              <CardContent sx={{ p: 2, "&:last-child": { pb: 2 }, display: "flex", alignItems: "center", gap: 1 }}>
+                <Box sx={{ flex: 1, minWidth: 0 }}>
+                  <Typography variant="subtitle1" noWrap sx={{ fontWeight: 600 }}>
+                    {p.name}
+                  </Typography>
+                  <Typography variant="body2" color="text.secondary" noWrap>
+                    {p.description || "—"}
+                  </Typography>
+                  <Typography variant="caption" color="text.secondary">
+                    {t("playlists:table_songs")}: {p.song_count}
+                  </Typography>
+                </Box>
+                <RowActionsMenu
+                  actions={[
+                    {
+                      label: t("common:open"),
+                      icon: <Visibility fontSize="small" />,
+                      onClick: () => navigate(`/playlists/${p.slug || p.id}`),
+                    },
+                    {
+                      label: t("common:delete"),
+                      icon: <Delete fontSize="small" />,
+                      destructive: true,
+                      onClick: () => setDeleteId(p.id),
+                    },
+                  ]}
+                />
+              </CardContent>
+            </Card>
+          ))}
+        </MobileList>
       ) : (
         <TableContainer
           component={Paper}
@@ -143,6 +194,7 @@ export function PlaylistsListPage() {
                   sx={{ cursor: "pointer", "&:hover": { bgcolor: "action.hover" } }}
                   onClick={() => navigate(`/playlists/${p.slug || p.id}`)}
                   onKeyDown={(e) => {
+                    if (e.target !== e.currentTarget) return;
                     if (e.key === "Enter" || e.key === " ") {
                       e.preventDefault();
                       navigate(`/playlists/${p.slug || p.id}`);

@@ -88,7 +88,7 @@ export function RecurrencePicker({ value, interval, days, endDate, count, onChan
         </Box>
       )}
 
-      <Box sx={{ display: "flex", gap: 2, mt: 1.5, alignItems: "center" }}>
+      <Box sx={{ display: "flex", gap: 2, mt: 1.5, alignItems: "center", flexWrap: "wrap" }}>
         <Typography variant="caption" color="text.secondary">
           {t("schedule:repeat_end")}
         </Typography>

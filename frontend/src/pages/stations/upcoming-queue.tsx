@@ -240,19 +240,28 @@ export function UpcomingQueue({
           <Typography variant="body2" sx={{ minWidth: 24, textAlign: "right", color: "text.secondary" }}>
             {upcomingStartPositions[gi]}
           </Typography>
-          <Box sx={{ flex: 1, minWidth: 0, ml: 3, display: "flex", alignItems: "center", gap: 1.5 }}>
+          <Box
+            sx={{
+              flex: 1,
+              minWidth: 0,
+              ml: { xs: 0, sm: 3 },
+              display: "flex",
+              alignItems: "center",
+              gap: { xs: 0.75, sm: 1.5 },
+            }}
+          >
             <SongCover songId={g.song_id} hasCover={g.has_cover} size={32} autoDj={g.is_auto_dj} />
             <Box sx={{ flex: 1, minWidth: 0 }}>
               <Typography variant="body2" noWrap sx={{ fontWeight: 500 }}>
                 {g.title}
               </Typography>
-              <Typography variant="caption" noWrap color="text.secondary">
+              <Typography variant="caption" component="div" noWrap color="text.secondary">
                 {g.artist || "Unknown artist"}
                 {g.album ? ` · ${g.album}` : ""}
               </Typography>
             </Box>
           </Box>
-          <Typography variant="caption" color="text.secondary">
+          <Typography variant="caption" color="text.secondary" sx={{ flexShrink: 0 }}>
             {g.duration > 0 ? fmt(g.duration) : "--:--"}
           </Typography>
           <IconButton

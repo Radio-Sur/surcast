@@ -135,7 +135,7 @@ export function AdminIcecastPage() {
 
       {isDemo && <Alert severity="info">{t("settings:icecast_demo_readonly")}</Alert>}
       {data && (
-        <Box sx={{ display: "flex", alignItems: "center", gap: 2 }}>
+        <Box sx={{ display: "flex", alignItems: "center", gap: 2, flexWrap: "wrap" }}>
           <Chip
             label={data.running ? t("settings:icecast_running") : t("settings:icecast_stopped")}
             color={data.running ? "success" : "error"}
@@ -184,8 +184,8 @@ export function AdminIcecastPage() {
             display: "flex",
             flexDirection: "column",
             gap: 3,
-            p: 4,
-            "&:last-child": { pb: 4 },
+            p: { xs: 2, sm: 4 },
+            "&:last-child": { pb: { xs: 2, sm: 4 } },
           }}
         >
           <FormControl size="small" sx={{ maxWidth: 300 }}>
@@ -232,7 +232,7 @@ export function AdminIcecastPage() {
         </CardContent>
       </Card>
 
-      <Box sx={{ display: "flex", gap: 2 }}>
+      <Box sx={{ display: "flex", gap: 2, flexWrap: "wrap" }}>
         <Button variant="contained" startIcon={<Save />} onClick={handleSave} disabled={isDemo || pending}>
           {pending ? t("common:saving") : t("common:save")}
         </Button>

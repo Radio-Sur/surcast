@@ -18,6 +18,7 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { fmt } from "@/components/queue";
 import { SongCover } from "@/components/song-cover";
+import { useIsMobile } from "@/hooks/use-is-mobile";
 import type { StationSong } from "@/types";
 import { AddSongsToStationDialog } from "./add-songs-dialog";
 
@@ -43,6 +44,7 @@ export function LibraryTab({
   stationId: string;
 }) {
   const { t } = useTranslation();
+  const isMobile = useIsMobile();
   const [dialogOpen, setDialogOpen] = useState(false);
 
   return (
@@ -53,7 +55,9 @@ export function LibraryTab({
           alignItems: "center",
           justifyContent: "space-between",
           mb: 2,
-          px: 4,
+          px: { xs: 0, md: 4 },
+          flexWrap: "wrap",
+          gap: 1.5,
         }}
       >
         <Typography variant="h6">{t("stations:library_title")}</Typography>
@@ -66,40 +70,75 @@ export function LibraryTab({
         <Skeleton variant="rounded" height={200} />
       ) : librarySongs && librarySongs.length > 0 ? (
         <TableContainer component={Paper} variant="outlined" sx={{ borderRadius: 3 }}>
-          <Table>
-            <TableHead>
-              <TableRow>
-                <TableCell sx={{ fontWeight: 600, pl: 6 }} />
-                <TableCell sx={{ fontWeight: 600 }}>{t("stations:table_title")}</TableCell>
-                <TableCell sx={{ fontWeight: 600 }}>{t("stations:table_artist")}</TableCell>
-                <TableCell sx={{ fontWeight: 600 }}>{t("stations:table_album")}</TableCell>
-                <TableCell sx={{ fontWeight: 600 }}>{t("stations:table_duration")}</TableCell>
-                <TableCell sx={{ fontWeight: 600, width: 60, pr: 6 }} />
-              </TableRow>
-            </TableHead>
-            <TableBody>
+          {isMobile ? (
+            <Box sx={{ display: "flex", flexDirection: "column" }}>
               {librarySongs.map((song) => (
-                <TableRow key={song.song_id} hover>
-                  <TableCell sx={{ pl: 6 }}>
-                    <SongCover songId={song.song_id} hasCover={song.has_cover} />
-                  </TableCell>
-                  <TableCell sx={{ fontWeight: 500 }}>{song.title}</TableCell>
-                  <TableCell color="text.secondary">{song.artist || "\u2014"}</TableCell>
-                  <TableCell color="text.secondary">{song.album || "\u2014"}</TableCell>
-                  <TableCell>
-                    <Typography variant="body2" color="text.secondary">
+                <Box
+                  key={song.song_id}
+                  sx={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 1.5,
+                    p: 1.5,
+                    borderBottom: 1,
+                    borderColor: "divider",
+                  }}
+                >
+                  <SongCover songId={song.song_id} hasCover={song.has_cover} />
+                  <Box sx={{ flex: 1, minWidth: 0 }}>
+                    <Typography variant="body2" noWrap sx={{ fontWeight: 600 }}>
+                      {song.title}
+                    </Typography>
+                    <Typography variant="caption" color="text.secondary" component="div" noWrap>
+                      {song.artist || "—"}
+                      {song.album ? ` · ${song.album}` : ""}
+                    </Typography>
+                    <Typography variant="caption" color="text.secondary">
                       {song.duration > 0 ? fmt(song.duration) : t("common:duration_unknown")}
                     </Typography>
-                  </TableCell>
-                  <TableCell sx={{ pr: 6 }}>
-                    <IconButton size="small" onClick={() => onRemove(song.song_id)} color="error">
-                      <Delete fontSize="small" />
-                    </IconButton>
-                  </TableCell>
-                </TableRow>
+                  </Box>
+                  <IconButton aria-label={t("common:delete")} onClick={() => onRemove(song.song_id)} color="error">
+                    <Delete fontSize="small" />
+                  </IconButton>
+                </Box>
               ))}
-            </TableBody>
-          </Table>
+            </Box>
+          ) : (
+            <Table>
+              <TableHead>
+                <TableRow>
+                  <TableCell sx={{ fontWeight: 600, pl: 6 }} />
+                  <TableCell sx={{ fontWeight: 600 }}>{t("stations:table_title")}</TableCell>
+                  <TableCell sx={{ fontWeight: 600 }}>{t("stations:table_artist")}</TableCell>
+                  <TableCell sx={{ fontWeight: 600 }}>{t("stations:table_album")}</TableCell>
+                  <TableCell sx={{ fontWeight: 600 }}>{t("stations:table_duration")}</TableCell>
+                  <TableCell sx={{ fontWeight: 600, width: 60, pr: 6 }} />
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {librarySongs.map((song) => (
+                  <TableRow key={song.song_id} hover>
+                    <TableCell sx={{ pl: 6 }}>
+                      <SongCover songId={song.song_id} hasCover={song.has_cover} />
+                    </TableCell>
+                    <TableCell sx={{ fontWeight: 500 }}>{song.title}</TableCell>
+                    <TableCell color="text.secondary">{song.artist || "\u2014"}</TableCell>
+                    <TableCell color="text.secondary">{song.album || "\u2014"}</TableCell>
+                    <TableCell>
+                      <Typography variant="body2" color="text.secondary">
+                        {song.duration > 0 ? fmt(song.duration) : t("common:duration_unknown")}
+                      </Typography>
+                    </TableCell>
+                    <TableCell sx={{ pr: 6 }}>
+                      <IconButton size="small" onClick={() => onRemove(song.song_id)} color="error">
+                        <Delete fontSize="small" />
+                      </IconButton>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          )}
           <TablePagination
             component="div"
             count={librarySongTotal}

@@ -50,6 +50,17 @@ const defaultProps = {
 };
 
 describe("NowPlaying", () => {
+  it("truncates long track metadata while retaining the full title", () => {
+    const title = "Very long track title ".repeat(12).trim();
+    render(<NowPlaying item={{ ...mockSong, title }} {...defaultProps} />);
+    expect(screen.getByTitle(title)).toHaveStyle({
+      whiteSpace: "nowrap",
+      overflow: "hidden",
+      textOverflow: "ellipsis",
+    });
+    expect(screen.getByRole("button")).toBeEnabled();
+  });
+
   it("renders song title for a single song", () => {
     render(<NowPlaying item={mockSong} {...defaultProps} />);
     expect(screen.getByText("Bohemian Rhapsody")).toBeInTheDocument();

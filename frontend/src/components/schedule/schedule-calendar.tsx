@@ -166,105 +166,107 @@ export function ScheduleCalendar({
 }) {
   const { t } = useTranslation();
   return (
-    <Paper variant="outlined" sx={{ borderRadius: 2, overflow: "hidden", mb: 3 }}>
-      <Box
-        sx={{
-          display: "grid",
-          gridTemplateColumns: "65px repeat(7, 1fr)",
-          borderBottom: "1px solid",
-          borderColor: "divider",
-        }}
-      >
-        <Box sx={{ borderRight: "1px solid", borderColor: "divider" }} />
-        {weekDates.map((date, dayIndex) => {
-          const today = date.toDateString() === new Date().toDateString();
-          return (
-            <Box
-              key={dayIndex}
-              sx={{
-                textAlign: "center",
-                py: 0.5,
-                borderLeft: dayIndex > 0 ? "1px solid" : undefined,
-                borderColor: "divider",
-                bgcolor: today ? "primary.main" : undefined,
-                color: today ? "primary.contrastText" : undefined,
-              }}
-            >
-              <Typography variant="caption" sx={{ fontWeight: 600 }}>
-                {t(`schedule:day_${DAY_SHORT_KEYS[dayIndex]}`)}
-              </Typography>
-              <Typography variant="caption" sx={{ display: "block", fontWeight: 700 }}>
-                {date.getDate()}
-              </Typography>
-            </Box>
-          );
-        })}
-      </Box>
-
-      <Box sx={{ display: "grid", gridTemplateColumns: "65px repeat(7, 1fr)" }}>
-        <Box sx={{ borderRight: "1px solid", borderColor: "divider" }}>
-          {HOURS.map((hour) => (
-            <Box
-              key={hour}
-              sx={{
-                height: HOUR_HEIGHT,
-                borderBottom: "1px solid",
-                borderColor: "divider",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                pr: 0.5,
-              }}
-            >
-              <Typography variant="caption" color="text.secondary" sx={{ fontSize: "0.7rem", lineHeight: 1 }}>
-                {t("schedule:hour_label", { hour: hour.toString().padStart(2, "0") })}
-              </Typography>
-            </Box>
-          ))}
-        </Box>
-        {weekDates.map((date, dayIndex) => {
-          const today = date.toDateString() === new Date().toDateString();
-          const dayEvents = events ? events.filter((e) => isEventOnDate(e, date)) : [];
-
-          return (
-            <Box
-              key={dayIndex}
-              sx={{
-                borderLeft: dayIndex > 0 ? "1px solid" : undefined,
-                borderColor: "divider",
-                position: "relative",
-                bgcolor: today ? "action.hover" : undefined,
-              }}
-            >
+    <Paper variant="outlined" sx={{ borderRadius: 2, overflowX: "auto", mb: 3 }}>
+      <Box sx={{ minWidth: 820 }}>
+        <Box
+          sx={{
+            display: "grid",
+            gridTemplateColumns: "65px repeat(7, 1fr)",
+            borderBottom: "1px solid",
+            borderColor: "divider",
+          }}
+        >
+          <Box sx={{ borderRight: "1px solid", borderColor: "divider" }} />
+          {weekDates.map((date, dayIndex) => {
+            const today = date.toDateString() === new Date().toDateString();
+            return (
               <Box
-                sx={{ position: "relative", height: COLUMN_HEIGHT, cursor: "pointer" }}
-                onClick={(e) => {
-                  const rect = e.currentTarget.getBoundingClientRect();
-                  const y = e.clientY - rect.top;
-                  const hour = Math.floor(y / HOUR_HEIGHT);
-                  onCreateEvent(dayIndex, hour);
+                key={dayIndex}
+                sx={{
+                  textAlign: "center",
+                  py: 0.5,
+                  borderLeft: dayIndex > 0 ? "1px solid" : undefined,
+                  borderColor: "divider",
+                  bgcolor: today ? "primary.main" : undefined,
+                  color: today ? "primary.contrastText" : undefined,
                 }}
               >
-                {HOURS.map((hour) => (
-                  <Box
-                    key={hour}
-                    sx={{
-                      height: HOUR_HEIGHT,
-                      borderBottom: "1px solid",
-                      borderColor: "divider",
-                      opacity: 0.5,
-                    }}
-                  />
-                ))}
-
-                {today && <TodayIndicators queueEndEstimate={queueEndEstimate} queueEndMinutes={queueEndMinutes} />}
-                {dayEvents.map((ev) => (
-                  <EventBlock key={ev.id} event={ev} onClick={onEditEvent} />
-                ))}
+                <Typography variant="caption" sx={{ fontWeight: 600 }}>
+                  {t(`schedule:day_${DAY_SHORT_KEYS[dayIndex]}`)}
+                </Typography>
+                <Typography variant="caption" sx={{ display: "block", fontWeight: 700 }}>
+                  {date.getDate()}
+                </Typography>
               </Box>
-            </Box>
-          );
-        })}
+            );
+          })}
+        </Box>
+
+        <Box sx={{ display: "grid", gridTemplateColumns: "65px repeat(7, 1fr)" }}>
+          <Box sx={{ borderRight: "1px solid", borderColor: "divider" }}>
+            {HOURS.map((hour) => (
+              <Box
+                key={hour}
+                sx={{
+                  height: HOUR_HEIGHT,
+                  borderBottom: "1px solid",
+                  borderColor: "divider",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  pr: 0.5,
+                }}
+              >
+                <Typography variant="caption" color="text.secondary" sx={{ fontSize: "0.7rem", lineHeight: 1 }}>
+                  {t("schedule:hour_label", { hour: hour.toString().padStart(2, "0") })}
+                </Typography>
+              </Box>
+            ))}
+          </Box>
+          {weekDates.map((date, dayIndex) => {
+            const today = date.toDateString() === new Date().toDateString();
+            const dayEvents = events ? events.filter((e) => isEventOnDate(e, date)) : [];
+
+            return (
+              <Box
+                key={dayIndex}
+                sx={{
+                  borderLeft: dayIndex > 0 ? "1px solid" : undefined,
+                  borderColor: "divider",
+                  position: "relative",
+                  bgcolor: today ? "action.hover" : undefined,
+                }}
+              >
+                <Box
+                  sx={{ position: "relative", height: COLUMN_HEIGHT, cursor: "pointer" }}
+                  onClick={(e) => {
+                    const rect = e.currentTarget.getBoundingClientRect();
+                    const y = e.clientY - rect.top;
+                    const hour = Math.floor(y / HOUR_HEIGHT);
+                    onCreateEvent(dayIndex, hour);
+                  }}
+                >
+                  {HOURS.map((hour) => (
+                    <Box
+                      key={hour}
+                      sx={{
+                        height: HOUR_HEIGHT,
+                        borderBottom: "1px solid",
+                        borderColor: "divider",
+                        opacity: 0.5,
+                      }}
+                    />
+                  ))}
+
+                  {today && <TodayIndicators queueEndEstimate={queueEndEstimate} queueEndMinutes={queueEndMinutes} />}
+                  {dayEvents.map((ev) => (
+                    <EventBlock key={ev.id} event={ev} onClick={onEditEvent} />
+                  ))}
+                </Box>
+              </Box>
+            );
+          })}
+        </Box>
       </Box>
     </Paper>
   );

@@ -83,8 +83,12 @@ export function PlaylistGroupCard({
         sx={{
           display: "flex",
           alignItems: "center",
-          gap: 1,
-          p: "6px 10px",
+          gap: { xs: 0.25, sm: 1 },
+          px: { xs: 0.5, sm: 1.25 },
+          py: { xs: 1, sm: 0.75 },
+          minWidth: 0,
+          "& > .MuiIconButton-root": { flexShrink: 0 },
+          "& > .MuiCheckbox-root": { p: { xs: 0.5, sm: 1.125 }, flexShrink: 0 },
           "&:hover": { bgcolor: "action.hover" },
         }}
       >
@@ -105,6 +109,9 @@ export function PlaylistGroupCard({
               display: "flex",
               justifyContent: "center",
               width: 32,
+              minHeight: 44,
+              alignItems: "center",
+              flexShrink: 0,
               color: "text.secondary",
               "&:hover": { color: "text.primary" },
             }}
@@ -118,6 +125,7 @@ export function PlaylistGroupCard({
             variant="body2"
             sx={{
               minWidth: 24,
+              display: { xs: "none", sm: "block" },
               textAlign: "right",
               color: "text.secondary",
             }}
@@ -129,10 +137,10 @@ export function PlaylistGroupCard({
           sx={{
             flex: 1,
             minWidth: 0,
-            ml: 3,
+            ml: { xs: 0, sm: 3 },
             display: "flex",
             alignItems: "center",
-            gap: 1.5,
+            gap: { xs: 0.5, sm: 1.5 },
             cursor: "pointer",
           }}
           onClick={(e) => {
@@ -152,10 +160,10 @@ export function PlaylistGroupCard({
             <PlaylistPlay fontSize="small" sx={{ color: "primary.main" }} />
           </Box>
           <Box sx={{ flex: 1, minWidth: 0 }}>
-            <Typography variant="body2" noWrap sx={{ fontWeight: 600 }}>
+            <Typography variant="body2" noWrap title={group.playlist_name} sx={{ fontWeight: 600 }}>
               {group.playlist_name}
             </Typography>
-            <Typography variant="caption" noWrap color="text.secondary">
+            <Typography variant="caption" component="div" noWrap color="text.secondary">
               {t("stations:playlist_group_info", { count: group.songs.length, duration: fmt(group.total_duration) })}
               {endsAt ? ` · ${t("stations:playlist_group_ends_at", { time: endsAt })}` : ""}
             </Typography>
@@ -167,7 +175,11 @@ export function PlaylistGroupCard({
             e.stopPropagation();
             toggleOpen();
           }}
-          sx={{ color: "text.secondary", mr: "-4px" }}
+          sx={{
+            color: "text.secondary",
+            mr: "-4px",
+            display: { xs: dimmed ? "inline-flex" : "none", sm: "inline-flex" },
+          }}
         >
           {open ? <ExpandLess fontSize="small" /> : <ExpandMore fontSize="small" />}
         </IconButton>
@@ -184,6 +196,17 @@ export function PlaylistGroupCard({
               <MoreVert fontSize="small" />
             </IconButton>
             <Menu anchorEl={menuAnchor} open={!!menuAnchor} onClose={() => setMenuAnchor(null)}>
+              <MenuItem
+                sx={{ display: { xs: "flex", sm: "none" } }}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setMenuAnchor(null);
+                  toggleOpen();
+                }}
+              >
+                {open ? <ExpandLess fontSize="small" sx={{ mr: 1 }} /> : <ExpandMore fontSize="small" sx={{ mr: 1 }} />}
+                {open ? t("common:hide") : t("common:show")}
+              </MenuItem>
               {renderActions?.(() => setMenuAnchor(null))}
               <MenuItem
                 onClick={(e) => {

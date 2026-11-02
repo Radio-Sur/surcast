@@ -31,6 +31,17 @@ const mockSong = {
 };
 
 describe("QueueRow", () => {
+  it("keeps long metadata in truncating block elements", () => {
+    const song = { ...mockSong, title: "Long title ".repeat(20).trim(), artist: "Long artist ".repeat(20).trim() };
+    renderWithDnd(<QueueRow song={song} index={0} onDelete={vi.fn()} onMoveToTop={vi.fn()} />);
+    expect(screen.getByTitle(song.title)).toHaveStyle({ overflow: "hidden", textOverflow: "ellipsis" });
+    expect(screen.getByTitle(`${song.artist} · ${song.album}`)).toHaveStyle({
+      display: "block",
+      overflow: "hidden",
+      textOverflow: "ellipsis",
+    });
+  });
+
   it("renders song title and artist", () => {
     renderWithDnd(<QueueRow song={mockSong} index={0} onDelete={vi.fn()} onMoveToTop={vi.fn()} />);
     expect(screen.getByText("Test Song")).toBeInTheDocument();

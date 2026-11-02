@@ -20,7 +20,7 @@ export function NowPlayingSong({
   const { t } = useTranslation();
 
   return (
-    <Box sx={{ mt: 1.5 }}>
+    <Box sx={{ mt: 1.5, minWidth: 0 }}>
       <Box
         sx={{
           display: "flex",
@@ -29,15 +29,15 @@ export function NowPlayingSong({
         }}
       >
         <Box sx={{ flex: 1, minWidth: 0 }}>
-          <Typography variant="body1" sx={{ fontWeight: 600 }}>
+          <Typography variant="body1" noWrap title={song.title} sx={{ fontWeight: 600 }}>
             {song.title}
           </Typography>
-          <Typography variant="body2" sx={{ opacity: 0.8 }}>
+          <Typography variant="body2" noWrap title={`${song.artist} · ${song.album}`} sx={{ opacity: 0.8 }}>
             {song.artist || t("common:unknown_artist")}
             {song.album ? ` · ${song.album}` : ""}
           </Typography>
         </Box>
-        <Box sx={{ display: "flex", alignItems: "center", gap: 1, ml: 1 }}>
+        <Box sx={{ display: "flex", alignItems: "center", gap: 1, ml: 1, flexShrink: 0 }}>
           <Box
             sx={{
               width: 8,

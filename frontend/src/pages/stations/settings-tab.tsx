@@ -91,7 +91,7 @@ export function SettingsTab({
       <StreamUrlCard streamUrl={streamUrl} />
 
       <Card variant="outlined" sx={{ borderRadius: 3 }}>
-        <CardContent sx={{ p: 4, "&:last-child": { pb: 4 } }}>
+        <CardContent sx={{ p: { xs: 2, sm: 4 }, "&:last-child": { pb: { xs: 2, sm: 4 } } }}>
           <Typography variant="h6" sx={{ mb: 3 }}>
             {t("stations:stream_settings")}
           </Typography>

@@ -8,6 +8,8 @@ import Search from "@mui/icons-material/Search";
 import Alert from "@mui/material/Alert";
 import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
+import Card from "@mui/material/Card";
+import CardContent from "@mui/material/CardContent";
 import Checkbox from "@mui/material/Checkbox";
 import Chip from "@mui/material/Chip";
 import Dialog from "@mui/material/Dialog";
@@ -35,11 +37,16 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { EditSongDialog } from "@/components/edit-song-dialog";
 import { ErrorDetails } from "@/components/error-details";
+import { MobileList } from "@/components/mobile-list";
+import { MobileSort } from "@/components/mobile-sort";
+import { PageHeader } from "@/components/page-header";
 import { fmt } from "@/components/queue";
+import { RowActionsMenu } from "@/components/row-actions-menu";
 import { SongCover } from "@/components/song-cover";
 import { SongDetailsDialog } from "@/components/song-details-dialog";
 import { UploadSongDialog } from "@/components/upload-song-dialog";
 import { useFolders } from "@/hooks/use-files";
+import { useIsMobile } from "@/hooks/use-is-mobile";
 import {
   useDeleteSong,
   useDeleteSongsBatch,
@@ -65,6 +72,7 @@ export function SongsPage() {
   const { t } = useTranslation();
   const { showSnackbar, showError } = useSnackbar();
   const { data: stations } = useStations();
+  const isMobile = useIsMobile();
   const queryClient = useQueryClient();
   const deleteSong = useDeleteSong();
   const deleteSongsBatch = useDeleteSongsBatch();
@@ -217,57 +225,58 @@ export function SongsPage() {
     );
   }
 
+  const emptyText = missingOnly
+    ? t("songs:empty_missing")
+    : search
+      ? t("songs:empty_search")
+      : t("songs:empty_library");
+
   return (
     <Box sx={{ display: "flex", flexDirection: "column", gap: 3 }}>
-      <Box
-        sx={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          flexWrap: "wrap",
-          gap: 2,
-        }}
-      >
-        <Box>
-          <Typography variant="h4">{t("songs:title")}</Typography>
-          <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
-            {t("songs:subtitle")}
-          </Typography>
-        </Box>
-        <Box sx={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: 1 }}>
-          <Chip
-            icon={<FilterAlt />}
-            label={t("songs:filter_missing")}
-            onClick={() => setMissingOnly((value) => !value)}
-            color={missingOnly ? "primary" : "default"}
-            variant={missingOnly ? "filled" : "outlined"}
-          />
-          {selectedIds.size > 0 && (
-            <>
-              <Button
-                variant="outlined"
-                color="error"
-                startIcon={<Delete />}
-                onClick={handleBatchDelete}
-                disabled={deleteSongsBatch.isPending}
-              >
-                {t("songs:delete_selected", { count: selectedIds.size })}
+      <PageHeader
+        title={t("songs:title")}
+        subtitle={t("songs:subtitle")}
+        actions={
+          <>
+            <Chip
+              icon={<FilterAlt />}
+              label={t("songs:filter_missing")}
+              onClick={() => setMissingOnly((value) => !value)}
+              color={missingOnly ? "primary" : "default"}
+              variant={missingOnly ? "filled" : "outlined"}
+            />
+            {isMobile && filtered && filtered.length > 0 && (
+              <Button size="small" variant="text" onClick={handleSelectAll}>
+                {selectedIds.size === filtered.length ? t("common:clear") : t("common:select_all")}
               </Button>
-              <Button variant="text" size="small" startIcon={<Close />} onClick={() => setSelectedIds(new Set())}>
-                {t("common:clear")}
+            )}
+            {selectedIds.size > 0 && (
+              <>
+                <Button
+                  variant="outlined"
+                  color="error"
+                  startIcon={<Delete />}
+                  onClick={handleBatchDelete}
+                  disabled={deleteSongsBatch.isPending}
+                >
+                  {t("songs:delete_selected", { count: selectedIds.size })}
+                </Button>
+                <Button variant="text" size="small" startIcon={<Close />} onClick={() => setSelectedIds(new Set())}>
+                  {t("common:clear")}
+                </Button>
+              </>
+            )}
+            {missingCount > 0 && (
+              <Button variant="outlined" color="error" startIcon={<Delete />} onClick={() => setPurgeOpen(true)}>
+                {t("songs:delete_all_missing")}
               </Button>
-            </>
-          )}
-          {missingCount > 0 && (
-            <Button variant="outlined" color="error" startIcon={<Delete />} onClick={() => setPurgeOpen(true)}>
-              {t("songs:delete_all_missing")}
+            )}
+            <Button variant="contained" startIcon={<Add />} onClick={() => setUploadOpen(true)}>
+              {t("songs:upload")}
             </Button>
-          )}
-          <Button variant="contained" startIcon={<Add />} onClick={() => setUploadOpen(true)}>
-            {t("songs:upload")}
-          </Button>
-        </Box>
-      </Box>
+          </>
+        }
+      />
 
       {uploadResult && (
         <Alert severity="success" onClose={() => setUploadResult(null)}>
@@ -279,7 +288,12 @@ export function SongsPage() {
         </Alert>
       )}
 
-      <Stack direction="row" spacing={1.5} useFlexGap sx={{ flexWrap: "wrap", alignItems: "center" }}>
+      <Stack
+        direction={{ xs: "column", sm: "row" }}
+        spacing={1.5}
+        useFlexGap
+        sx={{ flexWrap: "wrap", alignItems: { xs: "stretch", sm: "center" } }}
+      >
         <TextField
           size="small"
           placeholder={t("songs:search_placeholder")}
@@ -294,7 +308,11 @@ export function SongsPage() {
               ),
             },
           }}
-          sx={{ maxWidth: 400, minWidth: 240 }}
+          sx={{
+            maxWidth: { xs: "100%", sm: 400 },
+            minWidth: { xs: 0, sm: 240 },
+            flex: { xs: "1 1 100%", sm: "0 1 auto" },
+          }}
         />
         <TextField
           select
@@ -302,7 +320,7 @@ export function SongsPage() {
           label={t("songs:filter_folder")}
           value={folderFilter}
           onChange={(e) => setFolderFilter(e.target.value)}
-          sx={{ minWidth: 180 }}
+          sx={{ minWidth: { xs: 0, sm: 180 }, flex: { xs: "1 1 100%", sm: "0 1 auto" } }}
         >
           <MenuItem value="">{t("songs:filter_all_folders")}</MenuItem>
           {(folders ?? []).map((folder) => (
@@ -312,11 +330,95 @@ export function SongsPage() {
           ))}
         </TextField>
       </Stack>
+      {isMobile && (
+        <MobileSort
+          value={sortKey}
+          order={sortOrder}
+          onSort={handleSort}
+          options={[
+            { value: "title", label: t("songs:table_title") },
+            { value: "artist", label: t("songs:table_artist") },
+            { value: "album", label: t("songs:table_album") },
+            { value: "duration", label: t("songs:table_duration") },
+          ]}
+        />
+      )}
 
       {isLoading ? (
         <Box sx={{ display: "flex", flexDirection: "column", gap: 2 }}>
           <Skeleton variant="rounded" height={300} />
         </Box>
+      ) : isMobile ? (
+        <MobileList>
+          {filtered && filtered.length > 0 ? (
+            filtered.map((song) => (
+              <Card key={song.id} variant="outlined" sx={{ borderRadius: 3 }}>
+                <CardContent
+                  sx={{ p: 1.5, "&:last-child": { pb: 1.5 }, display: "flex", alignItems: "center", gap: 1 }}
+                >
+                  <Checkbox
+                    size="small"
+                    checked={selectedIds.has(song.id)}
+                    onChange={() => handleSelectOne(song.id)}
+                    slotProps={{ input: { "aria-label": song.title } }}
+                  />
+                  <SongCover songId={song.id} hasCover={song.has_cover} />
+                  <Box sx={{ flex: 1, minWidth: 0 }}>
+                    <Box sx={{ display: "flex", alignItems: "center", gap: 0.5, minWidth: 0 }}>
+                      <Typography variant="body2" noWrap sx={{ fontWeight: 600 }}>
+                        {song.title}
+                      </Typography>
+                      {song.missing_since && (
+                        <Chip
+                          label={t("songs:missing_file")}
+                          color="error"
+                          size="small"
+                          variant="outlined"
+                          sx={{ height: 20, flexShrink: 0 }}
+                        />
+                      )}
+                    </Box>
+                    <Typography variant="caption" color="text.secondary" component="div" noWrap>
+                      {song.artist || "\u2014"}
+                      {song.album ? ` · ${song.album}` : ""}
+                    </Typography>
+                    <Typography variant="caption" color="text.secondary">
+                      {song.duration > 0 ? fmt(song.duration) : t("common:duration_unknown")}
+                    </Typography>
+                  </Box>
+                  <RowActionsMenu
+                    actions={[
+                      {
+                        label: t("songs:details"),
+                        icon: <InfoOutlined fontSize="small" />,
+                        onClick: () => setDetailsSongId(song.id),
+                      },
+                      {
+                        label: t("common:edit"),
+                        icon: <Edit fontSize="small" />,
+                        onClick: () =>
+                          setEditSong({ id: song.id, title: song.title, artist: song.artist, album: song.album }),
+                      },
+                      {
+                        label: t("common:delete"),
+                        icon: <Delete fontSize="small" />,
+                        onClick: () => setDeleteId(song.id),
+                        destructive: true,
+                      },
+                    ]}
+                  />
+                </CardContent>
+              </Card>
+            ))
+          ) : (
+            <Paper
+              variant="outlined"
+              sx={{ py: 6, px: 2, textAlign: "center", color: "text.secondary", borderRadius: 3 }}
+            >
+              {emptyText}
+            </Paper>
+          )}
+        </MobileList>
       ) : (
         <TableContainer
           component={Paper}
@@ -428,11 +530,16 @@ export function SongsPage() {
                     </TableCell>
                     <TableCell>
                       <Box sx={{ display: "flex", gap: 0.5 }}>
-                        <IconButton size="small" onClick={() => setDetailsSongId(song.id)} title={t("songs:details")}>
+                        <IconButton
+                          size="small"
+                          aria-label={t("songs:details")}
+                          onClick={() => setDetailsSongId(song.id)}
+                        >
                           <InfoOutlined fontSize="small" />
                         </IconButton>
                         <IconButton
                           size="small"
+                          aria-label={t("common:edit")}
                           onClick={() =>
                             setEditSong({
                               id: song.id,
@@ -444,7 +551,12 @@ export function SongsPage() {
                         >
                           <Edit fontSize="small" />
                         </IconButton>
-                        <IconButton size="small" onClick={() => setDeleteId(song.id)} color="error">
+                        <IconButton
+                          size="small"
+                          aria-label={t("common:delete")}
+                          onClick={() => setDeleteId(song.id)}
+                          color="error"
+                        >
                           <Delete fontSize="small" />
                         </IconButton>
                       </Box>
@@ -454,11 +566,7 @@ export function SongsPage() {
               ) : (
                 <TableRow>
                   <TableCell colSpan={8} align="center" sx={{ py: 6, color: "text.secondary" }}>
-                    {missingOnly
-                      ? t("songs:empty_missing")
-                      : search
-                        ? t("songs:empty_search")
-                        : t("songs:empty_library")}
+                    {emptyText}
                   </TableCell>
                 </TableRow>
               )}

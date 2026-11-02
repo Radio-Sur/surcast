@@ -199,8 +199,17 @@ export function QueueSection(props: QueueSectionProps) {
 
   return (
     <Card variant="outlined" sx={{ borderRadius: 3 }}>
-      <CardContent sx={{ p: 4, "&:last-child": { pb: 4 } }}>
-        <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", mb: 2 }}>
+      <CardContent sx={{ p: { xs: 1.5, sm: 4 }, "&:last-child": { pb: { xs: 1.5, sm: 4 } } }}>
+        <Box
+          sx={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            mb: 2,
+            flexWrap: "wrap",
+            gap: 1.5,
+          }}
+        >
           <Typography variant="h6">{t("stations:queue_title")}</Typography>
           <Button size="small" startIcon={<Add />} variant="contained" onClick={() => setQueueAddOpen(true)}>
             {t("stations:queue_add_library")}
@@ -262,7 +271,7 @@ export function QueueSection(props: QueueSectionProps) {
             />
 
             {selectedIds.size > 0 && (
-              <Box sx={{ display: "flex", alignItems: "center", gap: 1, mb: 2, px: 1 }}>
+              <Box sx={{ display: "flex", alignItems: "center", gap: 1, mb: 2, px: 1, flexWrap: "wrap" }}>
                 <Typography variant="body2" color="text.secondary" sx={{ mr: 1 }}>
                   {t("stations:queue_selected", { count: selectedIds.size })}
                 </Typography>

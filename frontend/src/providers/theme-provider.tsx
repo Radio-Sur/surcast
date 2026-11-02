@@ -124,9 +124,9 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
       shape: { borderRadius: 16 },
       typography: {
         fontFamily: '"Roboto","Helvetica","Arial",sans-serif',
-        h4: { fontWeight: 700, letterSpacing: "-0.02em" },
-        h5: { fontWeight: 700, letterSpacing: "-0.01em" },
-        h6: { fontWeight: 600 },
+        h4: { fontWeight: 700, letterSpacing: "-0.02em", fontSize: "clamp(1.55rem, 4.5vw, 2.125rem)" },
+        h5: { fontWeight: 700, letterSpacing: "-0.01em", fontSize: "clamp(1.35rem, 3.5vw, 1.5rem)" },
+        h6: { fontWeight: 600, fontSize: "clamp(1.05rem, 2.5vw, 1.25rem)" },
         body1: { lineHeight: 1.6 },
       },
       components: {
@@ -146,6 +146,9 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
               fontWeight: 600,
               padding: "8px 24px",
               boxShadow: "none",
+              "@media (max-width:599.95px)": {
+                padding: "8px 16px",
+              },
             },
             contained: {
               boxShadow: "none",
@@ -162,6 +165,25 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
             text: {
               color: scheme.primary,
               "&:hover": { bgcolor: `rgba(${r}, ${g}, ${b}, 0.08)` },
+            },
+          },
+        },
+        MuiIconButton: {
+          styleOverrides: {
+            root: { "@media (pointer: coarse)": { minWidth: 44, minHeight: 44 } },
+          },
+        },
+        MuiTablePagination: {
+          styleOverrides: {
+            toolbar: {
+              "@media (max-width:599.95px)": {
+                flexWrap: "wrap",
+                justifyContent: "flex-end",
+                padding: "8px",
+                "& .MuiTablePagination-spacer": { display: "none" },
+                "& .MuiTablePagination-selectLabel": { margin: 0 },
+                "& .MuiTablePagination-displayedRows": { margin: "8px 0" },
+              },
             },
           },
         },
@@ -182,9 +204,50 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
             },
           },
         },
+        MuiMenu: {
+          styleOverrides: {
+            paper: {
+              "@media (max-width:599.95px)": {
+                maxWidth: "calc(100vw - 24px)",
+              },
+            },
+          },
+        },
+        MuiPopover: {
+          styleOverrides: {
+            paper: {
+              "@media (max-width:599.95px)": {
+                maxWidth: "calc(100vw - 24px)",
+              },
+            },
+          },
+        },
         MuiDialog: {
           styleOverrides: {
-            paper: { borderRadius: 24, border: `1px solid rgba(${r}, ${g}, ${b}, 0.1)` },
+            paper: {
+              borderRadius: 24,
+              border: `1px solid rgba(${r}, ${g}, ${b}, 0.1)`,
+              // Near-full-width sheets on phones are easier to read and reach
+              // than a narrow centred dialog.
+              "@media (max-width:599.95px)": {
+                margin: 12,
+                width: "calc(100% - 24px)",
+                maxWidth: "calc(100% - 24px)",
+                maxHeight: "calc(100% - 24px)",
+                borderRadius: 20,
+              },
+            },
+          },
+        },
+        MuiDialogActions: {
+          styleOverrides: {
+            root: {
+              flexWrap: "wrap",
+              gap: 8,
+              "@media (max-width:599.95px)": {
+                "& .MuiButton-root": { flex: "1 1 auto" },
+              },
+            },
           },
         },
         MuiTextField: {
@@ -236,6 +299,9 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
           styleOverrides: {
             root: {
               padding: "14px 20px",
+              "@media (max-width:599.95px)": {
+                padding: "10px 12px",
+              },
             },
             head: {
               fontWeight: 600,

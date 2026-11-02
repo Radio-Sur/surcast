@@ -55,8 +55,8 @@ export function WeightedPlaylistsEditor({
       </Box>
 
       {open && (
-        <Box sx={{ display: "flex", gap: 1, alignItems: "center", mb: 2 }}>
-          <FormControl size="small" sx={{ flex: 1 }}>
+        <Box sx={{ display: "flex", gap: 1, alignItems: "center", mb: 2, flexWrap: "wrap" }}>
+          <FormControl size="small" sx={{ flex: { xs: "1 1 100%", sm: 1 }, minWidth: 0 }}>
             <InputLabel>{t("stations:weighted_playlist")}</InputLabel>
             <Select
               value={newPlaylistId}
@@ -99,7 +99,13 @@ export function WeightedPlaylistsEditor({
                 bgcolor: "action.hover",
               }}
             >
-              <Chip label={wp.playlist_name} size="small" color="primary" variant="outlined" />
+              <Chip
+                label={wp.playlist_name}
+                size="small"
+                color="primary"
+                variant="outlined"
+                sx={{ minWidth: 0, maxWidth: "55%" }}
+              />
               {editingWeight?.id === wp.id ? (
                 <TextField
                   size="small"

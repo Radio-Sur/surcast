@@ -1,4 +1,5 @@
 import Check from "@mui/icons-material/Check";
+import MenuIcon from "@mui/icons-material/Menu";
 import Avatar from "@mui/material/Avatar";
 import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
@@ -21,7 +22,7 @@ const LANGUAGES = [
   { code: "pl", label: "Polski", flag: "🇵🇱" },
 ];
 
-export function Header() {
+export function Header({ onMenuClick }: { onMenuClick?: () => void }) {
   const { t, i18n } = useTranslation("nav");
   const { user, logout } = useAuth();
   const navigate = useNavigate();
@@ -45,34 +46,51 @@ export function Header() {
     <Box
       component="header"
       sx={{
-        px: 4,
-        py: 2,
+        px: { xs: 2, sm: 3, md: 4 },
+        py: { xs: 1.25, sm: 2 },
         display: "flex",
         alignItems: "center",
-        justifyContent: "flex-end",
-        gap: 1,
-        bgcolor: "transparent",
+        gap: { xs: 0.5, sm: 1 },
+        position: "sticky",
+        top: 0,
+        zIndex: (theme) => theme.zIndex.appBar,
+        backdropFilter: "blur(12px)",
+        bgcolor: "background.default",
       }}
     >
+      {onMenuClick && (
+        <IconButton
+          aria-label={t("open_menu")}
+          onClick={onMenuClick}
+          size="small"
+          sx={{ display: { xs: "inline-flex", md: "none" }, mr: 0.5 }}
+        >
+          <MenuIcon />
+        </IconButton>
+      )}
+      <Box sx={{ flex: 1 }} />
       <Tooltip title={i18n.language === "pl" ? "Zmień język" : "Change language"}>
         <Button
           onClick={(e) => setLangAnchorEl(e.currentTarget)}
           size="small"
           variant="outlined"
           sx={{
-            borderRadius: 20,
-            px: 1.5,
-            minWidth: 0,
+            borderRadius: { xs: "50%", sm: 20 },
+            width: { xs: 38, sm: "auto" },
+            height: { xs: 38, sm: "auto" },
+            p: { xs: 0, sm: "8px 12px" },
+            minWidth: { xs: 38, sm: 0 },
+            flexShrink: 0,
             borderColor: "divider",
             textTransform: "none",
             color: "text.primary",
-            gap: 1,
+            gap: { xs: 0.25, sm: 1 },
             fontSize: "0.8rem",
             fontWeight: 600,
           }}
         >
           {LANGUAGES.find((l) => l.code === i18n.language)?.flag}
-          <Box sx={{ ml: 0.5 }}>{i18n.language.toUpperCase()}</Box>
+          <Box sx={{ ml: 0.5, display: { xs: "none", sm: "block" } }}>{i18n.language.toUpperCase()}</Box>
         </Button>
       </Tooltip>
       <Menu
@@ -110,22 +128,28 @@ export function Header() {
       <IconButton
         onClick={(e) => setAnchorEl(e.currentTarget)}
         size="small"
+        aria-label={user?.username}
         sx={{
-          borderRadius: 3,
-          px: 1.5,
-          py: 0.5,
+          borderRadius: { xs: "50%", sm: 3 },
+          width: { xs: 38, sm: "auto" },
+          height: { xs: 38, sm: "auto" },
+          minWidth: { xs: 38, sm: "auto" },
+          minHeight: { xs: 38, sm: "auto" },
+          px: { xs: 0, sm: 1.5 },
+          py: { xs: 0, sm: 0.5 },
+          flexShrink: 0,
           gap: 1,
           "&:hover": { bgcolor: "action.hover" },
         }}
       >
-        <Typography variant="body2" sx={{ fontWeight: 600 }}>
+        <Typography variant="body2" sx={{ fontWeight: 600, display: { xs: "none", sm: "block" } }}>
           {user?.username}
         </Typography>
         <Avatar
           sx={{
-            width: 30,
-            height: 30,
-            fontSize: 12,
+            width: { xs: 38, sm: 30 },
+            height: { xs: 38, sm: 30 },
+            fontSize: { xs: 14, sm: 12 },
             fontWeight: 700,
             bgcolor: "primary.main",
             color: "primary.contrastText",

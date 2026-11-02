@@ -13,7 +13,9 @@ import List from "@mui/material/List";
 import ListItemButton from "@mui/material/ListItemButton";
 import ListItemIcon from "@mui/material/ListItemIcon";
 import ListItemText from "@mui/material/ListItemText";
+import { useTheme } from "@mui/material/styles";
 import Typography from "@mui/material/Typography";
+import useMediaQuery from "@mui/material/useMediaQuery";
 import { useTranslation } from "react-i18next";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "@/hooks/use-auth";
@@ -21,8 +23,10 @@ import { useSnackbar } from "@/providers/snackbar-provider";
 
 const DRAWER_WIDTH = 260;
 
-export function Sidebar() {
+export function Sidebar({ mobileOpen = false, onClose }: { mobileOpen?: boolean; onClose?: () => void }) {
   const { t } = useTranslation("nav");
+  const theme = useTheme();
+  const isMobile = useMediaQuery(theme.breakpoints.down("md"));
   const navigate = useNavigate();
   const location = useLocation();
   const { user } = useAuth();
@@ -40,30 +44,28 @@ export function Sidebar() {
   ];
   const isAdmin = user?.role === "admin";
 
-  return (
-    <Drawer
-      variant="permanent"
-      sx={{
-        width: DRAWER_WIDTH,
-        flexShrink: 0,
-        "& .MuiDrawer-paper": {
-          width: DRAWER_WIDTH,
-          boxSizing: "border-box",
-          borderRight: 1,
-          borderColor: "divider",
-        },
-      }}
-    >
+  const go = (to: string) => {
+    navigate(to);
+    onClose?.();
+  };
+
+  const content = (
+    <>
       <Box sx={{ p: isDemo ? 2 : 3.5, display: "flex", alignItems: "center", gap: isDemo ? 1 : 1.5 }}>
         <Box
           component="img"
           src="/sur_logo.png"
           alt={t("brand_full")}
-          sx={{ width: isDemo ? 36 : 52, height: isDemo ? 36 : 52, borderRadius: 1.5 }}
+          sx={{ width: isDemo ? 36 : 52, height: isDemo ? 36 : 52, borderRadius: 1.5, flexShrink: 0 }}
         />
         <Typography
           variant="h4"
-          sx={{ fontWeight: 800, letterSpacing: "-0.03em", lineHeight: 1.2, ...(isDemo && { fontSize: 26 }) }}
+          sx={{
+            fontWeight: 800,
+            letterSpacing: "-0.03em",
+            lineHeight: 1.2,
+            fontSize: { xs: 26, md: isDemo ? 26 : undefined },
+          }}
         >
           <Box component="span" sx={{ color: "primary.main" }}>
             {t("brand_sur")}
@@ -84,7 +86,7 @@ export function Sidebar() {
                   showError({ title: t("demo_unavailable") });
                   return;
                 }
-                navigate(to);
+                go(to);
               }}
               selected={active}
               aria-current={active ? "page" : undefined}
@@ -126,7 +128,7 @@ export function Sidebar() {
               {t("admin")}
             </Typography>
             <ListItemButton
-              onClick={() => navigate("/admin/icecast")}
+              onClick={() => go("/admin/icecast")}
               selected={location.pathname.startsWith("/admin/icecast")}
               sx={{ borderRadius: 3, mb: 0.5, py: 1.25 }}
             >
@@ -138,6 +140,47 @@ export function Sidebar() {
           </>
         )}
       </List>
+    </>
+  );
+
+  if (isMobile) {
+    return (
+      <Drawer
+        variant="temporary"
+        open={mobileOpen}
+        onClose={onClose}
+        ModalProps={{ keepMounted: true }}
+        sx={{
+          "& .MuiDrawer-paper": {
+            width: DRAWER_WIDTH,
+            maxWidth: "85vw",
+            boxSizing: "border-box",
+            borderRight: 1,
+            borderColor: "divider",
+            pb: "env(safe-area-inset-bottom)",
+          },
+        }}
+      >
+        {content}
+      </Drawer>
+    );
+  }
+
+  return (
+    <Drawer
+      variant="permanent"
+      sx={{
+        width: DRAWER_WIDTH,
+        flexShrink: 0,
+        "& .MuiDrawer-paper": {
+          width: DRAWER_WIDTH,
+          boxSizing: "border-box",
+          borderRight: 1,
+          borderColor: "divider",
+        },
+      }}
+    >
+      {content}
     </Drawer>
   );
 }

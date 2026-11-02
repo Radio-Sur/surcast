@@ -22,8 +22,16 @@ function formatDate(value: string | null | undefined) {
 
 function InfoRow({ label, value }: { label: string; value: string }) {
   return (
-    <Box sx={{ display: "flex", gap: 2, alignItems: "baseline" }}>
-      <Typography variant="body2" color="text.secondary" sx={{ minWidth: 150, flexShrink: 0 }}>
+    <Box
+      sx={{
+        display: "flex",
+        flexDirection: { xs: "column", sm: "row" },
+        gap: { xs: 0.25, sm: 2 },
+        alignItems: "baseline",
+        mb: { xs: 1.5, sm: 0 },
+      }}
+    >
+      <Typography variant="body2" color="text.secondary" sx={{ minWidth: { xs: 0, sm: 150 }, flexShrink: 0 }}>
         {label}
       </Typography>
       <Typography variant="body2" sx={{ wordBreak: "break-all" }}>

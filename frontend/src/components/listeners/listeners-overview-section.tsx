@@ -52,8 +52,17 @@ export function ListenersOverviewSection() {
 
   return (
     <Card sx={{ borderRadius: 3 }}>
-      <CardContent sx={{ p: 3 }}>
-        <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", mb: 2 }}>
+      <CardContent sx={{ p: { xs: 2, sm: 3 } }}>
+        <Box
+          sx={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            mb: 2,
+            flexWrap: "wrap",
+            gap: 1.5,
+          }}
+        >
           <Typography variant="h6">{t("dashboard:listeners_title")}</Typography>
           <ToggleButtonGroup
             size="small"

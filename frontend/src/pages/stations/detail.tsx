@@ -107,7 +107,14 @@ export function StationDetailPage() {
         onEdit={() => setEditOpen(true)}
       />
 
-      <Tabs value={d.tab} onChange={(_, v) => d.setTab(v)} sx={{ borderBottom: 1, borderColor: "divider" }}>
+      <Tabs
+        value={d.tab}
+        onChange={(_, v) => d.setTab(v)}
+        variant="scrollable"
+        scrollButtons="auto"
+        allowScrollButtonsMobile
+        sx={{ borderBottom: 1, borderColor: "divider", minWidth: 0 }}
+      >
         <Tab
           icon={<LibraryMusic />}
           iconPosition="start"
@@ -201,7 +208,7 @@ export function StationDetailPage() {
 
       {d.tab === 2 && (
         <Card variant="outlined" sx={{ borderRadius: 3 }}>
-          <CardContent sx={{ p: 4, "&:last-child": { pb: 4 } }}>
+          <CardContent sx={{ p: { xs: 2, sm: 4 }, "&:last-child": { pb: { xs: 2, sm: 4 } } }}>
             <ScheduleSection
               stationId={station.id}
               playlists={d.playlists || []}

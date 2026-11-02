@@ -33,18 +33,18 @@ export function NowPlayingPlaylistGroup({
           mt: 1.5,
         }}
       >
-        <Box>
-          <Typography variant="h6" sx={{ fontWeight: 700, lineHeight: 1.2 }}>
+        <Box sx={{ flex: 1, minWidth: 0 }}>
+          <Typography variant="h6" noWrap title={group.playlist_name} sx={{ fontWeight: 700, lineHeight: 1.2 }}>
             {group.playlist_name}
           </Typography>
-          <Typography variant="caption" sx={{ opacity: 0.7 }}>
+          <Typography variant="caption" component="div" noWrap sx={{ opacity: 0.7 }}>
             {t("stations:playlist_group_total", {
               count: group.songs.length,
               duration: fmt(group.total_duration),
             })}
           </Typography>
         </Box>
-        <PlaylistPlay sx={{ fontSize: 32, opacity: 0.4 }} />
+        <PlaylistPlay sx={{ fontSize: 32, opacity: 0.4, flexShrink: 0, ml: 1 }} />
       </Box>
 
       {currentSong && (
@@ -67,10 +67,15 @@ export function NowPlayingPlaylistGroup({
               <Typography variant="caption" sx={{ opacity: 0.6, fontSize: 11 }}>
                 {t("stations:queue_current_track")}
               </Typography>
-              <Typography variant="body1" sx={{ fontWeight: 600, mt: 0.25 }}>
+              <Typography variant="body1" noWrap title={currentSong.title} sx={{ fontWeight: 600, mt: 0.25 }}>
                 {currentSong.title}
               </Typography>
-              <Typography variant="body2" sx={{ opacity: 0.8 }}>
+              <Typography
+                variant="body2"
+                noWrap
+                title={`${currentSong.artist} · ${currentSong.album}`}
+                sx={{ opacity: 0.8 }}
+              >
                 {currentSong.artist || t("common:unknown_artist")}
                 {currentSong.album ? ` · ${currentSong.album}` : ""}
               </Typography>
@@ -81,7 +86,7 @@ export function NowPlayingPlaylistGroup({
                 })}
               </Typography>
             </Box>
-            <Box sx={{ display: "flex", alignItems: "center", gap: 1, ml: 1 }}>
+            <Box sx={{ display: "flex", alignItems: "center", gap: 1, ml: 1, flexShrink: 0 }}>
               <Box
                 sx={{
                   width: 8,

@@ -39,9 +39,18 @@ export function ListenersTab({ stationId }: { stationId: string }) {
 
   return (
     <Card variant="outlined" sx={{ borderRadius: 3 }}>
-      <CardContent sx={{ p: 4, "&:last-child": { pb: 4 } }}>
-        <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", mb: 3 }}>
-          <Box sx={{ display: "flex", alignItems: "center", gap: 3 }}>
+      <CardContent sx={{ p: { xs: 1.5, sm: 4 }, "&:last-child": { pb: { xs: 1.5, sm: 4 } } }}>
+        <Box
+          sx={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            mb: 3,
+            flexWrap: "wrap",
+            gap: 2,
+          }}
+        >
+          <Box sx={{ display: "flex", alignItems: "center", gap: 2, flexWrap: "wrap" }}>
             <Typography variant="h6">{t("stations:listeners_title")}</Typography>
             <LiveListenersBadge listeners={listeners} />
           </Box>

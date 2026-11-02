@@ -45,9 +45,9 @@ export function NowPlaying({
         overflow: "hidden",
       }}
     >
-      <Box sx={{ p: 2, pb: isPlaylistGroup(item) ? 0 : 2 }}>
-        <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-          <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+      <Box sx={{ p: 2 }}>
+        <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 1 }}>
+          <Box sx={{ display: "flex", alignItems: "center", gap: 1, flexWrap: "wrap", minWidth: 0 }}>
             <Typography variant="caption" sx={{ opacity: 0.7, fontWeight: 600, letterSpacing: 1 }}>
               {isPlaylistGroup(item) ? t("stations:queue_now_playing_playlist") : t("stations:queue_now_playing")}
             </Typography>

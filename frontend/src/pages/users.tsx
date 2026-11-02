@@ -3,6 +3,8 @@ import MoreVert from "@mui/icons-material/MoreVert";
 import Alert from "@mui/material/Alert";
 import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
+import Card from "@mui/material/Card";
+import CardContent from "@mui/material/CardContent";
 import Dialog from "@mui/material/Dialog";
 import DialogActions from "@mui/material/DialogActions";
 import DialogContent from "@mui/material/DialogContent";
@@ -26,8 +28,11 @@ import { useTranslation } from "react-i18next";
 import { ConfigureSandboxDialog } from "@/components/configure-sandbox-dialog";
 import { CreateUserDialog } from "@/components/create-user-dialog";
 import { ErrorDetails } from "@/components/error-details";
+import { MobileList } from "@/components/mobile-list";
+import { PageHeader } from "@/components/page-header";
 import { RoleChip } from "@/components/role-chip";
 import { useAuth } from "@/hooks/use-auth";
+import { useIsMobile } from "@/hooks/use-is-mobile";
 import { useDeleteUser, useUpdateUser, useUsers } from "@/hooks/use-users";
 import { isHttpError, serverMessage } from "@/lib/is-http-error";
 import { reportHttpError } from "@/lib/report-error";
@@ -41,6 +46,7 @@ export function UsersPage() {
   const deleteUser = useDeleteUser();
   const { user: currentUser } = useAuth();
   const isAdmin = currentUser?.role === "admin";
+  const isMobile = useIsMobile();
   const [createOpen, setCreateOpen] = useState(false);
   const [sandboxUser, setSandboxUser] = useState<string | null>(null);
 
@@ -121,72 +127,100 @@ export function UsersPage() {
 
   return (
     <Box sx={{ display: "flex", flexDirection: "column", gap: 3 }}>
-      <Box
-        sx={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-        }}
-      >
-        <Box>
-          <Typography variant="h4">{t("users:title")}</Typography>
-          <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
-            {t("users:subtitle")}
-          </Typography>
-        </Box>
-        {isAdmin && (
-          <Button variant="contained" startIcon={<Add />} onClick={() => setCreateOpen(true)}>
-            {t("users:add")}
-          </Button>
-        )}
-      </Box>
+      <PageHeader
+        title={t("users:title")}
+        subtitle={t("users:subtitle")}
+        actions={
+          isAdmin ? (
+            <Button variant="contained" startIcon={<Add />} onClick={() => setCreateOpen(true)}>
+              {t("users:add")}
+            </Button>
+          ) : undefined
+        }
+      />
 
-      <TableContainer component={Paper} variant="outlined" sx={{ borderRadius: 3 }}>
-        <Table>
-          <TableHead>
-            <TableRow>
-              <TableCell sx={{ fontWeight: 600, pl: 6 }}>{t("users:table_username")}</TableCell>
-              <TableCell sx={{ fontWeight: 600 }}>{t("users:table_role")}</TableCell>
-              <TableCell sx={{ fontWeight: 600 }}>{t("users:table_created")}</TableCell>
-              {isAdmin && <TableCell sx={{ fontWeight: 600, width: 60, pr: 6 }} />}
-            </TableRow>
-          </TableHead>
-          <TableBody>
-            {users && users.length > 0 ? (
-              users.map((user) => (
-                <TableRow key={user.id} hover>
-                  <TableCell sx={{ fontWeight: 500, pl: 6 }}>{user.username}</TableCell>
-                  <TableCell>
-                    <RoleChip roleName={user.role} />
-                  </TableCell>
-                  <TableCell>
-                    <Typography variant="body2" color="text.secondary">
-                      {new Date(user.created_at).toLocaleDateString()}
+      {isMobile ? (
+        <MobileList>
+          {users && users.length > 0 ? (
+            users.map((user) => (
+              <Card key={user.id} variant="outlined" sx={{ borderRadius: 3 }}>
+                <CardContent sx={{ p: 2, "&:last-child": { pb: 2 }, display: "flex", alignItems: "center", gap: 1 }}>
+                  <Box sx={{ flex: 1, minWidth: 0 }}>
+                    <Typography variant="subtitle1" noWrap sx={{ fontWeight: 600 }}>
+                      {user.username}
                     </Typography>
-                  </TableCell>
+                    <Box sx={{ display: "flex", alignItems: "center", gap: 1, mt: 0.5 }}>
+                      <RoleChip roleName={user.role} />
+                      <Typography variant="caption" color="text.secondary">
+                        {new Date(user.created_at).toLocaleDateString()}
+                      </Typography>
+                    </Box>
+                  </Box>
                   {isAdmin && (
-                    <TableCell sx={{ pr: 6 }}>
-                      <IconButton size="small" onClick={(e) => handleMenuOpen(e, user.id)}>
-                        <MoreVert fontSize="small" />
-                      </IconButton>
-                    </TableCell>
+                    <IconButton aria-label={t("users:edit")} onClick={(e) => handleMenuOpen(e, user.id)}>
+                      <MoreVert fontSize="small" />
+                    </IconButton>
                   )}
-                </TableRow>
-              ))
-            ) : (
+                </CardContent>
+              </Card>
+            ))
+          ) : (
+            <Paper
+              variant="outlined"
+              sx={{ py: 6, px: 2, textAlign: "center", color: "text.secondary", borderRadius: 3 }}
+            >
+              {t("users:empty")}
+            </Paper>
+          )}
+        </MobileList>
+      ) : (
+        <TableContainer component={Paper} variant="outlined" sx={{ borderRadius: 3 }}>
+          <Table>
+            <TableHead>
               <TableRow>
-                <TableCell
-                  colSpan={isAdmin ? 4 : 3}
-                  align="center"
-                  sx={{ py: 6, color: "text.secondary", pl: 6, pr: 6 }}
-                >
-                  {t("users:empty")}
-                </TableCell>
+                <TableCell sx={{ fontWeight: 600, pl: 6 }}>{t("users:table_username")}</TableCell>
+                <TableCell sx={{ fontWeight: 600 }}>{t("users:table_role")}</TableCell>
+                <TableCell sx={{ fontWeight: 600 }}>{t("users:table_created")}</TableCell>
+                {isAdmin && <TableCell sx={{ fontWeight: 600, width: 60, pr: 6 }} />}
               </TableRow>
-            )}
-          </TableBody>
-        </Table>
-      </TableContainer>
+            </TableHead>
+            <TableBody>
+              {users && users.length > 0 ? (
+                users.map((user) => (
+                  <TableRow key={user.id} hover>
+                    <TableCell sx={{ fontWeight: 500, pl: 6 }}>{user.username}</TableCell>
+                    <TableCell>
+                      <RoleChip roleName={user.role} />
+                    </TableCell>
+                    <TableCell>
+                      <Typography variant="body2" color="text.secondary">
+                        {new Date(user.created_at).toLocaleDateString()}
+                      </Typography>
+                    </TableCell>
+                    {isAdmin && (
+                      <TableCell sx={{ pr: 6 }}>
+                        <IconButton size="small" onClick={(e) => handleMenuOpen(e, user.id)}>
+                          <MoreVert fontSize="small" />
+                        </IconButton>
+                      </TableCell>
+                    )}
+                  </TableRow>
+                ))
+              ) : (
+                <TableRow>
+                  <TableCell
+                    colSpan={isAdmin ? 4 : 3}
+                    align="center"
+                    sx={{ py: 6, color: "text.secondary", pl: 6, pr: 6 }}
+                  >
+                    {t("users:empty")}
+                  </TableCell>
+                </TableRow>
+              )}
+            </TableBody>
+          </Table>
+        </TableContainer>
+      )}
       {createOpen && <CreateUserDialog onClose={() => setCreateOpen(false)} />}
       {sandboxUser && <ConfigureSandboxDialog userId={sandboxUser} onClose={() => setSandboxUser(null)} />}
 

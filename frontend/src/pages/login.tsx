@@ -62,15 +62,16 @@ export function LoginPage() {
   return (
     <Box
       sx={{
-        minHeight: "100vh",
+        minHeight: "100dvh",
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
         bgcolor: "background.default",
+        py: 3,
       }}
     >
       <Card sx={{ width: "100%", maxWidth: 420, mx: 2 }}>
-        <CardContent sx={{ p: 4 }}>
+        <CardContent sx={{ p: { xs: 3, sm: 4 } }}>
           <Box sx={{ display: "flex", alignItems: "center", gap: 1, justifyContent: "center", mt: -2, mb: 0.5 }}>
             <Box
               component="img"

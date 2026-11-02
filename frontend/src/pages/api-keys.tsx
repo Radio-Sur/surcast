@@ -4,6 +4,8 @@ import Delete from "@mui/icons-material/Delete";
 import Alert from "@mui/material/Alert";
 import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
+import Card from "@mui/material/Card";
+import CardContent from "@mui/material/CardContent";
 import Dialog from "@mui/material/Dialog";
 import DialogActions from "@mui/material/DialogActions";
 import DialogContent from "@mui/material/DialogContent";
@@ -24,7 +26,10 @@ import Typography from "@mui/material/Typography";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ErrorDetails } from "@/components/error-details";
+import { MobileList } from "@/components/mobile-list";
+import { PageHeader } from "@/components/page-header";
 import { useApiKeys, useCreateApiKey, useDeleteApiKey, useUpdateApiKey } from "@/hooks/use-api-keys";
+import { useIsMobile } from "@/hooks/use-is-mobile";
 import { isHttpError, serverMessage } from "@/lib/is-http-error";
 import { reportHttpError } from "@/lib/report-error";
 import { useSnackbar } from "@/providers/snackbar-provider";
@@ -36,6 +41,7 @@ export function ApiKeysPage() {
   const createKey = useCreateApiKey();
   const updateKey = useUpdateApiKey();
   const deleteKey = useDeleteApiKey();
+  const isMobile = useIsMobile();
   const [createOpen, setCreateOpen] = useState(false);
   const [newName, setNewName] = useState("");
   const [expiresAt, setExpiresAt] = useState("");
@@ -99,23 +105,15 @@ export function ApiKeysPage() {
 
   return (
     <Box sx={{ display: "flex", flexDirection: "column", gap: 3 }}>
-      <Box
-        sx={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-        }}
-      >
-        <Box>
-          <Typography variant="h4">{t("api-keys:title")}</Typography>
-          <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
-            {t("api-keys:subtitle")}
-          </Typography>
-        </Box>
-        <Button variant="contained" startIcon={<Add />} onClick={() => setCreateOpen(true)}>
-          {t("api-keys:new")}
-        </Button>
-      </Box>
+      <PageHeader
+        title={t("api-keys:title")}
+        subtitle={t("api-keys:subtitle")}
+        actions={
+          <Button variant="contained" startIcon={<Add />} onClick={() => setCreateOpen(true)}>
+            {t("api-keys:new")}
+          </Button>
+        }
+      />
 
       {createdKey && (
         <Alert
@@ -146,64 +144,38 @@ export function ApiKeysPage() {
         </Alert>
       )}
 
-      <TableContainer component={Paper} variant="outlined" sx={{ borderRadius: 3 }}>
-        <Table sx={{ tableLayout: "fixed" }}>
-          <TableHead>
-            <TableRow>
-              <TableCell sx={{ fontWeight: 600, pl: 6, width: "28%" }}>{t("api-keys:table_name")}</TableCell>
-              <TableCell sx={{ fontWeight: 600, width: "18%" }}>{t("api-keys:table_key")}</TableCell>
-              <TableCell sx={{ fontWeight: 600, pl: 1, width: "17%" }}>{t("api-keys:table_status")}</TableCell>
-              <TableCell sx={{ fontWeight: 600, width: "14%" }}>{t("api-keys:table_last_used")}</TableCell>
-              <TableCell sx={{ fontWeight: 600, width: "14%" }}>{t("api-keys:table_expires")}</TableCell>
-              <TableCell sx={{ fontWeight: 600, pr: 6, width: 60 }} />
-            </TableRow>
-          </TableHead>
-          <TableBody>
-            {keys && keys.length > 0 ? (
-              keys.map((key) => (
-                <TableRow key={key.id} hover>
-                  <TableCell
-                    sx={{
-                      fontWeight: 500,
-                      pl: 6,
-                      overflow: "hidden",
-                      textOverflow: "ellipsis",
-                    }}
-                  >
-                    {key.name}
-                  </TableCell>
-                  <TableCell>
-                    <Typography variant="body2" sx={{ fontFamily: "monospace" }}>
-                      {key.key_prefix}...
-                    </Typography>
-                  </TableCell>
-                  <TableCell sx={{ pl: 1 }}>
-                    <Box
-                      sx={{
-                        display: "flex",
-                        alignItems: "center",
-                        gap: 1,
-                        whiteSpace: "nowrap",
-                      }}
-                    >
-                      {key.expires_at && new Date(key.expires_at) <= new Date() ? (
-                        <>
-                          <Box sx={{ width: 40 }} />
-                          <Typography variant="body2" color="text.secondary">
-                            {t("api-keys:status_expired")}
-                          </Typography>
-                        </>
+      {isMobile ? (
+        <MobileList>
+          {keys && keys.length > 0 ? (
+            keys.map((key) => {
+              const expired = key.expires_at && new Date(key.expires_at) <= new Date();
+              return (
+                <Card key={key.id} variant="outlined" sx={{ borderRadius: 3 }}>
+                  <CardContent sx={{ p: 2, "&:last-child": { pb: 2 } }}>
+                    <Box sx={{ display: "flex", alignItems: "flex-start", gap: 1 }}>
+                      <Box sx={{ flex: 1, minWidth: 0 }}>
+                        <Typography variant="subtitle1" noWrap sx={{ fontWeight: 600 }}>
+                          {key.name}
+                        </Typography>
+                        <Typography variant="body2" sx={{ fontFamily: "monospace" }} noWrap>
+                          {key.key_prefix}...
+                        </Typography>
+                      </Box>
+                      <IconButton aria-label={t("common:delete")} onClick={() => setDeleteId(key.id)} color="error">
+                        <Delete fontSize="small" />
+                      </IconButton>
+                    </Box>
+                    <Box sx={{ display: "flex", alignItems: "center", gap: 1, mt: 1 }}>
+                      {expired ? (
+                        <Typography variant="body2" color="text.secondary">
+                          {t("api-keys:status_expired")}
+                        </Typography>
                       ) : (
                         <>
                           <Switch
                             size="small"
                             checked={key.is_active}
-                            onChange={() =>
-                              updateKey.mutate({
-                                id: key.id,
-                                data: { is_active: !key.is_active },
-                              })
-                            }
+                            onChange={() => updateKey.mutate({ id: key.id, data: { is_active: !key.is_active } })}
                           />
                           <Typography variant="body2">
                             {key.is_active ? t("api-keys:status_active") : t("api-keys:status_inactive")}
@@ -211,34 +183,124 @@ export function ApiKeysPage() {
                         </>
                       )}
                     </Box>
-                  </TableCell>
-                  <TableCell>
-                    <Typography variant="body2" color="text.secondary">
-                      {key.last_used_at ? new Date(key.last_used_at).toLocaleDateString() : t("api-keys:never")}
-                    </Typography>
-                  </TableCell>
-                  <TableCell>
-                    <Typography variant="body2" color="text.secondary">
-                      {key.expires_at ? new Date(key.expires_at).toLocaleDateString() : t("api-keys:never")}
-                    </Typography>
-                  </TableCell>
-                  <TableCell sx={{ pr: 6 }}>
-                    <IconButton size="small" onClick={() => setDeleteId(key.id)} color="error">
-                      <Delete fontSize="small" />
-                    </IconButton>
+                    <Box sx={{ display: "flex", flexWrap: "wrap", gap: 2, mt: 1 }}>
+                      <Typography variant="caption" color="text.secondary">
+                        {t("api-keys:table_last_used")}:{" "}
+                        {key.last_used_at ? new Date(key.last_used_at).toLocaleDateString() : t("api-keys:never")}
+                      </Typography>
+                      <Typography variant="caption" color="text.secondary">
+                        {t("api-keys:table_expires")}:{" "}
+                        {key.expires_at ? new Date(key.expires_at).toLocaleDateString() : t("api-keys:never")}
+                      </Typography>
+                    </Box>
+                  </CardContent>
+                </Card>
+              );
+            })
+          ) : (
+            <Paper
+              variant="outlined"
+              sx={{ py: 6, px: 2, textAlign: "center", color: "text.secondary", borderRadius: 3 }}
+            >
+              {t("api-keys:empty")}
+            </Paper>
+          )}
+        </MobileList>
+      ) : (
+        <TableContainer component={Paper} variant="outlined" sx={{ borderRadius: 3 }}>
+          <Table sx={{ tableLayout: "fixed" }}>
+            <TableHead>
+              <TableRow>
+                <TableCell sx={{ fontWeight: 600, pl: 6, width: "28%" }}>{t("api-keys:table_name")}</TableCell>
+                <TableCell sx={{ fontWeight: 600, width: "18%" }}>{t("api-keys:table_key")}</TableCell>
+                <TableCell sx={{ fontWeight: 600, pl: 1, width: "17%" }}>{t("api-keys:table_status")}</TableCell>
+                <TableCell sx={{ fontWeight: 600, width: "14%" }}>{t("api-keys:table_last_used")}</TableCell>
+                <TableCell sx={{ fontWeight: 600, width: "14%" }}>{t("api-keys:table_expires")}</TableCell>
+                <TableCell sx={{ fontWeight: 600, pr: 6, width: 60 }} />
+              </TableRow>
+            </TableHead>
+            <TableBody>
+              {keys && keys.length > 0 ? (
+                keys.map((key) => (
+                  <TableRow key={key.id} hover>
+                    <TableCell
+                      sx={{
+                        fontWeight: 500,
+                        pl: 6,
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                      }}
+                    >
+                      {key.name}
+                    </TableCell>
+                    <TableCell>
+                      <Typography variant="body2" sx={{ fontFamily: "monospace" }}>
+                        {key.key_prefix}...
+                      </Typography>
+                    </TableCell>
+                    <TableCell sx={{ pl: 1 }}>
+                      <Box
+                        sx={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 1,
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        {key.expires_at && new Date(key.expires_at) <= new Date() ? (
+                          <>
+                            <Box sx={{ width: 40 }} />
+                            <Typography variant="body2" color="text.secondary">
+                              {t("api-keys:status_expired")}
+                            </Typography>
+                          </>
+                        ) : (
+                          <>
+                            <Switch
+                              size="small"
+                              checked={key.is_active}
+                              onChange={() =>
+                                updateKey.mutate({
+                                  id: key.id,
+                                  data: { is_active: !key.is_active },
+                                })
+                              }
+                            />
+                            <Typography variant="body2">
+                              {key.is_active ? t("api-keys:status_active") : t("api-keys:status_inactive")}
+                            </Typography>
+                          </>
+                        )}
+                      </Box>
+                    </TableCell>
+                    <TableCell>
+                      <Typography variant="body2" color="text.secondary">
+                        {key.last_used_at ? new Date(key.last_used_at).toLocaleDateString() : t("api-keys:never")}
+                      </Typography>
+                    </TableCell>
+                    <TableCell>
+                      <Typography variant="body2" color="text.secondary">
+                        {key.expires_at ? new Date(key.expires_at).toLocaleDateString() : t("api-keys:never")}
+                      </Typography>
+                    </TableCell>
+                    <TableCell sx={{ pr: 6 }}>
+                      <IconButton size="small" onClick={() => setDeleteId(key.id)} color="error">
+                        <Delete fontSize="small" />
+                      </IconButton>
+                    </TableCell>
+                  </TableRow>
+                ))
+              ) : (
+                <TableRow>
+                  <TableCell colSpan={6} align="center" sx={{ py: 6, color: "text.secondary", pl: 6, pr: 6 }}>
+                    {t("api-keys:empty")}
                   </TableCell>
                 </TableRow>
-              ))
-            ) : (
-              <TableRow>
-                <TableCell colSpan={6} align="center" sx={{ py: 6, color: "text.secondary", pl: 6, pr: 6 }}>
-                  {t("api-keys:empty")}
-                </TableCell>
-              </TableRow>
-            )}
-          </TableBody>
-        </Table>
-      </TableContainer>
+              )}
+            </TableBody>
+          </Table>
+        </TableContainer>
+      )}
 
       <Dialog
         open={createOpen}

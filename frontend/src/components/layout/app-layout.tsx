@@ -1,5 +1,6 @@
 import Box from "@mui/material/Box";
 import CircularProgress from "@mui/material/CircularProgress";
+import { useState } from "react";
 import { Navigate, Outlet } from "react-router-dom";
 import { ErrorBoundary } from "@/components/error-boundary";
 import { useAuth } from "@/hooks/use-auth";
@@ -8,6 +9,7 @@ import { Sidebar } from "./sidebar";
 
 export function AppLayout() {
   const { isAuthenticated, isLoading } = useAuth();
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
 
   if (isLoading) {
     return (
@@ -22,11 +24,20 @@ export function AppLayout() {
   }
 
   return (
-    <Box sx={{ display: "flex", minHeight: "100vh" }}>
-      <Sidebar />
-      <Box sx={{ flex: 1, display: "flex", flexDirection: "column" }}>
-        <Header />
-        <Box component="main" sx={{ flex: 1, p: 3 }}>
+    <Box sx={{ display: "flex", minHeight: "100dvh", width: "100%", overflowX: "clip" }}>
+      <Sidebar mobileOpen={mobileNavOpen} onClose={() => setMobileNavOpen(false)} />
+      <Box sx={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
+        <Header onMenuClick={() => setMobileNavOpen(true)} />
+        <Box
+          component="main"
+          sx={{
+            flex: 1,
+            minWidth: 0,
+            px: { xs: 2, sm: 3 },
+            py: { xs: 2, sm: 3 },
+            pb: { xs: "calc(24px + env(safe-area-inset-bottom))", sm: 3 },
+          }}
+        >
           <ErrorBoundary>
             <Outlet />
           </ErrorBoundary>

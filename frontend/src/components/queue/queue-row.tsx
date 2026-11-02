@@ -59,10 +59,12 @@ export function QueueRow({
       sx={{
         display: "flex",
         alignItems: "center",
-        gap: 1,
-        pl: "10px",
-        pr: "8px",
-        py: "6px",
+        gap: { xs: 0.25, sm: 1 },
+        px: { xs: 0.5, sm: 1.25 },
+        py: { xs: 1, sm: 0.75 },
+        minWidth: 0,
+        "& > .MuiIconButton-root": { flexShrink: 0 },
+        "& > .MuiCheckbox-root": { p: { xs: 0.5, sm: 1.125 }, flexShrink: 0 },
         borderRadius: 2,
         "&:hover": { bgcolor: "action.hover" },
       }}
@@ -83,31 +85,40 @@ export function QueueRow({
           <GripDots />
         </Box>
       </IconButton>
-      <Typography variant="body2" sx={{ minWidth: 24, textAlign: "right", color: "text.secondary" }}>
+      <Typography
+        variant="body2"
+        sx={{ display: { xs: "none", sm: "block" }, minWidth: 24, textAlign: "right", color: "text.secondary" }}
+      >
         {index + 1}
       </Typography>
       <Box
         sx={{
           flex: 1,
           minWidth: 0,
-          ml: 3,
+          ml: { xs: 0, sm: 3 },
           display: "flex",
           alignItems: "center",
-          gap: 1.5,
+          gap: { xs: 0.75, sm: 1.5 },
         }}
       >
         <SongCover songId={song.song_id} hasCover={song.has_cover} size={32} autoDj={song.is_auto_dj} />
         <Box sx={{ flex: 1, minWidth: 0 }}>
-          <Typography variant="body2" noWrap sx={{ fontWeight: 500 }}>
+          <Typography variant="body2" noWrap title={song.title} sx={{ fontWeight: 500 }}>
             {song.title}
           </Typography>
-          <Typography variant="caption" noWrap color="text.secondary">
+          <Typography
+            variant="caption"
+            component="div"
+            noWrap
+            color="text.secondary"
+            title={`${song.artist} · ${song.album}`}
+          >
             {song.artist || t("common:unknown_artist")}
             {song.album ? ` · ${song.album}` : ""}
           </Typography>
         </Box>
       </Box>
-      <Typography variant="caption" color="text.secondary">
+      <Typography variant="caption" color="text.secondary" sx={{ display: { xs: "none", sm: "block" } }}>
         {song.duration > 0 ? fmt(song.duration) : t("common:duration_unknown")}
       </Typography>
       <IconButton

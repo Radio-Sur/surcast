@@ -19,6 +19,8 @@ import Search from "@mui/icons-material/Search";
 import Alert from "@mui/material/Alert";
 import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
+import Card from "@mui/material/Card";
+import CardContent from "@mui/material/CardContent";
 import Checkbox from "@mui/material/Checkbox";
 import IconButton from "@mui/material/IconButton";
 import InputAdornment from "@mui/material/InputAdornment";
@@ -37,8 +39,10 @@ import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate, useParams } from "react-router-dom";
 import { ErrorDetails } from "@/components/error-details";
+import { MobileList } from "@/components/mobile-list";
 import { fmt, GripDots } from "@/components/queue";
 import { SongCover } from "@/components/song-cover";
+import { useIsMobile } from "@/hooks/use-is-mobile";
 import {
   useAddPlaylistToQueue,
   usePlaylist,
@@ -71,6 +75,7 @@ function SortablePlaylistSongRow({
   removeDisabled: boolean;
 }) {
   const { t } = useTranslation();
+  const isMobile = useIsMobile();
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: song.id });
 
   const style = {
@@ -80,6 +85,35 @@ function SortablePlaylistSongRow({
     zIndex: isDragging ? 10 : undefined,
     position: "relative" as const,
   };
+
+  if (isMobile) {
+    return (
+      <Card ref={setNodeRef} style={style} variant="outlined" sx={{ borderRadius: 3 }}>
+        <CardContent sx={{ p: 1, "&:last-child": { pb: 1 }, display: "flex", alignItems: "center", gap: 0.5 }}>
+          <IconButton {...attributes} {...listeners} sx={{ touchAction: "none", cursor: "grab" }}>
+            <GripDots />
+          </IconButton>
+          <Checkbox checked={selected} onChange={onToggleSelect} slotProps={{ input: { "aria-label": song.title } }} />
+          <SongCover songId={song.song_id} hasCover={song.has_cover} />
+          <Box sx={{ flex: 1, minWidth: 0 }}>
+            <Typography variant="body2" noWrap sx={{ fontWeight: 600 }}>
+              {song.title}
+            </Typography>
+            <Typography variant="caption" color="text.secondary" component="div" noWrap>
+              {song.artist || "—"}
+              {song.album ? ` · ${song.album}` : ""}
+            </Typography>
+            <Typography variant="caption" color="text.secondary">
+              {song.duration > 0 ? fmt(song.duration) : t("common:duration_unknown")}
+            </Typography>
+          </Box>
+          <IconButton aria-label={t("common:delete")} color="error" disabled={removeDisabled} onClick={onRemove}>
+            <Delete fontSize="small" />
+          </IconButton>
+        </CardContent>
+      </Card>
+    );
+  }
 
   return (
     <TableRow ref={setNodeRef} style={style} hover>
@@ -138,6 +172,7 @@ export function PlaylistDetailPage() {
   const { id: unsafeId } = useParams<{ id: string }>();
   const id = unsafeId!;
   const navigate = useNavigate();
+  const isMobile = useIsMobile();
 
   const [search, setSearch] = useState("");
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -291,29 +326,45 @@ export function PlaylistDetailPage() {
 
   return (
     <Box sx={{ display: "flex", flexDirection: "column", gap: 3 }}>
-      <Box sx={{ display: "flex", alignItems: "center", gap: 1.5 }}>
-        <IconButton onClick={() => navigate("/playlists")}>
-          <ArrowBack />
-        </IconButton>
-        <Box sx={{ flex: 1 }}>
-          <Box sx={{ display: "flex", alignItems: "center", gap: 2 }}>
-            <Typography variant="h4" sx={{ fontWeight: 700 }}>
-              {playlist.name}
+      <Box
+        sx={{
+          display: "flex",
+          flexDirection: { xs: "column", md: "row" },
+          alignItems: { xs: "stretch", md: "center" },
+          gap: 2,
+        }}
+      >
+        <Box sx={{ display: "flex", alignItems: "flex-start", gap: 1.5, flex: 1, minWidth: 0 }}>
+          <IconButton onClick={() => navigate("/playlists")} aria-label={t("common:go_back")}>
+            <ArrowBack />
+          </IconButton>
+          <Box sx={{ flex: 1, minWidth: 0 }}>
+            <Box sx={{ display: "flex", alignItems: "center", gap: 1.5, flexWrap: "wrap" }}>
+              <Typography variant="h4" sx={{ fontWeight: 700, wordBreak: "break-word" }}>
+                {playlist.name}
+              </Typography>
+              <Button size="small" variant="outlined" onClick={() => setEditOpen(true)}>
+                {t("common:edit")}
+              </Button>
+            </Box>
+            {playlist.description && (
+              <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
+                {playlist.description}
+              </Typography>
+            )}
+            <Typography variant="caption" color="text.secondary">
+              {t("playlists:song_count", { count: playlist.song_count })}
             </Typography>
-            <Button size="small" variant="outlined" onClick={() => setEditOpen(true)}>
-              {t("common:edit")}
-            </Button>
           </Box>
-          {playlist.description && (
-            <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
-              {playlist.description}
-            </Typography>
-          )}
-          <Typography variant="caption" color="text.secondary">
-            {t("playlists:song_count", { count: playlist.song_count })}
-          </Typography>
         </Box>
-        <Box sx={{ display: "flex", gap: 1 }}>
+        <Box
+          sx={{
+            display: "flex",
+            gap: 1,
+            flexWrap: "wrap",
+            justifyContent: { xs: "flex-start", md: "flex-end" },
+          }}
+        >
           {selectedIds.size > 0 && (
             <>
               <Button
@@ -367,33 +418,14 @@ export function PlaylistDetailPage() {
                 ),
               },
             }}
-            sx={{ maxWidth: 400 }}
+            sx={{ maxWidth: { xs: "100%", sm: 400 } }}
           />
-          <TableContainer component={Paper} variant="outlined" sx={{ borderRadius: 3 }}>
-            <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
-              <SortableContext items={songs?.map((s) => s.id) ?? []} strategy={verticalListSortingStrategy}>
-                <Table>
-                  <TableHead>
-                    <TableRow>
-                      <TableCell sx={{ fontWeight: 600, width: 50 }}>
-                        <Checkbox
-                          size="small"
-                          indeterminate={selectedIds.size > 0 && selectedIds.size < filteredSongs.length}
-                          checked={filteredSongs.length > 0 && selectedIds.size === filteredSongs.length}
-                          onChange={handleSelectAll}
-                        />
-                      </TableCell>
-                      <TableCell sx={{ fontWeight: 600, width: 50 }}>{t("playlists:table_hash")}</TableCell>
-                      <TableCell sx={{ fontWeight: 600, width: 40 }} />
-                      <TableCell sx={{ fontWeight: 600, width: 50 }} />
-                      <TableCell sx={{ fontWeight: 600 }}>{t("playlists:table_title")}</TableCell>
-                      <TableCell sx={{ fontWeight: 600 }}>{t("playlists:table_artist")}</TableCell>
-                      <TableCell sx={{ fontWeight: 600 }}>{t("playlists:table_album")}</TableCell>
-                      <TableCell sx={{ fontWeight: 600 }}>{t("playlists:table_duration")}</TableCell>
-                      <TableCell sx={{ fontWeight: 600, width: 50, pr: 4 }} />
-                    </TableRow>
-                  </TableHead>
-                  <TableBody>
+          {isMobile ? (
+            <Box sx={{ display: "flex", flexDirection: "column", gap: 1.5 }}>
+              <Button onClick={handleSelectAll}>{t("common:select_all")}</Button>
+              <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+                <SortableContext items={filteredSongs.map((s) => s.id)} strategy={verticalListSortingStrategy}>
+                  <MobileList>
                     {filteredSongs.length > 0 ? (
                       filteredSongs.map((s) => (
                         <SortablePlaylistSongRow
@@ -401,6 +433,7 @@ export function PlaylistDetailPage() {
                           song={s}
                           selected={selectedIds.has(s.song_id)}
                           onToggleSelect={() => handleSelectOne(s.song_id)}
+                          removeDisabled={removeSong.isPending}
                           onRemove={() =>
                             removeSong.mutate(s.song_id, {
                               onError: (err) => {
@@ -408,33 +441,100 @@ export function PlaylistDetailPage() {
                               },
                             })
                           }
-                          removeDisabled={removeSong.isPending}
                         />
                       ))
                     ) : (
-                      <TableRow>
-                        <TableCell colSpan={9} align="center" sx={{ py: 6, color: "text.secondary", pr: 4 }}>
-                          {t("songs:empty_search")}
-                        </TableCell>
-                      </TableRow>
+                      <Paper
+                        variant="outlined"
+                        sx={{ py: 6, px: 2, textAlign: "center", color: "text.secondary", borderRadius: 3 }}
+                      >
+                        {t("songs:empty_search")}
+                      </Paper>
                     )}
-                  </TableBody>
-                </Table>
-              </SortableContext>
-            </DndContext>
-            <TablePagination
-              component="div"
-              count={songTotal}
-              page={page}
-              onPageChange={(_, newPage) => setPage(newPage)}
-              rowsPerPage={perPage}
-              onRowsPerPageChange={(e) => {
-                setPerPage(parseInt(e.target.value, 10));
-                setPage(0);
-              }}
-              rowsPerPageOptions={[25, 50, 100]}
-            />
-          </TableContainer>
+                  </MobileList>
+                </SortableContext>
+              </DndContext>
+              <TablePagination
+                component="div"
+                count={songTotal}
+                page={page}
+                onPageChange={(_, newPage) => setPage(newPage)}
+                rowsPerPage={perPage}
+                onRowsPerPageChange={(e) => {
+                  setPerPage(parseInt(e.target.value, 10));
+                  setPage(0);
+                }}
+                rowsPerPageOptions={[25, 50, 100]}
+              />
+            </Box>
+          ) : (
+            <TableContainer component={Paper} variant="outlined" sx={{ borderRadius: 3 }}>
+              <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+                <SortableContext items={songs?.map((s) => s.id) ?? []} strategy={verticalListSortingStrategy}>
+                  <Table>
+                    <TableHead>
+                      <TableRow>
+                        <TableCell sx={{ fontWeight: 600, width: 50 }}>
+                          <Checkbox
+                            size="small"
+                            indeterminate={selectedIds.size > 0 && selectedIds.size < filteredSongs.length}
+                            checked={filteredSongs.length > 0 && selectedIds.size === filteredSongs.length}
+                            onChange={handleSelectAll}
+                          />
+                        </TableCell>
+                        <TableCell sx={{ fontWeight: 600, width: 50 }}>{t("playlists:table_hash")}</TableCell>
+                        <TableCell sx={{ fontWeight: 600, width: 40 }} />
+                        <TableCell sx={{ fontWeight: 600, width: 50 }} />
+                        <TableCell sx={{ fontWeight: 600 }}>{t("playlists:table_title")}</TableCell>
+                        <TableCell sx={{ fontWeight: 600 }}>{t("playlists:table_artist")}</TableCell>
+                        <TableCell sx={{ fontWeight: 600 }}>{t("playlists:table_album")}</TableCell>
+                        <TableCell sx={{ fontWeight: 600 }}>{t("playlists:table_duration")}</TableCell>
+                        <TableCell sx={{ fontWeight: 600, width: 50, pr: 4 }} />
+                      </TableRow>
+                    </TableHead>
+                    <TableBody>
+                      {filteredSongs.length > 0 ? (
+                        filteredSongs.map((s) => (
+                          <SortablePlaylistSongRow
+                            key={s.id}
+                            song={s}
+                            selected={selectedIds.has(s.song_id)}
+                            onToggleSelect={() => handleSelectOne(s.song_id)}
+                            onRemove={() =>
+                              removeSong.mutate(s.song_id, {
+                                onError: (err) => {
+                                  reportHttpError(showError, err, "Failed to remove song from playlist");
+                                },
+                              })
+                            }
+                            removeDisabled={removeSong.isPending}
+                          />
+                        ))
+                      ) : (
+                        <TableRow>
+                          <TableCell colSpan={9} align="center" sx={{ py: 6, color: "text.secondary", pr: 4 }}>
+                            {t("songs:empty_search")}
+                          </TableCell>
+                        </TableRow>
+                      )}
+                    </TableBody>
+                  </Table>
+                </SortableContext>
+              </DndContext>
+              <TablePagination
+                component="div"
+                count={songTotal}
+                page={page}
+                onPageChange={(_, newPage) => setPage(newPage)}
+                rowsPerPage={perPage}
+                onRowsPerPageChange={(e) => {
+                  setPerPage(parseInt(e.target.value, 10));
+                  setPage(0);
+                }}
+                rowsPerPageOptions={[25, 50, 100]}
+              />
+            </TableContainer>
+          )}
         </>
       )}
 

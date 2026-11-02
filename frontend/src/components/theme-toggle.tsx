@@ -58,7 +58,12 @@ export function ThemeToggle() {
           sx={{
             border: 1,
             borderColor: "divider",
-            borderRadius: 2,
+            borderRadius: { xs: "50%", sm: 2 },
+            width: { xs: 38, sm: "auto" },
+            height: { xs: 38, sm: "auto" },
+            minWidth: { xs: 38, sm: "auto" },
+            minHeight: { xs: 38, sm: "auto" },
+            flexShrink: 0,
             p: 1,
           }}
         >

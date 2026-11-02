@@ -29,13 +29,13 @@ export function StationHeader({
   const isDemo = useAuth().user?.role === "demo";
 
   return (
-    <Box sx={{ display: "flex", alignItems: "center", gap: 2 }}>
-      <Button onClick={onBack} sx={{ minWidth: 40, p: 1 }} disabled={busy}>
+    <Box sx={{ display: "flex", alignItems: "center", gap: 1.5, flexWrap: "wrap" }}>
+      <Button onClick={onBack} aria-label={t("common:go_back")} sx={{ minWidth: 40, p: 1 }} disabled={busy}>
         <ArrowBack />
       </Button>
-      <Box sx={{ flex: 1 }}>
-        <Box sx={{ display: "flex", alignItems: "center", gap: 1.5 }}>
-          <Typography variant="h4" sx={{ lineHeight: 1.2 }}>
+      <Box sx={{ flex: { xs: "1 1 calc(100% - 80px)", md: 1 }, minWidth: 0 }}>
+        <Box sx={{ display: "flex", alignItems: "center", gap: 1.5, flexWrap: "wrap" }}>
+          <Typography variant="h4" sx={{ lineHeight: 1.2, overflowWrap: "anywhere" }}>
             {station.name}
           </Typography>
           <Chip
