@@ -21,10 +21,8 @@ it.each(["en", "pl"])(
         <Broken />
       </ErrorBoundary>,
     );
-    expect(screen.getByText(language === "pl" ? "Coś poszło nie tak" : "Something went wrong")).toBeInTheDocument();
-    expect(
-      screen.getByText(language === "pl" ? "Wystąpił nieoczekiwany błąd" : "An unexpected error occurred"),
-    ).toBeInTheDocument();
+    expect(screen.getByText(i18n.t("errors:boundary_title"))).toBeInTheDocument();
+    expect(screen.getByText(i18n.t("errors:codes.UNKNOWN"))).toBeInTheDocument();
     expect(screen.queryByText("RAW ENGLISH EXCEPTION")).not.toBeInTheDocument();
   },
 );

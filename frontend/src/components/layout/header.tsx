@@ -69,7 +69,7 @@ export function Header({ onMenuClick }: { onMenuClick?: () => void }) {
         </IconButton>
       )}
       <Box sx={{ flex: 1 }} />
-      <Tooltip title={i18n.language === "pl" ? "Zmień język" : "Change language"}>
+      <Tooltip title={t("language")}>
         <Button
           onClick={(e) => setLangAnchorEl(e.currentTarget)}
           size="small"

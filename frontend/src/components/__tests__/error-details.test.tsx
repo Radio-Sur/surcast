@@ -17,7 +17,7 @@ describe("ErrorDetails", () => {
     await act(async () => {
       await i18n.changeLanguage("pl");
     });
-    expect(screen.getByText("Ta funkcja jest niedostępna w wersji demo")).toBeInTheDocument();
+    expect(screen.getByText(i18n.t("errors:codes.DEMO_RESTRICTED"))).toBeInTheDocument();
     expect(screen.queryByText("Raw server prose")).not.toBeInTheDocument();
     await act(async () => {
       await i18n.changeLanguage("en");
