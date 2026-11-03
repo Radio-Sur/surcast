@@ -205,38 +205,17 @@ async fn sandbox_isolated_configured_and_reset(pool: PgPool) {
         demos.push((user, format!("Bearer {}", login["access_token"].as_str().unwrap())));
     }
     let (user, demo) = &demos[0];
-    // Upgrade legacy generated outputs, but do not overwrite an already
-    // customized sandbox URL when migration 0007 is applied.
-    for (index, (id, _)) in demos.iter().enumerate() {
-        let generation: Uuid = sqlx::query_scalar("SELECT generation FROM demo_sandboxes WHERE user_id=$1")
-            .bind(id.parse::<Uuid>().unwrap())
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-        let value = if index == 0 {
-            format!("surcast-demo-{}.mp3", generation.simple())
-        } else {
-            "custom-demo.mp3".into()
-        };
-        sqlx::query(&format!("UPDATE demo_{}.stations SET stream_url=$1", generation.simple()))
-            .bind(value)
-            .execute(&pool)
-            .await
-            .unwrap();
-    }
-    let mut connection = pool.acquire().await.unwrap();
-    sqlx::Executor::execute(&mut *connection, include_str!("../migrations/0007_restore_demo_stream_urls.sql"))
-        .await
-        .unwrap();
-    drop(connection);
     let other: Vec<Value> = server.get("/api/stations").add_header("Authorization", &demos[1].1).await.json();
-    assert_eq!(other[0]["stream_url"], "custom-demo.mp3");
     let list = server.get("/api/stations").add_header("Authorization", demo).await;
     assert_eq!(list.status_code(), 200, "{}", list.text());
     let list: Vec<Value> = list.json();
     assert_eq!(list.len(), 1);
     let demo_station = list[0]["id"].as_str().unwrap();
     assert_eq!(list[0]["stream_url"], "configured-radio.mp3");
+    let demo_mount = list[0]["output_mount"].as_str().unwrap();
+    assert!(demo_mount.starts_with("demo-"));
+    assert_ne!(demo_mount, "configured-radio.mp3");
+    assert_ne!(list[0]["output_mount"], other[0]["output_mount"]);
     let demo_slug = list[0]["slug"].clone();
     let settings = server.put(&format!("/api/stations/{demo_station}")).add_header("Authorization", demo)
         .json(&json!({"prebuffer_bytes":32768,"played_limit":200,"default_fade_ms":4000,"transition_mode":"crossfade","autocue_fade_max_ms":6000})).await;
@@ -463,6 +442,7 @@ async fn sandbox_isolated_configured_and_reset(pool: PgPool) {
         .await
         .json();
     assert_eq!(restored["stream_url"], "configured-radio.mp3");
+    assert_ne!(restored["output_mount"], list[0]["output_mount"]);
     assert_eq!(restored["prebuffer_bytes"], 16384);
     for resource in ["schedule-events", "schedules"] {
         let items: Vec<Value> = server
@@ -513,8 +493,7 @@ async fn sandbox_isolated_configured_and_reset(pool: PgPool) {
             .unwrap(),
         1
     );
-    // Preparing again preserves the original seed files even when the new
-    // copy uses the same normal filename and the real library has changed.
+    // Replacing a seed retires its audio without touching other sandboxes.
     let old_library: String = sqlx::query_scalar("SELECT seed->>'library_id' FROM demo_sandboxes WHERE user_id=$1")
         .bind(user.parse::<Uuid>().unwrap())
         .fetch_one(&pool)
@@ -532,7 +511,7 @@ async fn sandbox_isolated_configured_and_reset(pool: PgPool) {
         .json(&json!({"station_id":station}))
         .await;
     assert_eq!(prepared.status_code(), 200, "{}", prepared.text());
-    assert_eq!(tokio::fs::read(old_audio).await.unwrap(), b"original-audio");
+    assert!(!old_audio.exists());
     let fresh: Vec<Value> = server.get("/api/songs").add_header("Authorization", demo).await.json();
     assert_eq!(fresh[0]["file_path"], source_path);
     let fresh_id = fresh[0]["id"].as_str().unwrap();

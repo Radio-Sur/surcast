@@ -300,6 +300,12 @@ pub async fn configure(
     Path(user): Path<Uuid>,
     Json(config): Json<Configure>,
 ) -> Result<Json<Value>, AppError> {
+    tokio::spawn(async move { configure_inner(state, user, config).await })
+        .await
+        .map_err(|_| AppError::internal("Sandbox preparation task failed".into()))?
+}
+
+async fn configure_inner(state: AppState, user: Uuid, config: Configure) -> Result<Json<Value>, AppError> {
     ensure_demo(&state.auth_db, user).await?;
     if config.playlist_ids.len() > 100 {
         return Err(AppError::bad_request("Select at most 100 playlists".into()));
@@ -359,39 +365,49 @@ pub async fn configure(
     tokio::fs::create_dir_all(&directory)
         .await
         .map_err(|e| AppError::internal(format!("Create sandbox library: {e}")))?;
-    let source_root = tokio::fs::canonicalize(&state.config.music_dir)
-        .await
-        .map_err(|e| AppError::bad_request(format!("Music directory unavailable: {e}")))?;
-    for song in &mut songs {
-        let original_path = song["file_path"].as_str().unwrap_or_default();
-        let source = crate::songs::handlers::resolve_audio_path(&state.config.music_dir, original_path);
-        let source = tokio::fs::canonicalize(source)
+    let copied: Result<(), AppError> = async {
+        let source_root = tokio::fs::canonicalize(&state.config.music_dir)
             .await
-            .map_err(|e| AppError::bad_request(format!("Source file unavailable: {e}")))?;
-        if !source.starts_with(&source_root) {
-            return Err(AppError::bad_request("Source file is outside the music library".into()));
-        }
-        let relative = if std::path::Path::new(original_path).is_absolute() {
-            source
-                .strip_prefix(&source_root)
-                .map_err(|_| AppError::bad_request("Source file is outside the music library".into()))?
-                .to_string_lossy()
-                .into_owned()
-        } else {
-            crate::songs::files::validate_relative_path(original_path)?
-        };
-        let destination = crate::songs::files::resolve_library_path(&directory.to_string_lossy(), &relative)?;
-        if let Some(parent) = destination.parent() {
-            tokio::fs::create_dir_all(parent)
+            .map_err(|e| AppError::bad_request(format!("Music directory unavailable: {e}")))?;
+        for song in &mut songs {
+            let original_path = song["file_path"].as_str().unwrap_or_default();
+            let source = crate::songs::handlers::resolve_audio_path(&state.config.music_dir, original_path);
+            let source = tokio::fs::canonicalize(source)
                 .await
-                .map_err(|e| AppError::internal(format!("Create sandbox audio folder: {e}")))?;
+                .map_err(|e| AppError::bad_request(format!("Source file unavailable: {e}")))?;
+            if !source.starts_with(&source_root) {
+                return Err(AppError::bad_request("Source file is outside the music library".into()));
+            }
+            let relative = if std::path::Path::new(original_path).is_absolute() {
+                source
+                    .strip_prefix(&source_root)
+                    .map_err(|_| AppError::bad_request("Source file is outside the music library".into()))?
+                    .to_string_lossy()
+                    .into_owned()
+            } else {
+                crate::songs::files::validate_relative_path(original_path)?
+            };
+            let destination = crate::songs::files::resolve_library_path(&directory.to_string_lossy(), &relative)?;
+            if let Some(parent) = destination.parent() {
+                tokio::fs::create_dir_all(parent)
+                    .await
+                    .map_err(|e| AppError::internal(format!("Create sandbox audio folder: {e}")))?;
+            }
+            remap(song, "id", &song_map);
+            tokio::fs::copy(&source, &destination)
+                .await
+                .map_err(|e| AppError::internal(format!("Copy sandbox audio: {e}")))?;
+            song["file_path"] = json!(relative);
+            song["uploaded_by"] = json!(user);
         }
-        remap(song, "id", &song_map);
-        tokio::fs::copy(&source, &destination)
-            .await
-            .map_err(|e| AppError::internal(format!("Copy sandbox audio: {e}")))?;
-        song["file_path"] = json!(relative);
-        song["uploaded_by"] = json!(user);
+        Ok(())
+    }
+    .await;
+    if let Err(error) = copied {
+        if let Err(cleanup) = tokio::fs::remove_dir_all(&directory).await {
+            tracing::warn!(%cleanup, ?directory, "could not remove failed demo audio copy");
+        }
+        return Err(error);
     }
     for station in &mut stations {
         station["id"] = json!(station_id);
@@ -445,10 +461,19 @@ pub async fn configure(
     // uses auth_db, so neither the seed nor the sandbox needs a password hash.
     owner["password_hash"] = json!("!sandbox-no-login");
     let seed = json!({"library_id":library_id,"users":[owner],"songs":songs,"stations":stations,"station_songs":library,"station_queue":queue,"playlists":playlists,"playlist_songs":playlist_songs});
-    let owned = state.clone();
-    tokio::spawn(async move { install(&owned, user, seed).await })
-        .await
-        .map_err(|_| AppError::internal("Sandbox provisioning task failed".into()))??;
+    if let Err(error) = install(&state, user, seed).await {
+        // A post-commit retirement error must not remove the newly published audio.
+        let active: Result<Option<String>, _> = sqlx::query_scalar("SELECT seed->>'library_id' FROM demo_sandboxes WHERE user_id=$1")
+            .bind(user)
+            .fetch_optional(&state.auth_db)
+            .await;
+        if matches!(active, Ok(ref id) if id.as_deref() != Some(&library_id.to_string())) {
+            if let Err(cleanup) = tokio::fs::remove_dir_all(&directory).await {
+                tracing::warn!(%cleanup, ?directory, "could not remove unpublished demo audio");
+            }
+        }
+        return Err(error);
+    }
     status(State(state), Path(user)).await
 }
 
@@ -527,7 +552,7 @@ fn install(
         if role != Some(Role::Demo) {
             return Err(AppError::bad_request("Sandbox requires a demo account".into()));
         }
-        let retired: Option<Uuid> = sqlx::query_scalar("SELECT generation FROM public.demo_sandboxes WHERE user_id=$1")
+        let retired: Option<(Uuid, Value)> = sqlx::query_as("SELECT generation, seed FROM public.demo_sandboxes WHERE user_id=$1")
             .bind(user)
             .fetch_optional(&mut *tx)
             .await
@@ -536,20 +561,10 @@ fn install(
             .execute(format!("CREATE SCHEMA {schema}; SET LOCAL search_path TO {schema}, public").as_str())
             .await
             .db_error("create sandbox schema")?;
-        for migration in [
-            include_str!("../migrations/0001_initial.sql"),
-            include_str!("../migrations/0002_folder_cover_cache.sql"),
-            include_str!("../migrations/0003_drop_user_name.sql"),
-            include_str!("../migrations/0004_only_admin_and_demo_roles.sql"),
-        ] {
-            (&mut *tx).execute(migration).await.db_error("initialize sandbox schema")?;
-        }
-        sqlx::query(&format!(
-            "ALTER TABLE {schema}.station_auto_fill ALTER COLUMN avoid_artist_repeat SET DEFAULT false"
-        ))
-        .execute(&mut *tx)
-        .await
-        .db_error("set sandbox AutoDJ defaults")?;
+        (&mut *tx)
+            .execute(include_str!("../migrations/0001_initial.sql"))
+            .await
+            .db_error("initialize sandbox schema")?;
         for table in [
             "users",
             "songs",
@@ -563,6 +578,7 @@ fn install(
             if table == "stations" {
                 for row in data.as_array_mut().unwrap() {
                     row["slug"] = json!(format!("demo-{}", user.simple()));
+                    row["output_mount"] = json!(format!("demo-{}-{}.mp3", user.simple(), generation.simple()));
                 }
             }
             sqlx::query(&format!(
@@ -573,8 +589,7 @@ fn install(
             .await
             .db_error("populate sandbox")?;
         }
-        // Connection details are copied from the real output service. The
-        // configured station URL is preserved, including for sandbox playback.
+        // Share connection settings, never the production mount.
         sqlx::query(&format!("DELETE FROM {schema}.icecast_settings"))
             .execute(&mut *tx)
             .await
@@ -600,13 +615,23 @@ fn install(
             }
             previous.db.close().await;
         }
-        if let Some(retired) = retired {
+        if let Some((retired, old_seed)) = retired {
             // All admitted REST/WS operations finished, old sockets are cancelled,
             // and committed lifecycle operations were joined through their locks.
             sqlx::query(&format!("DROP SCHEMA IF EXISTS demo_{} CASCADE", retired.simple()))
                 .execute(&state.auth_db)
                 .await
                 .db_error("retire sandbox schema")?;
+            if old_seed["library_id"] != seed["library_id"] {
+                if let Some(library) = old_seed["library_id"].as_str().and_then(|id| Uuid::parse_str(id).ok()) {
+                    let directory = std::path::PathBuf::from(music_dir(state, user)).join(library.to_string());
+                    if let Err(error) = tokio::fs::remove_dir_all(&directory).await {
+                        if error.kind() != std::io::ErrorKind::NotFound {
+                            tracing::warn!(%error, ?directory, "could not remove old demo audio");
+                        }
+                    }
+                }
+            }
         }
         Ok(())
     })
