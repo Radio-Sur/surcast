@@ -7,8 +7,7 @@ CREATE TABLE IF NOT EXISTS users (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     username VARCHAR(255) UNIQUE NOT NULL,
     password_hash TEXT NOT NULL,
-    name VARCHAR(255) NOT NULL,
-    role TEXT NOT NULL DEFAULT 'viewer',
+    role TEXT NOT NULL DEFAULT 'demo' CHECK (role IN ('admin', 'demo')),
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -39,6 +38,7 @@ CREATE TABLE IF NOT EXISTS stations (
     description TEXT NOT NULL DEFAULT '',
     slug VARCHAR(255) NOT NULL DEFAULT '',
     stream_url TEXT,
+    output_mount TEXT,
     current_song_index INTEGER NOT NULL DEFAULT 0,
     current_queue_item_id UUID,
     consumed_queue_item_ids UUID[] NOT NULL DEFAULT '{}',
@@ -57,10 +57,6 @@ CREATE TABLE IF NOT EXISTS stations (
 
 CREATE INDEX IF NOT EXISTS idx_stations_created_by ON stations(created_by);
 CREATE INDEX IF NOT EXISTS idx_stations_slug ON stations(slug);
-
--- Persistent desired lifecycle state (started/stopped); re-applied safely on
--- existing databases. Never the transient pipeline state.
-ALTER TABLE stations ADD COLUMN IF NOT EXISTS is_started BOOLEAN NOT NULL DEFAULT FALSE;
 
 -- ---------------------------------------------------------------
 -- Songs (incl. autocue analysis columns)
@@ -129,6 +125,17 @@ CREATE INDEX IF NOT EXISTS idx_library_files_song ON library_files(song_id);
 CREATE TABLE IF NOT EXISTS library_scan (
     key TEXT PRIMARY KEY,
     last_scan_at TIMESTAMPTZ
+);
+
+-- Cache of the distinct cover art found in each folder, so browsing the
+-- library does not read audio tags on every request. `signature` is derived
+-- from the covered songs' count and latest `updated_at`; a mismatch triggers a
+-- recompute on the next listing.
+CREATE TABLE IF NOT EXISTS folder_cover_cache (
+    folder_path TEXT PRIMARY KEY,
+    signature TEXT NOT NULL,
+    covers UUID[] NOT NULL DEFAULT '{}',
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 -- ---------------------------------------------------------------
@@ -210,7 +217,7 @@ CREATE TABLE IF NOT EXISTS station_auto_fill (
     mode TEXT NOT NULL DEFAULT 'random' CHECK (mode IN ('random', 'sequential', 'reverse')),
     source_type VARCHAR NOT NULL DEFAULT 'station_library',
     source_playlist_id UUID REFERENCES playlists(id) ON DELETE SET NULL,
-    avoid_artist_repeat BOOLEAN NOT NULL DEFAULT true,
+    avoid_artist_repeat BOOLEAN NOT NULL DEFAULT false,
     min_song_gap INTEGER NOT NULL DEFAULT 3,
     songs_ahead INTEGER NOT NULL DEFAULT 4
 );
@@ -247,6 +254,19 @@ CREATE TABLE IF NOT EXISTS station_schedule_events (
 
 CREATE INDEX IF NOT EXISTS idx_schedule_events_station ON station_schedule_events(station_id);
 CREATE INDEX IF NOT EXISTS idx_schedule_events_dates ON station_schedule_events(station_id, start_date);
+
+-- ---------------------------------------------------------------
+-- Demo sandboxes
+-- ---------------------------------------------------------------
+-- The control plane lives in the main database. Each sandbox has a separate
+-- schema and music directory; its seed is immutable until reconfigured.
+CREATE TABLE IF NOT EXISTS demo_sandboxes (
+    user_id UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    generation UUID NOT NULL,
+    seed JSONB NOT NULL,
+    ready BOOLEAN NOT NULL DEFAULT false,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
 
 -- ---------------------------------------------------------------
 -- Icecast (managed, auto-start by default)

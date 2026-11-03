@@ -104,7 +104,7 @@ async fn test_new_station_persists_enabled_auto_dj_defaults(db: PgPool) {
     .await
     .expect("new station must persist its enabled AutoDJ configuration");
 
-    assert_eq!(config, (true, "random".into(), "station_library".into(), None, true, 3, 4,));
+    assert_eq!(config, (true, "random".into(), "station_library".into(), None, false, 3, 4,));
 }
 #[ignore]
 #[sqlx::test(migrations = "./migrations")]
