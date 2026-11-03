@@ -3,6 +3,7 @@
 //! - Reconnect: manual/auto, token invalidation, pause/stop
 //! - Skip/Reload: queue, DB cursor, handover, realign
 //! - Ordering: Gate-based concurrency (replace/reconnect/roll ordering)
+//!
 //! Helpers: `ControllerScenario`, `Harness`, `run_reconnect_test`, `wait_for_db_cursor` (lines 1-950)
 //! Run fast: `cargo test --lib` (364 tests, ~11s, skips 50 real GStreamer)
 //! Run GStreamer: `cargo test --lib -- --ignored` or `cargo nextest run --lib --run-ignored ignored-only`
@@ -242,8 +243,8 @@ type Harness = ControllerHarness;
 #[allow(dead_code)]
 impl ControllerHarness {
     fn new_internal(db: PgPool, pipeline: Arc<RecordingPipeline>, songs: Vec<SongInfo>, initial_idx: usize) -> Self {
-        let (status_tx, _) = broadcast::channel(1);
-        let (queue_tx, _) = broadcast::channel(1);
+        let (status_tx, _) = broadcast::channel(64);
+        let (queue_tx, _) = broadcast::channel(64);
         let station_id = Uuid::new_v4();
         let queue = Arc::new(QueueManager::new(db.clone(), station_id, String::new(), songs, initial_idx));
         let controller = StationController {
@@ -6255,7 +6256,8 @@ async fn runtime_skip_while_paused_preserves_paused_state() {
     run_reconnect_test(async |db| {
         let songs = queued_songs(&["A", "B", "C"]);
         let pipeline = Arc::new(RecordingPipeline::new());
-        let harness = Harness::with_db(db.pool.clone(), pipeline.clone(), songs);
+        let harness = Harness::with_db(db.pool.clone(), pipeline.clone(), songs.clone());
+        seed_station(&db.pool, harness.controller.station_id, Some(songs[0].queue_item_id), &songs).await;
         let (runtime, _events) = harness.into_runtime();
 
         runtime.play().await.expect("play must succeed");

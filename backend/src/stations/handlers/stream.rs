@@ -1035,7 +1035,7 @@ pub async fn stream_skip(
             .map_err(|error| AppError::from_pipeline(&error, "Stream skip failed".to_string()))?;
         Ok(Json(serde_json::json!({ "ok": true, "song_index": streamer.current_song_index() })))
     } else {
-        Err(AppError::not_found("No active stream".to_string()).with_code("STREAM_NOT_PLAYING"))
+        Err(AppError::bad_request("No active stream".to_string()).with_code("STREAM_NOT_PLAYING"))
     }
 }
 
@@ -1068,7 +1068,7 @@ pub async fn stream_pause(
             .map_err(|error| AppError::from_pipeline(&error, "Stream pause failed".to_string()))?;
         Ok(Json(serde_json::json!({ "ok": true })))
     } else {
-        Err(AppError::not_found("No active stream".to_string()).with_code("STREAM_NOT_PLAYING"))
+        Err(AppError::bad_request("No active stream".to_string()).with_code("STREAM_NOT_PLAYING"))
     }
 }
 

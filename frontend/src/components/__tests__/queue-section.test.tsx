@@ -1,3 +1,6 @@
+import { within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { HttpResponse, http } from "msw";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { server } from "@/mocks/server";
 import { QueueSection } from "@/pages/stations/queue-section";
@@ -25,6 +28,46 @@ const baseQueueItem = {
 };
 
 describe("QueueSection", () => {
+  it("waits for bulk deletion and keeps failed selections for retry", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let started = false;
+    server.use(
+      http.delete("/api/stations/s1/queue/q1", async () => {
+        started = true;
+        await gate;
+        return HttpResponse.json({ code: "INTERNAL" }, { status: 500 });
+      }),
+    );
+    render(
+      <QueueSection
+        stationId="s1"
+        queueSections={{ played: [], nowPlaying: null, upcoming: [baseQueueItem] }}
+        streamStatus={null}
+        playing={false}
+        connected={false}
+        elapsed={0}
+        httpSkip={{ isPending: false, mutate: vi.fn() }}
+        reorderQueue={{ isPending: false, mutate: vi.fn() }}
+        removePlaylistFromQueue={{ isPending: false, mutate: vi.fn() }}
+        handleRemoveFromQueue={vi.fn()}
+        handleReAddToQueue={vi.fn()}
+        setQueueAddOpen={vi.fn()}
+      />,
+    );
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("checkbox"));
+    await user.click(screen.getByRole("button", { name: /delete selected/i }));
+    const dialog = screen.getByRole("dialog");
+    await user.click(within(dialog).getByRole("button", { name: /^delete$/i }));
+    await waitFor(() => expect(started).toBe(true));
+    expect(within(dialog).getByRole("button", { name: /^delete$/i })).toBeDisabled();
+    release();
+    await waitFor(() => expect(within(dialog).getByRole("button", { name: /^delete$/i })).toBeEnabled());
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+  });
   it("shows empty state when queue is empty", async () => {
     render(
       <QueueSection

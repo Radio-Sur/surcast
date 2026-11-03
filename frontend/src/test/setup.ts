@@ -40,7 +40,7 @@ Object.defineProperty(window, "localStorage", {
   })(),
 });
 
-class MockWebSocket {
+class MockWebSocket extends EventTarget {
   static instances: MockWebSocket[] = [];
   static OPEN = 1;
   static CONNECTING = 0;
@@ -54,8 +54,12 @@ class MockWebSocket {
   sentCommands: string[] = [];
 
   constructor(public url: string) {
+    super();
     MockWebSocket.instances.push(this);
-    Promise.resolve().then(() => this.onopen?.());
+    Promise.resolve().then(() => {
+      this.onopen?.();
+      this.dispatchEvent(new Event("open"));
+    });
   }
 
   send(data: string) {

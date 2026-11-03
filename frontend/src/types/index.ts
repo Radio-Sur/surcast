@@ -11,6 +11,7 @@ export interface Station {
   description: string;
   slug: string;
   stream_url: string | null;
+  output_mount?: string | null;
   current_song_index: number;
   prebuffer_bytes: number;
   played_limit: number;

@@ -63,7 +63,7 @@ export function useStationDetail(id: string | undefined) {
 
   const icecastHost =
     useAppConfig().data?.icecast_public_url || import.meta.env.VITE_ICECAST_HOST || "http://localhost:8000";
-  const mount = station?.stream_url || (station ? `${station.name}.mp3` : "");
+  const mount = station?.output_mount || station?.stream_url || (station ? `${station.name}.mp3` : "");
   const streamUrl = station
     ? `${icecastHost}/${encodeURIComponent(mount.endsWith(".mp3") ? mount : `${mount}.mp3`)}`
     : "";

@@ -169,6 +169,9 @@ pub async fn start_icecast(State(db): State<PgPool>, State(icecast_manager): Sta
 }
 
 pub async fn stop_icecast(State(icecast_manager): State<IcecastManager>) -> Result<impl IntoResponse, AppError> {
+    if !icecast_manager.is_running().await {
+        return Err(AppError::bad_request("Icecast is not running".into()).with_code("ICECAST_NOT_RUNNING"));
+    }
     match icecast_manager.stop().await {
         Ok(msg) => Ok(Json(json!({ "ok": true, "message": msg }))),
         Err(msg) => Err(AppError::icecast(msg).with_code("ICECAST_ERROR")),

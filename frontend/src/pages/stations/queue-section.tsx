@@ -18,6 +18,7 @@ import { isGroupId, playlistIdFromGroupId } from "@/components/queue";
 import { NowPlaying } from "@/components/queue/now-playing";
 import { ScheduleInfoBanner } from "@/components/schedule/schedule-info-banner";
 import { useSchedules } from "@/hooks/use-schedules";
+import { useRemoveFromQueue, useRemovePlaylistFromQueue } from "@/hooks/use-station-queue";
 import { isHttpError, serverMessage } from "@/lib/is-http-error";
 import { reportHttpError } from "@/lib/report-error";
 import { useSnackbar } from "@/providers/snackbar-provider";
@@ -113,6 +114,9 @@ export function QueueSection(props: QueueSectionProps) {
   } = useSchedules(stationId);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
+  const removeItem = useRemoveFromQueue(stationId);
+  const removeGroup = useRemovePlaylistFromQueue(stationId);
+  const [bulkDeleting, setBulkDeleting] = useState(false);
 
   const handleToggleSelect = useCallback((id: string) => {
     setSelectedIds((prev) => {
@@ -124,27 +128,25 @@ export function QueueSection(props: QueueSectionProps) {
   }, []);
 
   const handleBulkDelete = useCallback(async () => {
-    let failed = 0;
+    setBulkDeleting(true);
+    const failed = new Set<string>();
     for (const id of selectedIds) {
-      if (isGroupId(id)) {
-        removePlaylistFromQueue.mutate(playlistIdFromGroupId(id), {
-          onError: () => {
-            failed++;
-          },
-        });
-      } else {
-        handleRemoveFromQueue(id);
+      try {
+        if (isGroupId(id)) await removeGroup.mutateAsync(playlistIdFromGroupId(id));
+        else await removeItem.mutateAsync(id);
+      } catch {
+        failed.add(id);
       }
     }
 
-    if (failed > 0) {
-      console.error(`${failed} deletion(s) failed`);
-      showSnackbar(t("errors:items_failed", { count: failed }), "error");
+    if (failed.size > 0) {
+      showSnackbar(t("errors:items_failed", { count: failed.size }), "error");
     }
 
-    setSelectedIds(new Set());
-    setBulkDeleteOpen(false);
-  }, [selectedIds, removePlaylistFromQueue, handleRemoveFromQueue, showSnackbar, t]);
+    setSelectedIds(failed);
+    setBulkDeleting(false);
+    setBulkDeleteOpen(failed.size > 0);
+  }, [selectedIds, removeGroup, removeItem, showSnackbar, t]);
 
   const nowPlayingGroup = useNowPlayingGroup(queueSections);
 
@@ -279,15 +281,16 @@ export function QueueSection(props: QueueSectionProps) {
                   size="small"
                   variant="outlined"
                   color="error"
+                  disabled={bulkDeleting}
                   startIcon={<Delete />}
                   onClick={() => setBulkDeleteOpen(true)}
                 >
                   {t("stations:queue_delete_selected")}
                 </Button>
-                <Button size="small" onClick={() => setSelectedIds(new Set())}>
+                <Button size="small" disabled={bulkDeleting} onClick={() => setSelectedIds(new Set())}>
                   {t("common:clear")}
                 </Button>
-                <Dialog open={bulkDeleteOpen} onClose={() => setBulkDeleteOpen(false)}>
+                <Dialog open={bulkDeleteOpen} onClose={() => !bulkDeleting && setBulkDeleteOpen(false)}>
                   <DialogTitle>{t("stations:queue_delete_title", { count: selectedIds.size })}</DialogTitle>
                   <DialogContent>
                     <DialogContentText>
@@ -295,8 +298,10 @@ export function QueueSection(props: QueueSectionProps) {
                     </DialogContentText>
                   </DialogContent>
                   <DialogActions>
-                    <Button onClick={() => setBulkDeleteOpen(false)}>{t("common:cancel")}</Button>
-                    <Button onClick={handleBulkDelete} color="error">
+                    <Button disabled={bulkDeleting} onClick={() => setBulkDeleteOpen(false)}>
+                      {t("common:cancel")}
+                    </Button>
+                    <Button disabled={bulkDeleting} onClick={handleBulkDelete} color="error">
                       {t("common:delete")}
                     </Button>
                   </DialogActions>

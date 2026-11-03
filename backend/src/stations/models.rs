@@ -11,6 +11,7 @@ pub struct Station {
     pub description: String,
     pub slug: String,
     pub stream_url: Option<String>,
+    pub output_mount: Option<String>,
     pub current_song_index: i32,
     pub prebuffer_bytes: i32,
     pub played_limit: i32,
@@ -29,7 +30,9 @@ pub struct Station {
 impl Station {
     /// The Icecast mount point this station streams to.
     pub fn mount(&self) -> String {
-        Self::mount_for(&self.name, self.stream_url.as_deref())
+        self.output_mount
+            .clone()
+            .unwrap_or_else(|| Self::mount_for(&self.name, self.stream_url.as_deref()))
     }
 
     /// Mount point derived from a name + optional stream URL, without a row.
@@ -80,6 +83,7 @@ pub struct StationResponse {
     pub description: String,
     pub slug: String,
     pub stream_url: Option<String>,
+    pub output_mount: Option<String>,
     pub current_song_index: i32,
     pub prebuffer_bytes: i32,
     pub played_limit: i32,
@@ -99,6 +103,7 @@ impl From<Station> for StationResponse {
             description: s.description,
             slug: s.slug,
             stream_url: s.stream_url,
+            output_mount: s.output_mount,
             current_song_index: s.current_song_index,
             prebuffer_bytes: s.prebuffer_bytes,
             played_limit: s.played_limit,
