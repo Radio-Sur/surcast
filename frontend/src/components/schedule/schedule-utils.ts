@@ -1,26 +1,8 @@
-import type { RecurrenceType, ScheduleEvent, ScheduleSourceType } from "@/types";
+import type { ScheduleEvent } from "@/types";
 
-export const DAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
 export const HOURS = Array.from({ length: 24 }, (_, i) => i);
 export const HOUR_HEIGHT = 36;
 export const COLUMN_HEIGHT = HOUR_HEIGHT * 24;
-
-export const SOURCE_TYPE_LABELS: Record<ScheduleSourceType, string> = {
-  playlist: "Playlist",
-  station_library: "Station library",
-  global_library: "Global library",
-  weighted_playlists: "Weighted playlists",
-};
-
-export const RECURRENCE_LABELS: Record<RecurrenceType, string> = {
-  none: "Once",
-  daily: "Daily",
-  every_n_days: "Every N days",
-  weekly: "Weekly",
-  biweekly: "Biweekly",
-  monthly: "Monthly",
-  custom_days: "Custom days",
-};
 
 export function timeToMinutes(t: string) {
   const [h, m] = t.split(":").map(Number);
@@ -58,30 +40,45 @@ export function formatDate(date: Date): string {
 
 export function isDateInRecurrence(event: ScheduleEvent, date: Date): boolean {
   const eventDate = new Date(`${event.start_date}T00:00:00`);
-  if (date < eventDate) return false;
+  const day = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  if (day < eventDate) return false;
   if (event.recurrence_end_date) {
     const end = new Date(`${event.recurrence_end_date}T00:00:00`);
-    if (date > end) return false;
+    if (day > end) return false;
   }
-  const diffDays = Math.floor((date.getTime() - eventDate.getTime()) / (1000 * 60 * 60 * 24));
+  const diffDays =
+    (Date.UTC(day.getFullYear(), day.getMonth(), day.getDate()) -
+      Date.UTC(eventDate.getFullYear(), eventDate.getMonth(), eventDate.getDate())) /
+    86400000;
+  const withinCount = (index: number) => event.recurrence_count == null || index < event.recurrence_count;
   switch (event.recurrence_type) {
     case "none":
       return date.toDateString() === eventDate.toDateString();
     case "daily":
-      return true;
+      return withinCount(diffDays);
     case "every_n_days": {
-      const interval = event.recurrence_interval || 1;
-      return diffDays >= 0 && diffDays % interval === 0;
+      const interval = Math.max(1, event.recurrence_interval ?? 1);
+      return diffDays % interval === 0 && withinCount(diffDays / interval);
     }
     case "weekly":
-      return diffDays >= 0 && diffDays % 7 === 0;
+      return diffDays % 7 === 0 && withinCount(diffDays / 7);
     case "biweekly":
-      return diffDays >= 0 && diffDays % 14 === 0;
+      return diffDays % 14 === 0 && withinCount(diffDays / 14);
     case "monthly":
-      return date.getDate() === eventDate.getDate();
+      return (
+        day.getDate() === eventDate.getDate() &&
+        withinCount((day.getFullYear() - eventDate.getFullYear()) * 12 + day.getMonth() - eventDate.getMonth())
+      );
     case "custom_days": {
       const dayIdx = (date.getDay() + 6) % 7;
-      return event.recurrence_days?.includes(dayIdx) ?? false;
+      const days = new Set(event.recurrence_days ?? []);
+      if (!days.has(dayIdx)) return false;
+      const startDay = (eventDate.getDay() + 6) % 7;
+      let occurrences = Math.floor(diffDays / 7) * days.size;
+      for (let i = 0; i <= diffDays % 7; i++) {
+        if (days.has((startDay + i) % 7)) occurrences++;
+      }
+      return withinCount(occurrences - 1);
     }
     default:
       return false;

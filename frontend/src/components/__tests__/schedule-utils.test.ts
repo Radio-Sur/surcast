@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
   checkTimeOverlap,
-  DAY_NAMES,
   fmtDuration,
   formatDate,
   getEventsForDate,
@@ -9,8 +8,6 @@ import {
   HOURS,
   isDateInRecurrence,
   minutesToTime,
-  RECURRENCE_LABELS,
-  SOURCE_TYPE_LABELS,
   timeToMinutes,
 } from "@/components/schedule/schedule-utils";
 
@@ -117,6 +114,38 @@ describe("isDateInRecurrence", () => {
     const event = { ...baseEvent, recurrence_type: "daily" as const };
     expect(isDateInRecurrence(event, new Date("2025-12-31"))).toBe(false);
   });
+
+  it.each(["daily", "every_n_days", "weekly", "biweekly", "monthly"] as const)(
+    "honors a single occurrence for %s",
+    (recurrence_type) => {
+      const event = { ...baseEvent, recurrence_type, recurrence_count: 1 };
+      expect(isDateInRecurrence(event, new Date(2026, 0, 1, 12))).toBe(true);
+      expect(isDateInRecurrence(event, new Date(2026, 1, 1))).toBe(false);
+    },
+  );
+
+  it("counts calendar days across the spring clock change", () => {
+    const event = {
+      ...baseEvent,
+      start_date: "2026-03-28",
+      recurrence_type: "every_n_days" as const,
+      recurrence_interval: 2,
+    };
+    expect(isDateInRecurrence(event, new Date(2026, 2, 30))).toBe(true);
+    expect(isDateInRecurrence(event, new Date(2026, 2, 29))).toBe(false);
+  });
+
+  it("counts selected weekdays only", () => {
+    const event = {
+      ...baseEvent,
+      start_date: "2026-01-05",
+      recurrence_type: "custom_days" as const,
+      recurrence_days: [0, 2],
+      recurrence_count: 2,
+    };
+    expect(isDateInRecurrence(event, new Date(2026, 0, 7))).toBe(true);
+    expect(isDateInRecurrence(event, new Date(2026, 0, 12))).toBe(false);
+  });
 });
 
 describe("getEventsForDate", () => {
@@ -157,28 +186,7 @@ describe("getEventsForDate", () => {
 });
 
 describe("constants", () => {
-  it("DAY_NAMES has 7 days", () => {
-    expect(DAY_NAMES).toHaveLength(7);
-    expect(DAY_NAMES[0]).toBe("Monday");
-  });
-
   it("HOURS has 24 entries", () => {
     expect(HOURS).toHaveLength(24);
-  });
-
-  it("SOURCE_TYPE_LABELS contains expected keys", () => {
-    const keys = Object.keys(SOURCE_TYPE_LABELS);
-    expect(keys).toContain("playlist");
-    expect(keys).toContain("station_library");
-    expect(keys).toContain("global_library");
-    expect(keys).toContain("weighted_playlists");
-  });
-
-  it("RECURRENCE_LABELS contains expected keys", () => {
-    const keys = Object.keys(RECURRENCE_LABELS);
-    expect(keys).toContain("none");
-    expect(keys).toContain("daily");
-    expect(keys).toContain("weekly");
-    expect(keys).toContain("monthly");
   });
 });

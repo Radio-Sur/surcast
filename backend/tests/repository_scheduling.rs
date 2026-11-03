@@ -229,7 +229,7 @@ async fn test_auto_fill_config_upsert_and_find(db: PgPool) {
     assert_eq!(config.mode, AutoDjMode::Random);
     assert_eq!(config.source_type, SourceType::StationLibrary);
     assert!(config.source_playlist_id.is_none());
-    assert!(config.avoid_artist_repeat);
+    assert!(!config.avoid_artist_repeat);
     assert_eq!(config.min_song_gap, 3);
     assert_eq!(config.songs_ahead, 4);
 

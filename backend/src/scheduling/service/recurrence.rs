@@ -96,7 +96,29 @@ pub fn matches_recurrence(
         RecurrenceType::Weekly => match_weekly(start_date, date, recurrence_count),
         RecurrenceType::Biweekly => match_biweekly(start_date, date, recurrence_count),
         RecurrenceType::Monthly => match_monthly(start_date, date, recurrence_count),
-        RecurrenceType::CustomDays => match_custom_days(date, recurrence_days),
+        RecurrenceType::CustomDays => {
+            if !match_custom_days(date, recurrence_days) {
+                return false;
+            }
+            let Some(max) = recurrence_count else {
+                return true;
+            };
+            let days: std::collections::HashSet<i64> = recurrence_days
+                .unwrap_or("")
+                .split(',')
+                .filter_map(|day| day.trim().parse().ok())
+                .filter(|day| (0..7).contains(day))
+                .collect();
+            let diff = (date - start_date).num_days();
+            let mut occurrences = diff / 7 * days.len() as i64;
+            let first_day = start_date.weekday().num_days_from_monday() as i64;
+            for offset in 0..=diff % 7 {
+                if days.contains(&((first_day + offset) % 7)) {
+                    occurrences += 1;
+                }
+            }
+            occurrences <= max as i64
+        }
     }
 }
 #[cfg(test)]

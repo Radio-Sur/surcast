@@ -62,17 +62,20 @@ fn find_active_schedule(schedules: &[StationScheduleRow], current_day: i16, curr
     let mut best: Option<(i32, &StationScheduleRow)> = None;
 
     for entry in schedules {
-        if entry.day_of_week != current_day {
-            continue;
-        }
-
         let start_seconds = entry.start_time.hour() as i32 * 3600 + entry.start_time.minute() as i32 * 60;
         let end_seconds = entry.end_time.hour() as i32 * 3600 + entry.end_time.minute() as i32 * 60;
 
         let is_active = if end_seconds > start_seconds {
-            current_seconds >= start_seconds && current_seconds < end_seconds
+            entry.day_of_week == current_day && current_seconds >= start_seconds && current_seconds < end_seconds
         } else {
-            current_seconds >= start_seconds || current_seconds < end_seconds
+            (entry.day_of_week == current_day && current_seconds >= start_seconds)
+                || (entry.day_of_week == (current_day + 6) % 7 && current_seconds < end_seconds)
+        };
+
+        let start_seconds = if entry.day_of_week == current_day {
+            start_seconds
+        } else {
+            start_seconds - 86400
         };
 
         if is_active {
@@ -96,6 +99,27 @@ fn find_active_schedule(schedules: &[StationScheduleRow], current_day: i16, curr
         auto_dj_min_gap: entry.auto_dj_min_gap,
         auto_dj_songs_ahead: entry.auto_dj_songs_ahead,
     })
+}
+
+#[cfg(test)]
+#[test]
+fn overnight_schedule_belongs_to_its_start_day() {
+    let schedules = [StationScheduleRow {
+        id: Uuid::new_v4(),
+        day_of_week: 0,
+        start_time: NaiveTime::from_hms_opt(23, 0, 0).unwrap(),
+        end_time: NaiveTime::from_hms_opt(1, 0, 0).unwrap(),
+        source_type: SourceType::GlobalLibrary,
+        playlist_id: None,
+        auto_dj_mode: None,
+        auto_dj_avoid_repeat: None,
+        auto_dj_min_gap: None,
+        auto_dj_songs_ahead: None,
+    }];
+    let midnight = NaiveTime::from_hms_opt(0, 30, 0).unwrap();
+    assert!(find_active_schedule(&schedules, 0, midnight).is_none());
+    assert!(find_active_schedule(&schedules, 1, midnight).is_some());
+    assert!(find_active_schedule(&schedules, 1, NaiveTime::from_hms_opt(1, 0, 0).unwrap()).is_none());
 }
 
 async fn fill_from_schedule_entry_locked(
@@ -207,8 +231,13 @@ pub(crate) async fn fill_queue_from_schedule_locked(connection: &mut PgConnectio
     .db_error("failed to load station events")?;
 
     for event in &events {
+        let occurrence_date = if event.end_time <= event.start_time && current_time < event.end_time {
+            today.pred_opt().unwrap_or(today)
+        } else {
+            today
+        };
         if !self::recurrence::matches_recurrence(
-            today,
+            occurrence_date,
             event.start_date,
             &event.recurrence_type,
             event.recurrence_interval,
