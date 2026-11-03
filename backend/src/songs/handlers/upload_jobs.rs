@@ -4,11 +4,10 @@ use axum::Extension;
 use axum::Json;
 use serde::Serialize;
 use sqlx::PgPool;
-use std::io::Read;
 use uuid::Uuid;
 
 use super::assign::assign_song_to_stations;
-use super::upload_helper::is_audio_file;
+use super::upload_helper::expand_files;
 use crate::auth::middleware::AuthUser;
 use crate::config::Config;
 use crate::errors::{AppError, DbResult};
@@ -83,7 +82,9 @@ pub async fn start_upload(
         return Err(AppError::bad_request("No files provided".into()));
     }
 
-    let entries = expand_files(files)?;
+    let entries = tokio::task::spawn_blocking(move || expand_files(files))
+        .await
+        .map_err(|e| AppError::internal(format!("Archive task failed: {e}")))??;
 
     if entries.is_empty() {
         return Err(AppError::bad_request("No audio files found".into()));
@@ -178,34 +179,6 @@ pub async fn get_upload_job(
         song_ids,
         duplicates,
     }))
-}
-
-fn expand_files(files: Vec<(String, Vec<u8>)>) -> Result<Vec<(String, Vec<u8>)>, AppError> {
-    let mut entries: Vec<(String, Vec<u8>)> = Vec::new();
-
-    for (name, bytes) in files {
-        let is_zip = name.to_lowercase().ends_with(".zip") || (bytes.len() >= 4 && &bytes[..4] == b"PK\x03\x04");
-
-        if is_zip {
-            let cursor = std::io::Cursor::new(bytes);
-            let mut archive = zip::ZipArchive::new(cursor).map_err(|e| AppError::bad_request(format!("Invalid zip archive: {e}")))?;
-
-            for i in 0..archive.len() {
-                let mut entry = archive.by_index(i).db_error("failed to process uploaded file")?;
-                if entry.is_dir() || !is_audio_file(entry.name()) {
-                    continue;
-                }
-                let original_name = entry.name().to_string();
-                let mut entry_bytes = Vec::new();
-                entry.read_to_end(&mut entry_bytes).db_error("failed to process uploaded file")?;
-                entries.push((original_name, entry_bytes));
-            }
-        } else if is_audio_file(&name) {
-            entries.push((name, bytes));
-        }
-    }
-
-    Ok(entries)
 }
 
 async fn create_job(db: &PgPool, user_id: Uuid, total: i32) -> Result<Uuid, AppError> {

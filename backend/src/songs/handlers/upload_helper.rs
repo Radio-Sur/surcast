@@ -2,6 +2,80 @@ use std::path::PathBuf;
 
 use crate::util::normalize_lexically;
 
+pub(super) fn expand_files(files: Vec<(String, Vec<u8>)>) -> Result<Vec<(String, Vec<u8>)>, crate::errors::AppError> {
+    expand_files_bounded(files, 500 * 1024 * 1024, 10_000)
+}
+
+fn expand_files_bounded(
+    files: Vec<(String, Vec<u8>)>,
+    max_bytes: u64,
+    max_entries: usize,
+) -> Result<Vec<(String, Vec<u8>)>, crate::errors::AppError> {
+    use crate::errors::AppError;
+    use std::io::Read;
+    let limit_error = || AppError::bad_request("Archive exceeds the expanded size or entry limit".into()).with_code("INVALID_ARCHIVE");
+    let mut result = Vec::new();
+    let mut total = 0;
+    let mut entries = 0;
+    for (name, bytes) in files {
+        if name.to_lowercase().ends_with(".zip") || bytes.starts_with(b"PK\x03\x04") {
+            let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes))
+                .map_err(|_| AppError::bad_request("Invalid ZIP archive".into()).with_code("INVALID_ARCHIVE"))?;
+            entries += archive.len();
+            if entries > max_entries {
+                return Err(limit_error());
+            }
+            for i in 0..archive.len() {
+                let entry = archive
+                    .by_index(i)
+                    .map_err(|_| AppError::bad_request("Invalid ZIP entry".into()).with_code("INVALID_ARCHIVE"))?;
+                if entry.is_dir() || !is_audio_file(entry.name()) {
+                    continue;
+                }
+                let name = crate::songs::import::sanitize_relative_path(entry.name())?;
+                if entry.size() > max_bytes - total {
+                    return Err(limit_error());
+                }
+                let mut bytes = Vec::new();
+                entry
+                    .take(max_bytes - total + 1)
+                    .read_to_end(&mut bytes)
+                    .map_err(|_| AppError::bad_request("Failed to read ZIP entry".into()).with_code("INVALID_ARCHIVE"))?;
+                total += bytes.len() as u64;
+                if total > max_bytes {
+                    return Err(limit_error());
+                }
+                result.push((name, bytes));
+            }
+        } else {
+            entries += 1;
+            total += bytes.len() as u64;
+            if entries > max_entries || total > max_bytes {
+                return Err(limit_error());
+            }
+            if is_audio_file(&name) {
+                result.push((name, bytes));
+            }
+        }
+    }
+    Ok(result)
+}
+
+#[cfg(test)]
+#[test]
+fn archive_limits_apply_to_expanded_bytes_and_entry_count() {
+    use std::io::Write;
+    let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    for name in ["a.mp3", "b.mp3"] {
+        zip.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
+        zip.write_all(&[0; 32]).unwrap();
+    }
+    let bytes = zip.finish().unwrap().into_inner();
+    assert!(expand_files_bounded(vec![("audio.zip".into(), bytes.clone())], 63, 2).is_err());
+    assert!(expand_files_bounded(vec![("audio.zip".into(), bytes.clone())], 64, 1).is_err());
+    assert_eq!(expand_files_bounded(vec![("audio.zip".into(), bytes)], 64, 2).unwrap().len(), 2);
+}
+
 /// Resolves a library-relative path (possibly with subfolders) against the
 /// music directory. Absolute paths pass through (legacy escape hatch).
 pub(crate) fn resolve_audio_path(music_dir: &str, filename: &str) -> String {

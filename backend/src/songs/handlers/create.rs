@@ -4,14 +4,12 @@ use axum::Extension;
 use axum::Json;
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
-use std::io::Read;
 use uuid::Uuid;
 
 use super::assign::assign_song_to_stations;
-use super::upload_helper::is_audio_file;
 use crate::auth::middleware::AuthUser;
 use crate::config::Config;
-use crate::errors::{AppError, DbResult};
+use crate::errors::AppError;
 use crate::songs::import::{store_upload_bytes, DuplicateInfo, ImportOrigin, ImportOutcome, ImportRequest};
 use crate::songs::models::*;
 use crate::songs::repository;
@@ -217,26 +215,9 @@ pub async fn upload_zip(
             .collect();
     }
 
-    let cursor = std::io::Cursor::new(bytes);
-    let mut archive = zip::ZipArchive::new(cursor).map_err(|e| AppError::bad_request(format!("Invalid zip archive: {e}")))?;
-
-    let entries: Vec<(String, Vec<u8>)> = {
-        let mut result = Vec::new();
-        for i in 0..archive.len() {
-            let mut entry = archive.by_index(i).db_error("failed to process uploaded file")?;
-
-            if entry.is_dir() || !is_audio_file(entry.name()) {
-                continue;
-            }
-
-            let original_name = entry.name().to_string();
-            let mut entry_bytes = Vec::new();
-            entry.read_to_end(&mut entry_bytes).db_error("failed to process uploaded file")?;
-
-            result.push((original_name, entry_bytes));
-        }
-        result
-    };
+    let entries = tokio::task::spawn_blocking(move || super::upload_helper::expand_files(vec![("upload.zip".into(), bytes)]))
+        .await
+        .map_err(|e| AppError::internal(format!("Archive task failed: {e}")))??;
 
     if entries.is_empty() {
         return Err(AppError::bad_request("No audio files found in archive".into()));

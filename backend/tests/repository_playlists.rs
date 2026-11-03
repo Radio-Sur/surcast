@@ -39,6 +39,41 @@ async fn make_song(db: &PgPool, user_id: Uuid) -> Uuid {
 }
 
 #[sqlx::test(migrations = "./migrations")]
+async fn page_reorder_preserves_other_positions_and_rejects_invalid_ids(db: PgPool) {
+    let user = make_user(&db).await;
+    let playlist = Uuid::new_v4();
+    repository::insert_playlist(&db, playlist, "Reorder", "", "reorder", user)
+        .await
+        .unwrap();
+    let mut songs = Vec::new();
+    for _ in 0..4 {
+        songs.push(make_song(&db, user).await);
+    }
+    let mut tx = db.begin().await.unwrap();
+    for (position, song) in songs.iter().enumerate() {
+        repository::insert_playlist_song(&mut tx, playlist, *song, position as i32)
+            .await
+            .unwrap();
+    }
+    repository::reorder_playlist_songs(&mut tx, playlist, &[songs[3], songs[2]])
+        .await
+        .unwrap();
+    let order: Vec<Uuid> = sqlx::query_scalar("SELECT song_id FROM playlist_songs WHERE playlist_id=$1 ORDER BY position")
+        .bind(playlist)
+        .fetch_all(&mut *tx)
+        .await
+        .unwrap();
+    assert_eq!(order, [songs[0], songs[1], songs[3], songs[2]]);
+    assert!(repository::reorder_playlist_songs(&mut tx, playlist, &[songs[0], songs[0]])
+        .await
+        .is_err());
+    assert!(repository::reorder_playlist_songs(&mut tx, playlist, &[Uuid::new_v4()])
+        .await
+        .is_err());
+    tx.commit().await.unwrap();
+}
+
+#[sqlx::test(migrations = "./migrations")]
 async fn test_insert_and_find_playlist(db: PgPool) {
     let user_id = make_user(&db).await;
     let id = Uuid::new_v4();

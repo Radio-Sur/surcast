@@ -103,6 +103,34 @@ async fn insert_song(pool: &PgPool, id: Uuid, file_path: &str, has_cover: bool) 
 }
 
 #[sqlx::test(migrations = "./migrations")]
+async fn a_database_failure_during_move_preserves_audio_and_paths(pool: PgPool) {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::write(root.path().join("original.mp3"), b"audio").unwrap();
+    let song = Uuid::new_v4();
+    insert_song(&pool, song, "original.mp3", false).await;
+    surcast_backend::songs::repository::upsert_library_file(&pool, "original.mp3", Some(song), None, 5, 0)
+        .await
+        .unwrap();
+    sqlx::query("ALTER TABLE library_files ADD CONSTRAINT reject_move CHECK (path <> 'moved.mp3')")
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert!(
+        surcast_backend::songs::files::move_entry(&pool, root.path().to_str().unwrap(), "original.mp3", "moved.mp3")
+            .await
+            .is_err()
+    );
+    assert_eq!(std::fs::read(root.path().join("original.mp3")).unwrap(), b"audio");
+    assert!(!root.path().join("moved.mp3").exists());
+    let path: String = sqlx::query_scalar("SELECT file_path FROM songs WHERE id=$1")
+        .bind(song)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(path, "original.mp3");
+}
+
+#[sqlx::test(migrations = "./migrations")]
 async fn test_list_and_create_folders(pool: PgPool) {
     let (server, token, music_dir, _db) = setup(pool).await;
 

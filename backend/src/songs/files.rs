@@ -140,6 +140,19 @@ pub fn validate_relative_path(rel: &str) -> Result<String, AppError> {
 pub fn resolve_library_path(music_dir: &str, rel: &str) -> Result<PathBuf, AppError> {
     let rel = validate_relative_path(rel)?;
     let base = normalize_lexically(Path::new(music_dir));
+    // shortcut: external writers must not swap directories during requests; use no-follow directory handles for hostile filesystem access.
+    let mut current = base.clone();
+    for component in Path::new(&rel).components() {
+        current.push(component);
+        match std::fs::symlink_metadata(&current) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                return Err(AppError::bad_request("Symlinks are not allowed in library paths".into()));
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => break,
+            Err(error) => return Err(AppError::internal(format!("Failed to inspect library path: {error}"))),
+        }
+    }
     let joined = if rel.is_empty() {
         base.clone()
     } else {
@@ -532,14 +545,19 @@ pub async fn move_entry(db: &PgPool, music_dir: &str, from: &str, to: &str) -> R
             .await
             .map_err(|e| AppError::internal(format!("Failed to prepare destination: {e}")))?;
     }
+    let mut tx = db.begin().await.db_error("begin file move")?;
+    repository::move_song_paths(&mut tx, &from, &to).await?;
+    repository::move_library_file_paths(&mut tx, &from, &to).await?;
     tokio::fs::rename(&source, &destination)
         .await
         .map_err(|e| AppError::internal(format!("Failed to move entry: {e}")))?;
 
-    // Database paths follow the file. A file has no children, so the same
-    // prefix-based helpers work for both files and folders.
-    repository::move_song_paths(db, &from, &to).await?;
-    repository::move_library_file_paths(db, &from, &to).await?;
+    if let Err(error) = tx.commit().await {
+        if let Err(rollback) = tokio::fs::rename(&destination, &source).await {
+            tracing::error!(%rollback, ?source, ?destination, "failed to restore file after database commit failure");
+        }
+        return Err(AppError::internal(format!("Failed to commit file move: {error}")));
+    }
     Ok(())
 }
 

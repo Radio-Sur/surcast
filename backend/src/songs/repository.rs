@@ -234,6 +234,17 @@ pub async fn find_station_ids_for_song(db: &PgPool, song_id: Uuid) -> Result<Vec
         .db_error("failed to query station IDs for songs")
 }
 
+pub async fn find_station_ids_for_songs(db: &PgPool, song_ids: &[Uuid]) -> Result<std::collections::HashMap<Uuid, Vec<Uuid>>, AppError> {
+    let rows: Vec<(Uuid, Vec<Uuid>)> = sqlx::query_as(
+        "SELECT song_id, array_agg(station_id ORDER BY station_id) FROM station_songs WHERE song_id=ANY($1) GROUP BY song_id",
+    )
+    .bind(song_ids)
+    .fetch_all(db)
+    .await
+    .db_error("failed to load song stations")?;
+    Ok(rows.into_iter().collect())
+}
+
 pub struct InsertSongParams {
     pub id: Uuid,
     pub title: String,
@@ -674,7 +685,7 @@ pub async fn find_all_missing_songs(db: &PgPool) -> Result<Vec<Song>, AppError> 
 
 /// Rewrites song paths after a move/rename: `$1` and everything under it are
 /// re-rooted at `$2`.
-pub async fn move_song_paths(db: &PgPool, from: &str, to: &str) -> Result<u64, AppError> {
+pub async fn move_song_paths(db: &mut sqlx::PgConnection, from: &str, to: &str) -> Result<u64, AppError> {
     let result = sqlx::query(
         "UPDATE songs
          SET file_path = $2 || substring(file_path from char_length($1) + 1), updated_at = NOW()
@@ -691,14 +702,14 @@ pub async fn move_song_paths(db: &PgPool, from: &str, to: &str) -> Result<u64, A
 /// Same as [`move_song_paths`] for the scanner's tracking table. Stale rows at
 /// the destination (a path that no longer exists on disk) are dropped first so
 /// the primary-key update cannot collide.
-pub async fn move_library_file_paths(db: &PgPool, from: &str, to: &str) -> Result<u64, AppError> {
+pub async fn move_library_file_paths(db: &mut sqlx::PgConnection, from: &str, to: &str) -> Result<u64, AppError> {
     sqlx::query(
         "DELETE FROM library_files
          WHERE path = $2 OR left(path, char_length($2) + 1) = $2 || '/'",
     )
     .bind(from)
     .bind(to)
-    .execute(db)
+    .execute(&mut *db)
     .await
     .db_error("failed to clear stale library paths")?;
 

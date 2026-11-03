@@ -66,7 +66,7 @@ mod tests {
 
     #[test]
     fn test_url_encode_unicode() {
-        assert_eq!(url_encode("zażółć"), "za%C5%BC%C3%B3%C5%82%C4%87");
+        assert_eq!(url_encode("é日本"), "%C3%A9%E6%97%A5%E6%9C%AC");
     }
 
     #[test]

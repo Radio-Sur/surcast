@@ -5,21 +5,21 @@ use axum::Json;
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use super::upload_helper::resolve_audio_path;
-
 /// Unlinks a song's audio file only when no other song row still references
 /// it (files are shared on forced duplicates). Also drops the scanner
 /// tracking row.
-async fn unlink_song_files(db: &PgPool, config: &Config, song: &crate::songs::models::Song) {
-    if repository::count_songs_with_file_path(db, &song.file_path, song.id)
-        .await
-        .unwrap_or(1)
-        == 0
-    {
-        let song_path = resolve_audio_path(&config.music_dir, &song.file_path);
-        let _ = tokio::fs::remove_file(&song_path).await;
+async fn unlink_song_files(db: &PgPool, config: &Config, song: &crate::songs::models::Song) -> Result<(), AppError> {
+    if repository::count_songs_with_file_path(db, &song.file_path, song.id).await? > 0 {
+        return Ok(());
     }
-    let _ = repository::delete_library_file(db, &song.file_path).await;
+    let song_path = crate::songs::import::resolve_music_path(&config.music_dir, &song.file_path)?;
+    match tokio::fs::remove_file(&song_path).await {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(AppError::internal(format!("Failed to delete audio file: {error}"))),
+    }
+    repository::delete_library_file(db, &song.file_path).await?;
+    Ok(())
 }
 use crate::api::StreamersMap;
 use crate::auth::middleware::AuthUser;
@@ -34,18 +34,19 @@ use std::sync::Arc;
 pub async fn list_songs(Extension(_auth_user): Extension<AuthUser>, State(db): State<PgPool>) -> Result<Json<Vec<SongResponse>>, AppError> {
     let songs = repository::find_all_songs(&db).await?;
 
-    let mut results = Vec::new();
-    for song in songs {
-        let station_ids: Vec<Uuid> = repository::find_station_ids_for_song(&db, song.id)
-            .await?
-            .into_iter()
-            .map(|r| r.0)
-            .collect();
+    Ok(Json(with_stations(&db, songs).await?))
+}
 
-        results.push(SongResponse::from((song, station_ids)));
-    }
-
-    Ok(Json(results))
+async fn with_stations(db: &PgPool, songs: Vec<Song>) -> Result<Vec<SongResponse>, AppError> {
+    let ids: Vec<Uuid> = songs.iter().map(|song| song.id).collect();
+    let mut stations = repository::find_station_ids_for_songs(db, &ids).await?;
+    Ok(songs
+        .into_iter()
+        .map(|song| {
+            let ids = stations.remove(&song.id).unwrap_or_default();
+            SongResponse::from((song, ids))
+        })
+        .collect())
 }
 
 /// Lazy library scan: imports files dropped into the music directory
@@ -82,15 +83,7 @@ pub async fn search_songs(
 
     let total = repository::count_songs_search(&db, params.q.as_deref(), params.artist.as_deref(), params.album.as_deref()).await?;
 
-    let mut results = Vec::new();
-    for song in songs {
-        let station_ids: Vec<Uuid> = repository::find_station_ids_for_song(&db, song.id)
-            .await?
-            .into_iter()
-            .map(|r| r.0)
-            .collect();
-        results.push(SongResponse::from((song, station_ids)));
-    }
+    let results = with_stations(&db, songs).await?;
 
     Ok(Json(PaginatedSongs {
         songs: results,
@@ -200,10 +193,10 @@ pub async fn delete_song(
     // concurrent enqueue cannot slip a queue row past the returned set.
     let affected = repository::delete_song_globally(&db, id).await?;
 
-    unlink_song_files(&db, &config, &song).await;
+    let cleanup = unlink_song_files(&db, &config, &song).await;
 
     sync_station_queues(&db, &streamers, &lifecycle, &config.music_dir, affected, true).await?;
-
+    cleanup?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -225,11 +218,14 @@ pub async fn delete_songs_batch(
     // come from the actually deleted rows, deduplicated by DISTINCT.
     let affected = repository::delete_songs_globally(&db, &req.ids).await?;
 
+    let mut cleanup = Ok(());
     for song in &songs {
-        unlink_song_files(&db, &config, song).await;
+        if let Err(error) = unlink_song_files(&db, &config, song).await {
+            cleanup = Err(error);
+        }
     }
 
     sync_station_queues(&db, &streamers, &lifecycle, &config.music_dir, affected, true).await?;
-
+    cleanup?;
     Ok(StatusCode::NO_CONTENT)
 }

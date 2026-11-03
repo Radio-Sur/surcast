@@ -152,9 +152,21 @@ pub async fn move_entry(
     Extension(_auth_user): Extension<AuthUser>,
     State(db): State<PgPool>,
     State(config): State<Config>,
+    State(streamers): State<StreamersMap>,
+    State(lifecycle): State<Arc<StationLifecycleLocks>>,
     Json(req): Json<MoveRequest>,
 ) -> Result<StatusCode, AppError> {
     files::move_entry(&db, &config.music_dir, &req.from, &req.to).await?;
+    let stations = crate::stations::repository::find_all_station_ids(&db).await?;
+    sync_station_queues(
+        &db,
+        &streamers,
+        &lifecycle,
+        &config.music_dir,
+        stations.into_iter().map(|row| row.0),
+        true,
+    )
+    .await?;
     Ok(StatusCode::NO_CONTENT)
 }
 

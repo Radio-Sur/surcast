@@ -9,10 +9,7 @@ use surcast_backend::icecast::IcecastManager;
 use surcast_backend::listeners::ListenersState;
 
 pub fn test_config() -> Config {
-    // Every test app gets its own music directory: uploads land under
-    // original filenames now, so a shared dir would leak files (and
-    // duplicate detections) across tests. Leaked on purpose — the OS
-    // reclaims temp dirs; hermetic tests matter more.
+    // Keep each app's files isolated for its full lifetime.
     let music_base = tempfile::tempdir().expect("test music dir");
     let music_dir = music_base.path().join("music").to_string_lossy().to_string();
     std::mem::forget(music_base);
@@ -35,7 +32,7 @@ pub fn create_test_app(pool: PgPool) -> Router {
 }
 
 pub fn create_test_app_with_config(pool: PgPool, config: Config) -> Router {
-    let icecast_manager = IcecastManager::new(std::path::PathBuf::from("../.icecast"));
+    let icecast_manager = IcecastManager::new(std::path::Path::new(&config.music_dir).join(".icecast-test"));
     let listeners = ListenersState::new();
     let lifecycle = Arc::new(surcast_backend::stations::handlers::stream::StationLifecycleLocks::default());
     router::create_router(

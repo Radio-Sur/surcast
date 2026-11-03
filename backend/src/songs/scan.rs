@@ -138,11 +138,10 @@ pub async fn scan_library(db: &PgPool, music_dir: &str, lastfm_api_key: Option<&
         .into_iter()
         .map(|row| (row.path.clone(), row))
         .collect();
-    let mut seen_paths: HashSet<&str> = HashSet::new();
+    let seen_paths: HashSet<&str> = disk.iter().map(|file| file.relative_path.as_str()).collect();
     let stable_before = now_unix() - SCAN_STABLE_SECS as i64;
 
     for file in &disk {
-        seen_paths.insert(file.relative_path.as_str());
         match known.get(&file.relative_path) {
             // Known path, untouched: nothing to do (clears a stale missing
             // flag — the file is provably back).

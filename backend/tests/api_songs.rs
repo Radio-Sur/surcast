@@ -47,7 +47,7 @@ async fn create_song(server: &TestServer, token: &str) -> (Uuid, String) {
         .await;
     assert_eq!(resp.status_code(), 201);
     let body = resp.json::<serde_json::Value>();
-    assert_eq!(body["created"].as_bool().unwrap(), true);
+    assert!(body["created"].as_bool().unwrap());
     assert!(body["duplicate"].is_null());
     let song = &body["song"];
     let song_id: Uuid = song["id"].as_str().unwrap().parse().unwrap();
@@ -75,7 +75,7 @@ async fn test_upload_song_multipart_returns_201(pool: PgPool) {
         .await;
     assert_eq!(resp.status_code(), 201);
     let body = resp.json::<serde_json::Value>();
-    assert_eq!(body["created"].as_bool().unwrap(), true);
+    assert!(body["created"].as_bool().unwrap());
     let song = &body["song"];
     assert_eq!(song["title"].as_str().unwrap(), "Uploaded Song");
     assert_eq!(song["artist"].as_str().unwrap(), "Uploaded Artist");
@@ -255,21 +255,21 @@ async fn test_upload_duplicate_reports_existing_and_confirms(pool: PgPool) {
 
     let (status, first) = upload_named(&server, &token, "first.mp3", b"identical song bytes".to_vec(), false).await;
     assert_eq!(status, 201);
-    assert_eq!(first["created"].as_bool().unwrap(), true);
+    assert!(first["created"].as_bool().unwrap());
     let first_id = first["song"]["id"].as_str().unwrap().to_string();
     assert_eq!(first["song"]["file_path"].as_str().unwrap(), "first.mp3");
 
     // Same content under another name: no second row, duplicate reported.
     let (status, dup) = upload_named(&server, &token, "second.mp3", b"identical song bytes".to_vec(), false).await;
     assert_eq!(status, 200);
-    assert_eq!(dup["created"].as_bool().unwrap(), false);
+    assert!(!dup["created"].as_bool().unwrap());
     assert_eq!(dup["duplicate"]["song_id"].as_str().unwrap(), first_id);
     assert_eq!(dup["duplicate"]["file_path"].as_str().unwrap(), "first.mp3");
 
     // Confirmed: forces a second row sharing the file content.
     let (status, forced) = upload_named(&server, &token, "second.mp3", b"identical song bytes".to_vec(), true).await;
     assert_eq!(status, 201);
-    assert_eq!(forced["created"].as_bool().unwrap(), true);
+    assert!(forced["created"].as_bool().unwrap());
     assert_ne!(forced["song"]["id"].as_str().unwrap(), first_id);
 }
 
@@ -288,7 +288,7 @@ async fn test_scan_imports_dropped_files(pool: PgPool) {
         .await;
     assert_eq!(resp.status_code(), 200);
     let report = resp.json::<serde_json::Value>();
-    assert_eq!(report["throttled"].as_bool().unwrap(), false);
+    assert!(!report["throttled"].as_bool().unwrap());
     assert_eq!(report["added"].as_i64().unwrap(), 2);
 
     let list = server
@@ -309,7 +309,7 @@ async fn test_scan_imports_dropped_files(pool: PgPool) {
         .add_header("Authorization", &format!("Bearer {token}"))
         .await
         .json::<serde_json::Value>();
-    assert_eq!(report["throttled"].as_bool().unwrap(), true);
+    assert!(report["throttled"].as_bool().unwrap());
 }
 
 #[sqlx::test(migrations = "./migrations")]
@@ -398,6 +398,37 @@ async fn test_scan_detects_rename_deletion_and_restore(pool: PgPool) {
 }
 
 const COVER_BASE64: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Zl1sAAAAASUVORK5CYII=";
+
+#[sqlx::test(migrations = "./migrations")]
+async fn scanning_a_copy_before_the_original_keeps_the_original_path(pool: PgPool) {
+    let (server, token, music_dir, db) = setup_auth_with_music(pool).await;
+    std::fs::create_dir_all(format!("{music_dir}/nested")).unwrap();
+    std::fs::write(format!("{music_dir}/nested/original.mp3"), b"copied-audio").unwrap();
+    stabilize_tree(&music_dir);
+    let auth = format!("Bearer {token}");
+    server
+        .post("/api/songs/scan")
+        .add_header("Authorization", &auth)
+        .await
+        .assert_status_ok();
+    std::fs::copy(format!("{music_dir}/nested/original.mp3"), format!("{music_dir}/copy.mp3")).unwrap();
+    stabilize_tree(&music_dir);
+    reset_scan_throttle(&db).await;
+    let report = server
+        .post("/api/songs/scan")
+        .add_header("Authorization", &auth)
+        .await
+        .json::<serde_json::Value>();
+    assert_eq!(report["renamed"], 0);
+    assert_eq!(report["skipped_duplicates"], 1);
+    let songs = server
+        .get("/api/songs")
+        .add_header("Authorization", &auth)
+        .await
+        .json::<Vec<serde_json::Value>>();
+    assert_eq!(songs.len(), 1);
+    assert_eq!(songs[0]["file_path"], "nested/original.mp3");
+}
 
 fn cover_bytes() -> Vec<u8> {
     base64::engine::general_purpose::STANDARD.decode(COVER_BASE64).unwrap()

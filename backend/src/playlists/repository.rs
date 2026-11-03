@@ -245,9 +245,22 @@ pub async fn delete_playlist_songs_batch(conn: &mut PgConnection, playlist_id: U
 }
 
 pub async fn reorder_playlist_songs(conn: &mut PgConnection, playlist_id: Uuid, song_ids: &[Uuid]) -> Result<(), AppError> {
-    for (i, &song_id) in song_ids.iter().enumerate() {
+    if song_ids.iter().collect::<std::collections::HashSet<_>>().len() != song_ids.len() {
+        return Err(AppError::bad_request("Duplicate song IDs in reorder".into()));
+    }
+    let positions: Vec<i32> =
+        sqlx::query_scalar("SELECT position FROM playlist_songs WHERE playlist_id=$1 AND song_id=ANY($2) ORDER BY position FOR UPDATE")
+            .bind(playlist_id)
+            .bind(song_ids)
+            .fetch_all(&mut *conn)
+            .await
+            .db_error("lock playlist positions")?;
+    if positions.len() != song_ids.len() {
+        return Err(AppError::bad_request("Reordered songs must belong to the playlist".into()));
+    }
+    for (&position, &song_id) in positions.iter().zip(song_ids) {
         sqlx::query("UPDATE playlist_songs SET position = $1 WHERE playlist_id = $2 AND song_id = $3")
-            .bind(i as i32)
+            .bind(position)
             .bind(playlist_id)
             .bind(song_id)
             .execute(&mut *conn)

@@ -11,7 +11,6 @@ use crate::songs::handlers::{is_audio_file, mime_from_ext};
 use crate::songs::models::SongOrigin;
 use crate::songs::repository;
 use crate::songs::upload::{enrich_from_external, resolve_song_metadata, sanitize_metadata};
-use crate::util::normalize_lexically;
 
 /// How the song file reached the music directory.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -64,15 +63,7 @@ pub enum ImportOutcome {
 /// Resolves a library-relative path against the music directory. Rejects
 /// absolute paths and anything escaping the directory (`..`).
 pub fn resolve_music_path(music_dir: &str, relative_path: &str) -> Result<String, AppError> {
-    let base = normalize_lexically(&PathBuf::from(music_dir));
-    let joined = normalize_lexically(&base.join(relative_path));
-    let base_str = base.to_string_lossy();
-    let joined_str = joined.to_string_lossy();
-    if joined_str == base_str || joined_str.starts_with(&format!("{base_str}/")) {
-        Ok(joined_str.into_owned())
-    } else {
-        Err(AppError::bad_request(format!("Path escapes the music directory: {relative_path}")))
-    }
+    crate::songs::files::resolve_library_path(music_dir, relative_path).map(|path| path.to_string_lossy().into_owned())
 }
 
 /// Sanitizes one path component: no separators, no NUL, never `.`/`..`.
@@ -82,7 +73,11 @@ fn sanitize_component(component: &str) -> String {
     if cleaned.is_empty() || cleaned == "." || cleaned == ".." {
         "untitled".to_string()
     } else if cleaned.len() > 200 {
-        cleaned[..200].to_string()
+        let mut end = 200;
+        while !cleaned.is_char_boundary(end) {
+            end -= 1;
+        }
+        cleaned[..end].to_string()
     } else {
         cleaned
     }
@@ -124,10 +119,29 @@ pub async fn store_upload_bytes(music_dir: &str, original_name: &str, bytes: &[u
     let mut counter = 1u32;
     loop {
         let full = resolve_music_path(music_dir, &candidate)?;
-        match tokio::fs::read(&full).await {
-            Err(_) => break,
-            Ok(existing) => {
-                if hex::encode(Sha256::digest(&existing)) == new_hash {
+        if let Some(parent) = PathBuf::from(&full).parent() {
+            tokio::fs::create_dir_all(parent)
+                .await
+                .map_err(|e| AppError::internal(format!("Failed to prepare music directory: {e}")))?;
+        }
+        match tokio::fs::OpenOptions::new().write(true).create_new(true).open(&full).await {
+            Ok(mut file) => {
+                use tokio::io::AsyncWriteExt;
+                let written = async {
+                    file.write_all(bytes).await?;
+                    file.flush().await
+                }
+                .await;
+                if let Err(error) = written {
+                    if let Err(cleanup) = tokio::fs::remove_file(&full).await {
+                        tracing::error!(%cleanup, %full, "failed to remove incomplete upload");
+                    }
+                    return Err(AppError::internal(format!("Failed to save uploaded file: {error}")));
+                }
+                return Ok(candidate);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                if sha256_file(&full).await? == new_hash {
                     return Ok(candidate);
                 }
                 counter += 1;
@@ -136,19 +150,9 @@ pub async fn store_upload_bytes(music_dir: &str, original_name: &str, bytes: &[u
                 }
                 candidate = suffixed_name(&relative, counter);
             }
+            Err(error) => return Err(AppError::internal(format!("Failed to save uploaded file: {error}"))),
         }
     }
-
-    let full = resolve_music_path(music_dir, &candidate)?;
-    if let Some(parent) = PathBuf::from(&full).parent() {
-        tokio::fs::create_dir_all(parent)
-            .await
-            .map_err(|e| AppError::internal(format!("Failed to prepare music directory: {e}")))?;
-    }
-    tokio::fs::write(&full, bytes)
-        .await
-        .map_err(|e| AppError::internal(format!("Failed to save uploaded file: {e}")))?;
-    Ok(candidate)
 }
 
 fn suffixed_name(relative: &str, counter: u32) -> String {

@@ -56,8 +56,6 @@ const TEST_SEPARATOR: &str = "_test_";
 /// Prefix of the current fixed-length format (Surcast test DataBase v2).
 const NEW_PREFIX: &str = "scdb2_";
 
-/// Prefix for the template database used to speed up per-test creation.
-
 // Fixed field widths of the current format. The total budget is
 // `NEW_PREFIX (6) + fingerprint (16) + 1 + timestamp (10) + 1 + pid (8) + 1
 // + random (16) = 59` ASCII bytes, independent of the base database name.
