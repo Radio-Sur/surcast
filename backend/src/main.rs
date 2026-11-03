@@ -14,7 +14,9 @@ use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
 async fn main() {
-    let _ = dotenvy::from_path("../.env");
+    // .env is the local source of truth; without the override, a stale
+    // exported JWT_SECRET silently wins and fails validation.
+    let _ = dotenvy::dotenv_override();
 
     // Console shows info+ by default; debug stays opt-in via RUST_LOG
     // (e.g. RUST_LOG=surcast_backend=debug,tower_http=debug).

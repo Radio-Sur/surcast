@@ -4,10 +4,8 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_USER: surcast
-      POSTGRES_PASSWORD: surcast
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD to a random hex password}
       POSTGRES_DB: surcast
-    ports:
-      - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     networks:
@@ -26,7 +24,7 @@ services:
     restart: unless-stopped
     env_file: .env
     environment:
-      DATABASE_URL: postgres://surcast:surcast@postgres:5432/surcast
+      DATABASE_URL: postgres://surcast:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}@postgres:5432/surcast
       MUSIC_DIR: /workspace/music
     ports:
       - "80:3001"
