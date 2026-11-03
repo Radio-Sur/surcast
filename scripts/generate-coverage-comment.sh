@@ -7,38 +7,36 @@ set -euo pipefail
 FRONTEND_LCOV="frontend/coverage/lcov.info"
 BACKEND_LCOV="coverage/lcov.backend.info"
 [ -f "$BACKEND_LCOV" ] || BACKEND_LCOV="coverage/lcov.info"
-FRONTEND_JSON="frontend/coverage/coverage-final.json"
 
 backend_pct="N/A"
 frontend_pct="N/A"
 total_pct="N/A"
+total_found=0
+total_hit=0
 
 if [ -f "$BACKEND_LCOV" ]; then
   # Parse lcov for backend lines coverage: LF (lines found) and LH (lines hit)
-  lf=$(grep -E "^LF:" "$BACKEND_LCOV" | awk -F: '{sum+=$2} END {print sum}')
-  lh=$(grep -E "^LH:" "$BACKEND_LCOV" | awk -F: '{sum+=$2} END {print sum}')
+  lf=$(awk -F: '/^LF:/ {sum+=$2} END {print sum+0}' "$BACKEND_LCOV")
+  lh=$(awk -F: '/^LH:/ {sum+=$2} END {print sum+0}' "$BACKEND_LCOV")
   if [ -n "$lf" ] && [ "$lf" -gt 0 ] 2>/dev/null; then
     backend_pct=$(awk "BEGIN {printf \"%.1f\", ($lh/$lf)*100}")
+    total_found=$((total_found + lf))
+    total_hit=$((total_hit + lh))
   fi
 fi
 
-if [ -f "$FRONTEND_JSON" ]; then
-  frontend_pct=$(jq -r '[.[] | .lines.pct] | add / length' "$FRONTEND_JSON" 2>/dev/null | xargs printf "%.1f" 2>/dev/null || echo "N/A")
-elif [ -f "$FRONTEND_LCOV" ]; then
-  lf=$(grep -E "^LF:" "$FRONTEND_LCOV" | awk -F: '{sum+=$2} END {print sum}')
-  lh=$(grep -E "^LH:" "$FRONTEND_LCOV" | awk -F: '{sum+=$2} END {print sum}')
+if [ -f "$FRONTEND_LCOV" ]; then
+  lf=$(awk -F: '/^LF:/ {sum+=$2} END {print sum+0}' "$FRONTEND_LCOV")
+  lh=$(awk -F: '/^LH:/ {sum+=$2} END {print sum+0}' "$FRONTEND_LCOV")
   if [ -n "$lf" ] && [ "$lf" -gt 0 ] 2>/dev/null; then
     frontend_pct=$(awk "BEGIN {printf \"%.1f\", ($lh/$lf)*100}")
+    total_found=$((total_found + lf))
+    total_hit=$((total_hit + lh))
   fi
 fi
 
-# Total
-if [ "$backend_pct" != "N/A" ] && [ "$frontend_pct" != "N/A" ]; then
-  total_pct=$(awk "BEGIN {printf \"%.1f\", ($backend_pct+$frontend_pct)/2}")
-elif [ "$backend_pct" != "N/A" ]; then
-  total_pct="$backend_pct"
-elif [ "$frontend_pct" != "N/A" ]; then
-  total_pct="$frontend_pct"
+if [ "$total_found" -gt 0 ]; then
+  total_pct=$(awk "BEGIN {printf \"%.1f\", ($total_hit/$total_found)*100}")
 fi
 
 cat <<EOF

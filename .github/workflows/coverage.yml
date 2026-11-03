@@ -38,7 +38,6 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            icecast2 \
             libglib2.0-dev \
             libgstreamer1.0-dev \
             libgstreamer-plugins-base1.0-dev \
@@ -74,19 +73,26 @@ jobs:
         working-directory: ./backend
         run: |
           mkdir -p ../coverage
-          NEXTEST_PROFILE=coverage cargo llvm-cov nextest --workspace --lcov --output-path ../coverage/lcov.backend.info
+          NEXTEST_PROFILE=coverage cargo llvm-cov nextest --workspace --no-report
         env:
           DATABASE_URL: postgres://surcast:surcast@localhost:5433/surcast
-          JWT_SECRET: ci-coverage-secret
+          JWT_SECRET: ci-coverage-secret-at-least-32-bytes
           GST_PLUGIN_SYSTEM_PATH_1_0: /usr/lib/x86_64-linux-gnu/gstreamer-1.0
 
+      - name: Export Rust coverage
+        if: ${{ !cancelled() }}
+        working-directory: ./backend
+        run: cargo llvm-cov report --lcov --output-path ../coverage/lcov.backend.info
+
       - name: Generate Frontend coverage
+        if: ${{ !cancelled() }}
         working-directory: ./frontend
         run: |
           bun install --frozen-lockfile
-          bun run test -- --coverage --reporter=json --outputFile=../coverage/frontend-coverage.json || bun run test -- --coverage
+          bun run test -- --coverage
 
       - name: Merge lcov files
+        if: ${{ !cancelled() }}
         run: |
           mkdir -p coverage/html
           # backend lcov at coverage/lcov.backend.info, frontend at frontend/coverage/lcov.info
@@ -97,19 +103,20 @@ jobs:
           ls -lh coverage/ 2>&1 | head -n 20
 
       - name: Generate coverage comment
+        if: ${{ !cancelled() }}
         run: |
-          chmod +x ./scripts/generate-coverage-comment.sh
-          ./scripts/generate-coverage-comment.sh > coverage-comment.md || echo "Coverage report generated" > coverage-comment.md
+          bash scripts/generate-coverage-comment.sh > coverage-comment.md
           cat coverage-comment.md
 
       - name: Comment PR
-        if: github.event_name == 'pull_request'
+        if: ${{ !cancelled() && github.event_name == 'pull_request' }}
         uses: marocchino/sticky-pull-request-comment@v2
         with:
           header: coverage
           path: coverage-comment.md
 
       - name: Upload coverage artifact
+        if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v4
         with:
           name: coverage-lcov

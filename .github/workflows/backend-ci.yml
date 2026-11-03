@@ -43,7 +43,7 @@ jobs:
         run: cargo clippy -- -D warnings
         env:
           DATABASE_URL: postgres://surcast:surcast@localhost:5433/surcast
-          JWT_SECRET: ci-lint-secret
+          JWT_SECRET: ci-lint-secret-at-least-32-bytes-long
 
   test-lib:
     runs-on: ubuntu-latest
@@ -91,7 +91,7 @@ jobs:
         run: cargo nextest run --lib --profile ci
         env:
           DATABASE_URL: postgres://surcast:surcast@localhost:5433/surcast
-          JWT_SECRET: ci-test-secret
+          JWT_SECRET: ci-test-secret-at-least-32-bytes-long
           GST_PLUGIN_SYSTEM_PATH_1_0: /usr/lib/x86_64-linux-gnu/gstreamer-1.0
 
   test-gstreamer:
@@ -139,7 +139,7 @@ jobs:
         run: cargo nextest run --lib --profile ci --run-ignored ignored-only
         env:
           DATABASE_URL: postgres://surcast:surcast@localhost:5433/surcast
-          JWT_SECRET: ci-test-secret
+          JWT_SECRET: ci-test-secret-at-least-32-bytes-long
           GST_PLUGIN_SYSTEM_PATH_1_0: /usr/lib/x86_64-linux-gnu/gstreamer-1.0
 
   test-integration:
@@ -162,11 +162,10 @@ jobs:
       - uses: actions/checkout@v7
         with:
           submodules: recursive
-      - name: Install GStreamer and Icecast (for e2e)
+      - name: Install GStreamer (for streamer tests)
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            icecast2 \
             libgstreamer1.0-dev \
             libgstreamer-plugins-base1.0-dev \
             gstreamer1.0-tools \
@@ -185,13 +184,11 @@ jobs:
       - uses: taiki-e/install-action@nextest
       - name: Run integration tests
         working-directory: ./backend
-        # e2e tests start/kill real Icecast (kill_zombie_icecast kills ANY
-        # icecast via /proc), so any parallel e2e kills each other -> SIGKILL.
-        # Keep serial like before (cargo test --tests -- --test-threads=1).
+        # E2E suites are disabled in the ci profile (see .config/nextest.toml).
         run: cargo nextest run --tests --profile ci --test-threads 1
         env:
           DATABASE_URL: postgres://surcast:surcast@localhost:5433/surcast
-          JWT_SECRET: ci-test-secret
+          JWT_SECRET: ci-test-secret-at-least-32-bytes-long
           GST_PLUGIN_SYSTEM_PATH_1_0: /usr/lib/x86_64-linux-gnu/gstreamer-1.0
 
   build-release:
@@ -217,4 +214,4 @@ jobs:
         run: cargo build --release
         env:
           DATABASE_URL: postgres://surcast:surcast@localhost:5433/surcast
-          JWT_SECRET: ci-build-secret
+          JWT_SECRET: ci-build-secret-at-least-32-bytes-long
