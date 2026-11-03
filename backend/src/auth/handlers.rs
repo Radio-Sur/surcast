@@ -23,20 +23,32 @@ pub async fn setup_init(
     State(db): State<PgPool>,
     Json(req): Json<SetupRequest>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), AppError> {
-    if req.username.is_empty() || req.password.is_empty() {
-        return Err(AppError::bad_request("Username and password are required".into()).with_code("AUTH_USERNAME_REQUIRED"));
+    validate_credentials(&req.username, &req.password)?;
+    if repository::count_users(&db).await? > 0 {
+        return Err(AppError::bad_request("Setup already completed".into()).with_code("SETUP_ALREADY_COMPLETE"));
     }
-
-    let count = repository::count_users(&db).await?;
-
+    let password_hash = hash_password(req.password).await?;
+    let user_id = Uuid::new_v4();
+    let mut tx = db.begin().await.db_error("begin initial setup")?;
+    sqlx::query("LOCK TABLE users IN EXCLUSIVE MODE")
+        .execute(&mut *tx)
+        .await
+        .db_error("lock initial setup")?;
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users")
+        .fetch_one(&mut *tx)
+        .await
+        .db_error("check initial setup")?;
     if count > 0 {
         return Err(AppError::bad_request("Setup already completed".into()).with_code("SETUP_ALREADY_COMPLETE"));
     }
-
-    let password_hash = hash(&req.password, DEFAULT_COST).db_error("failed to hash password")?;
-
-    let user_id = Uuid::new_v4();
-    repository::insert_user(&db, user_id, &req.username, &password_hash, &Role::Admin).await?;
+    sqlx::query("INSERT INTO users(id,username,password_hash,role) VALUES($1,$2,$3,'admin')")
+        .bind(user_id)
+        .bind(req.username.trim())
+        .bind(password_hash)
+        .execute(&mut *tx)
+        .await
+        .db_error("create initial admin")?;
+    tx.commit().await.db_error("commit initial setup")?;
 
     Ok((
         StatusCode::CREATED,
@@ -53,7 +65,11 @@ pub async fn login(
         .await?
         .ok_or_else(|| AppError::unauthorized("Invalid username or password".into()).with_code("AUTH_INVALID_CREDENTIALS"))?;
 
-    let valid = verify(&req.password, &user.password_hash).db_error("failed to verify password")?;
+    let password_hash = user.password_hash.clone();
+    let valid = tokio::task::spawn_blocking(move || verify(req.password, &password_hash))
+        .await
+        .map_err(|_| AppError::internal("Password verification task failed".into()))?
+        .db_error("failed to verify password")?;
 
     if !valid {
         return Err(AppError::unauthorized("Invalid username or password".into()).with_code("AUTH_INVALID_CREDENTIALS"));
@@ -88,6 +104,9 @@ pub async fn refresh(
         &Validation::default(),
     )
     .map_err(|_| AppError::unauthorized("Invalid refresh token".into()).with_code("AUTH_REFRESH_INVALID"))?;
+    if token_data.claims.purpose != TokenPurpose::Refresh {
+        return Err(AppError::unauthorized("Refresh token required".into()).with_code("AUTH_REFRESH_INVALID"));
+    }
 
     let user_id = Uuid::parse_str(&token_data.claims.sub).map_err(|_| AppError::unauthorized("Invalid token".into()))?;
 
@@ -127,21 +146,12 @@ pub async fn create_user(
     Json(req): Json<CreateUserRequest>,
 ) -> Result<(StatusCode, Json<UserResponse>), AppError> {
     let username = req.username.trim();
-    if username.is_empty() || username.len() > 255 {
-        return Err(AppError::bad_request("Username must contain 1–255 characters".into()).with_code("USERNAME_INVALID"));
-    }
-    if req.password.len() < 8 || req.password.len() > 72 {
-        return Err(AppError::bad_request("Password must contain 8–72 bytes".into()).with_code("PASSWORD_INVALID"));
-    }
+    validate_credentials(username, &req.password)?;
     let role = req
         .role
         .parse::<Role>()
         .map_err(|_| AppError::bad_request("Role must be administrator or demo".into()).with_code("ROLE_INVALID"))?;
-    let password = req.password;
-    let password_hash = tokio::task::spawn_blocking(move || hash(password, DEFAULT_COST))
-        .await
-        .map_err(|_| AppError::internal("Password hashing task failed".into()))?
-        .db_error("failed to hash password")?;
+    let password_hash = hash_password(req.password).await?;
     let id = Uuid::new_v4();
     let result = sqlx::query("INSERT INTO users (id, username, password_hash, role) VALUES ($1,$2,$3,$4)")
         .bind(id)
@@ -210,12 +220,14 @@ fn generate_tokens(user: &User, config: &Config) -> Result<(String, String), App
         sub: user.id.to_string(),
         exp: now + config.jwt_access_expiry as usize,
         iat: now,
+        purpose: TokenPurpose::Access,
     };
 
     let refresh_claims = Claims {
         sub: user.id.to_string(),
         exp: now + config.jwt_refresh_expiry as usize,
         iat: now,
+        purpose: TokenPurpose::Refresh,
     };
 
     let access_token = encode(
@@ -233,4 +245,21 @@ fn generate_tokens(user: &User, config: &Config) -> Result<(String, String), App
     .db_error("failed to sign refresh token")?;
 
     Ok((access_token, refresh_token))
+}
+
+fn validate_credentials(username: &str, password: &str) -> Result<(), AppError> {
+    if username.trim().is_empty() || username.trim().len() > 255 {
+        return Err(AppError::bad_request("Username must contain 1–255 bytes".into()).with_code("USERNAME_INVALID"));
+    }
+    if !(8..=72).contains(&password.len()) {
+        return Err(AppError::bad_request("Password must contain 8–72 bytes".into()).with_code("PASSWORD_INVALID"));
+    }
+    Ok(())
+}
+
+async fn hash_password(password: String) -> Result<String, AppError> {
+    tokio::task::spawn_blocking(move || hash(password, DEFAULT_COST))
+        .await
+        .map_err(|_| AppError::internal("Password hashing task failed".into()))?
+        .db_error("failed to hash password")
 }

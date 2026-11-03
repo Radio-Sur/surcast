@@ -31,6 +31,7 @@
     "PASSWORD_INVALID": "Password must contain 8–72 bytes.",
     "ROLE_INVALID": "Choose the Admin or Demo role.",
     "USERNAME_TAKEN": "This username is already taken.",
+    "LAST_ADMIN": "The last administrator cannot be removed or demoted.",
     "SETUP_ALREADY_COMPLETE": "Initial setup has already been completed.",
     "DEMO_NOT_READY": "The demo sandbox has not been configured yet. Contact the administrator.",
     "DEMO_RESTRICTED": "This feature is unavailable in the demo version",

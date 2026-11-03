@@ -1,8 +1,9 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import { HttpResponse, http } from "msw";
 import { useContext } from "react";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { localTokenStorage } from "@/lib/token-storage";
 import { server } from "@/mocks/server";
 import { AuthContext, AuthProvider } from "@/providers/auth-provider";
 import { setupAuth } from "@/test/test-utils";
@@ -50,13 +51,14 @@ function TestConsumer() {
 function renderProvider(handlers?: Parameters<typeof server.use>[0][]) {
   if (handlers) server.use(...handlers);
   const queryClient = createQueryClient();
-  return render(
+  const view = render(
     <QueryClientProvider client={queryClient}>
       <AuthProvider>
         <TestConsumer />
       </AuthProvider>
     </QueryClientProvider>,
   );
+  return { ...view, queryClient };
 }
 
 describe("AuthProvider", () => {
@@ -119,13 +121,25 @@ describe("AuthProvider", () => {
 
   it("logout clears tokens and user", async () => {
     setupAuth();
-    renderProvider();
+    const { queryClient } = renderProvider();
     await waitFor(() => expect(screen.getByTestId("isAuthenticated")).toHaveTextContent("true"));
+    queryClient.setQueryData(["songs"], ["private-admin-song"]);
     screen.getByTestId("logout").click();
     await waitFor(() => expect(screen.getByTestId("isAuthenticated")).toHaveTextContent("false"));
     expect(screen.getByTestId("user")).toHaveTextContent("null");
     expect(localStorage.getItem("access_token")).toBeNull();
     expect(localStorage.getItem("refresh_token")).toBeNull();
+    expect(queryClient.getQueryData(["songs"])).toBeUndefined();
+  });
+
+  it("publishes refreshed tokens without clearing account data", async () => {
+    setupAuth();
+    const { queryClient } = renderProvider();
+    await waitFor(() => expect(screen.getByTestId("isAuthenticated")).toHaveTextContent("true"));
+    queryClient.setQueryData(["songs"], ["song"]);
+    act(() => localTokenStorage.setAccessToken("refreshed-access"));
+    expect(screen.getByTestId("token")).toHaveTextContent("refreshed-access");
+    expect(queryClient.getQueryData(["songs"])).toEqual(["song"]);
   });
 
   it("refreshSetupStatus updates setup status", async () => {

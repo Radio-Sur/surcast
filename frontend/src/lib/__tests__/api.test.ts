@@ -80,7 +80,7 @@ describe("api response interceptor", () => {
     expect(localStorage.getItem("refresh_token")).toBe("new-refresh");
   });
 
-  it("redirects to /login when token refresh fails on 401", async () => {
+  it("clears the session when token refresh fails on 401", async () => {
     server.use(
       http.get("/api/test-redirect", () => HttpResponse.json(null, { status: 401 })),
       http.post("/api/auth/refresh", () => HttpResponse.json(null, { status: 500 })),
@@ -98,5 +98,26 @@ describe("api response interceptor", () => {
     localStorage.setItem("access_token", "old-token");
 
     await expect(api.get("/test-no-refresh")).rejects.toThrow();
+    await expect(api.get("/test-no-refresh")).rejects.toThrow();
+  });
+
+  it("shares one refresh across simultaneous failures and retries each request once", async () => {
+    let refreshes = 0;
+    server.use(
+      http.get("/api/concurrent", ({ request }) =>
+        request.headers.get("Authorization") === "Bearer new-access"
+          ? HttpResponse.json({ ok: true })
+          : HttpResponse.json(null, { status: 401 }),
+      ),
+      http.post("/api/auth/refresh", async () => {
+        refreshes++;
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        return HttpResponse.json({ access_token: "new-access", refresh_token: "new-refresh" });
+      }),
+    );
+    localStorage.setItem("refresh_token", "old-refresh");
+    const responses = await Promise.all([api.get("/concurrent"), api.get("/concurrent")]);
+    expect(responses.map((response) => response.data)).toEqual([{ ok: true }, { ok: true }]);
+    expect(refreshes).toBe(1);
   });
 });

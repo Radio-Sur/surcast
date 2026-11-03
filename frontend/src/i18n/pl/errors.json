@@ -31,6 +31,7 @@
     "PASSWORD_INVALID": "Hasło musi mieć od 8 do 72 bajtów.",
     "ROLE_INVALID": "Wybierz rolę Admin lub Demo.",
     "USERNAME_TAKEN": "Ta nazwa użytkownika jest już zajęta.",
+    "LAST_ADMIN": "Nie można usunąć ani zdegradować ostatniego administratora.",
     "SETUP_ALREADY_COMPLETE": "Konfiguracja początkowa została już ukończona.",
     "DEMO_NOT_READY": "Sandbox demo nie został jeszcze skonfigurowany. Skontaktuj się z administratorem.",
     "DEMO_RESTRICTED": "Ta funkcja jest niedostępna w wersji demo",

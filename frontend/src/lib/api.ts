@@ -21,7 +21,13 @@ api.interceptors.response.use(
   (response) => response,
   async (error) => {
     const originalRequest = error.config;
-    if (error.response?.status === 401 && !originalRequest._retry) {
+    if (
+      error.response?.status === 401 &&
+      originalRequest &&
+      !originalRequest._retry &&
+      !["/auth/login", "/auth/refresh"].includes(originalRequest.url)
+    ) {
+      originalRequest._retry = true;
       if (isRefreshing) {
         return new Promise<string>((resolve, reject) => {
           failedQueue.push({ resolve, reject });
@@ -31,15 +37,14 @@ api.interceptors.response.use(
         });
       }
 
-      originalRequest._retry = true;
-      isRefreshing = true;
-
       const refreshToken = localTokenStorage.getRefreshToken();
       if (refreshToken) {
+        isRefreshing = true;
         try {
           const { data } = await axios.post<AuthResponse>("/api/auth/refresh", { refresh_token: refreshToken });
-          localTokenStorage.setAccessToken(data.access_token);
+          if (localTokenStorage.getRefreshToken() !== refreshToken) throw new Error("Session changed during refresh");
           localTokenStorage.setRefreshToken(data.refresh_token);
+          localTokenStorage.setAccessToken(data.access_token);
 
           for (const { resolve } of failedQueue) {
             resolve(data.access_token);
@@ -53,12 +58,15 @@ api.interceptors.response.use(
             reject(err);
           }
           failedQueue = [];
-          console.warn("Token refresh failed, redirecting to login");
-          localTokenStorage.clear();
-          window.location.href = "/login";
+          console.warn("Token refresh failed");
+          if (localTokenStorage.getRefreshToken() === refreshToken) {
+            localTokenStorage.clear();
+          }
         } finally {
           isRefreshing = false;
         }
+      } else {
+        localTokenStorage.clear();
       }
     }
     return Promise.reject(error);

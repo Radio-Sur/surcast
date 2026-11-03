@@ -138,14 +138,25 @@ async fn test_list_users_without_admin_returns_403(pool: PgPool) {
 
 #[sqlx::test(migrations = "./migrations")]
 async fn test_update_user_role_returns_200(pool: PgPool) {
-    let (server, admin_token, _) = setup_two_users(pool).await;
+    let (server, admin_token, _) = setup_two_users(pool.clone()).await;
+    surcast_backend::auth::repository::insert_user(
+        &pool,
+        uuid::Uuid::new_v4(),
+        "second-admin",
+        "unused",
+        &surcast_backend::auth::models::Role::Admin,
+    )
+    .await
+    .unwrap();
 
     let list_resp = server
         .get("/api/users")
         .add_header("Authorization", &format!("Bearer {admin_token}"))
         .await;
     let users = list_resp.json::<Vec<serde_json::Value>>();
-    let target_id = users[0]["id"].as_str().unwrap();
+    let target_id = users.iter().find(|user| user["username"] == "second-admin").unwrap()["id"]
+        .as_str()
+        .unwrap();
 
     let resp = server
         .put(&format!("/api/users/{target_id}"))
@@ -157,7 +168,7 @@ async fn test_update_user_role_returns_200(pool: PgPool) {
 }
 
 #[sqlx::test(migrations = "./migrations")]
-async fn test_delete_user_returns_204(pool: PgPool) {
+async fn test_delete_last_admin_returns_409(pool: PgPool) {
     let app = api_common::create_test_app(pool);
     let server = TestServer::new(app);
 
@@ -183,5 +194,6 @@ async fn test_delete_user_returns_204(pool: PgPool) {
         .delete(&format!("/api/users/{target_id}"))
         .add_header("Authorization", &format!("Bearer {token}"))
         .await;
-    assert_eq!(resp.status_code(), 204);
+    assert_eq!(resp.status_code(), 409);
+    assert_eq!(resp.json::<serde_json::Value>()["code"], "LAST_ADMIN");
 }

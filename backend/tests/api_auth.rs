@@ -201,3 +201,49 @@ async fn test_refresh_with_invalid_token_returns_401(pool: PgPool) {
         .await;
     assert_eq!(resp.status_code(), 401);
 }
+
+#[sqlx::test(migrations = "./migrations")]
+async fn token_purposes_are_not_interchangeable(pool: PgPool) {
+    let server = TestServer::new(api_common::create_test_app(pool));
+    server
+        .post("/api/setup/init")
+        .json(&json!({"username":"admin", "password":"admin123"}))
+        .await
+        .assert_status(axum::http::StatusCode::CREATED);
+    let tokens = server
+        .post("/api/auth/login")
+        .json(&json!({"username":"admin", "password":"admin123"}))
+        .await
+        .json::<serde_json::Value>();
+    let access = tokens["access_token"].as_str().unwrap();
+    let refresh = tokens["refresh_token"].as_str().unwrap();
+    server
+        .get("/api/auth/me")
+        .add_header("Authorization", &format!("Bearer {refresh}"))
+        .await
+        .assert_status_unauthorized();
+    server
+        .post("/api/auth/refresh")
+        .json(&json!({"refresh_token":access}))
+        .await
+        .assert_status_unauthorized();
+    let secret = api_common::test_config().jwt_secret;
+    assert!(surcast_backend::auth::middleware::verify_token(access, &secret).is_ok());
+    assert!(surcast_backend::auth::middleware::verify_token(refresh, &secret).is_err());
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn concurrent_setup_creates_only_one_admin(pool: PgPool) {
+    let server = TestServer::new(api_common::create_test_app(pool.clone()));
+    let first = server
+        .post("/api/setup/init")
+        .json(&json!({"username":"first", "password":"admin123"}));
+    let second = server
+        .post("/api/setup/init")
+        .json(&json!({"username":"second", "password":"admin123"}));
+    let (first, second) = tokio::join!(first, second);
+    let mut statuses = [first.status_code().as_u16(), second.status_code().as_u16()];
+    statuses.sort();
+    assert_eq!(statuses, [201, 400]);
+    assert_eq!(surcast_backend::auth::repository::count_users(&pool).await.unwrap(), 1);
+}

@@ -1,7 +1,8 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { createContext, type ReactNode, useEffect, useState } from "react";
+import { createContext, type ReactNode, useEffect, useState, useSyncExternalStore } from "react";
 import { httpClient } from "@/lib/api";
-import { localTokenStorage } from "@/lib/token-storage";
+import { STORAGE_KEYS } from "@/lib/constants";
+import { localTokenStorage, subscribeToken } from "@/lib/token-storage";
 import type { AuthResponse, User } from "@/types";
 
 interface AuthContextType {
@@ -19,8 +20,19 @@ export const AuthContext = createContext<AuthContextType | null>(null);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const queryClient = useQueryClient();
-  const [token, setToken] = useState<string | null>(() => localTokenStorage.getAccessToken());
+  const token = useSyncExternalStore(subscribeToken, localTokenStorage.getAccessToken);
   const [loginUser, setLoginUser] = useState<User | null>(null);
+
+  useEffect(() => {
+    const changedInAnotherTab = (event: StorageEvent) => {
+      if (event.key === STORAGE_KEYS.ACCESS_TOKEN || event.key === null) {
+        setLoginUser(null);
+        void queryClient.resetQueries({ predicate: (query) => query.queryKey[0] !== "setup" });
+      }
+    };
+    window.addEventListener("storage", changedInAnotherTab);
+    return () => window.removeEventListener("storage", changedInAnotherTab);
+  }, [queryClient]);
 
   const setupQuery = useQuery({
     queryKey: ["setup", "status"],
@@ -29,12 +41,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     retry: false,
   });
 
-  const [storedToken] = useState(() => localTokenStorage.getAccessToken());
-
   const meQuery = useQuery({
     queryKey: ["auth", "me"],
     queryFn: () => httpClient.get<User>("/auth/me"),
-    enabled: !!storedToken,
+    enabled: !!token,
     staleTime: 30_000,
     retry: false,
   });
@@ -49,9 +59,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (meQuery.isError) {
       console.warn("Failed to fetch current user, clearing session");
       localTokenStorage.clear();
-      setToken(null);
     }
   }, [meQuery.isError]);
+
+  useEffect(() => {
+    if (!token) {
+      queryClient.removeQueries({ predicate: (query) => query.queryKey[0] !== "setup" });
+      setLoginUser(null);
+    }
+  }, [token, queryClient]);
 
   return (
     <AuthContext.Provider
@@ -66,14 +82,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             username,
             password,
           });
-          localTokenStorage.setAccessToken(authResponse.access_token);
+          queryClient.removeQueries({ predicate: (query) => query.queryKey[0] !== "setup" });
           localTokenStorage.setRefreshToken(authResponse.refresh_token);
-          setToken(authResponse.access_token);
+          localTokenStorage.setAccessToken(authResponse.access_token);
           setLoginUser(authResponse.user);
+          queryClient.setQueryData(["auth", "me"], authResponse.user);
         },
         logout: () => {
           localTokenStorage.clear();
-          setToken(null);
+          queryClient.removeQueries({ predicate: (query) => query.queryKey[0] !== "setup" });
           setLoginUser(null);
         },
         refreshSetupStatus: () => queryClient.invalidateQueries({ queryKey: ["setup", "status"] }),

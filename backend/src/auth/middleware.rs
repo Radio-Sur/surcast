@@ -17,6 +17,9 @@ pub struct TokenVerificationFailed;
 pub fn verify_token(token: &str, jwt_secret: &str) -> Result<AuthUser, TokenVerificationFailed> {
     let token_data = decode::<Claims>(token, &DecodingKey::from_secret(jwt_secret.as_bytes()), &Validation::default())
         .map_err(|_| TokenVerificationFailed)?;
+    if token_data.claims.purpose != crate::auth::models::TokenPurpose::Access {
+        return Err(TokenVerificationFailed);
+    }
 
     let user_id = Uuid::parse_str(&token_data.claims.sub).map_err(|_| TokenVerificationFailed)?;
     Ok(AuthUser {
@@ -35,6 +38,7 @@ mod tests {
             sub: sub.to_string(),
             exp,
             iat: 1_000_000_000,
+            purpose: crate::auth::models::TokenPurpose::Access,
         };
         encode(&Header::default(), &claims, &EncodingKey::from_secret(secret.as_bytes())).unwrap()
     }
@@ -146,6 +150,9 @@ pub async fn auth_middleware(State(state): State<AppState>, mut req: Request<axu
         ) else {
             return auth_error(StatusCode::UNAUTHORIZED, "AUTH_EXPIRED", "Invalid or expired token");
         };
+        if token_data.claims.purpose != crate::auth::models::TokenPurpose::Access {
+            return auth_error(StatusCode::UNAUTHORIZED, "AUTH_INVALID", "Access token required");
+        }
 
         let Ok(user_id) = Uuid::parse_str(&token_data.claims.sub) else {
             return auth_error(StatusCode::UNAUTHORIZED, "AUTH_INVALID", "Invalid token payload");

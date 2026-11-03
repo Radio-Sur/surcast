@@ -48,19 +48,46 @@ pub async fn insert_user(db: &PgPool, id: Uuid, username: &str, password_hash: &
 }
 
 pub async fn update_user(db: &PgPool, id: Uuid, role: &Role) -> Result<User, AppError> {
-    sqlx::query_as::<_, User>("UPDATE users SET role = $1, updated_at = NOW() WHERE id = $2 RETURNING *")
+    let mut tx = db.begin().await.db_error("begin user update")?;
+    protect_last_admin(&mut tx, id, role != &Role::Admin).await?;
+    let user = sqlx::query_as::<_, User>("UPDATE users SET role = $1, updated_at = NOW() WHERE id = $2 RETURNING *")
         .bind(role)
         .bind(id)
-        .fetch_one(db)
+        .fetch_one(&mut *tx)
         .await
-        .db_error("failed to update user")
+        .db_error("failed to update user")?;
+    tx.commit().await.db_error("commit user update")?;
+    Ok(user)
 }
 
 pub async fn delete_user(db: &PgPool, id: Uuid) -> Result<u64, AppError> {
+    let mut tx = db.begin().await.db_error("begin user deletion")?;
+    protect_last_admin(&mut tx, id, true).await?;
     let result = sqlx::query("DELETE FROM users WHERE id = $1")
         .bind(id)
-        .execute(db)
+        .execute(&mut *tx)
         .await
         .db_error("failed to delete user")?;
+    tx.commit().await.db_error("commit user deletion")?;
     Ok(result.rows_affected())
+}
+
+async fn protect_last_admin(tx: &mut sqlx::PgConnection, id: Uuid, removing_admin: bool) -> Result<(), AppError> {
+    sqlx::query("LOCK TABLE users IN EXCLUSIVE MODE")
+        .execute(&mut *tx)
+        .await
+        .db_error("lock user roles")?;
+    if removing_admin {
+        let last: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM users WHERE id=$1 AND role='admin') AND (SELECT COUNT(*) FROM users WHERE role='admin')=1",
+        )
+        .bind(id)
+        .fetch_one(tx)
+        .await
+        .db_error("check last administrator")?;
+        if last {
+            return Err(AppError::conflict("The last administrator cannot be removed or demoted".into()).with_code("LAST_ADMIN"));
+        }
+    }
+    Ok(())
 }

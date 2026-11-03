@@ -129,4 +129,12 @@ pub struct Claims {
     pub sub: String,
     pub exp: usize,
     pub iat: usize,
+    pub purpose: TokenPurpose,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TokenPurpose {
+    Access,
+    Refresh,
 }
