@@ -1,0 +1,130 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN">
+
+<html lang="en">
+
+<head>
+  <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+  <title>LCOV - lcov.info - src/components/src/components/page-header.tsx</title>
+  <link rel="stylesheet" type="text/css" href="../../../../gcov.css">
+</head>
+
+<body>
+
+          <table width="100%" border=0 cellspacing=0 cellpadding=0>
+            <tr><td class="title">LCOV - code coverage report</td></tr>
+            <tr><td class="ruler"><img src="../../../../glass.png" width=3 height=3 alt=""></td></tr>
+
+            <tr>
+              <td width="100%">
+                <table cellpadding=1 border=0 width="100%">
+          <tr>
+            <td width="10%" class="headerItem">Current view:</td>
+            <td width="10%" class="headerValue"><a href="../../../../index.html">top level</a> - <a href="index.html">src/components/src/components</a> - page-header.tsx<span style="font-size: 80%;"> (source / <a href="page-header.tsx.func-c.html">functions</a>)</span></td>
+            <td width="5%"></td>
+            <td width="5%"></td>
+            <td width="5%" class="headerCovTableHead">Coverage</td>
+            <td width="5%" class="headerCovTableHead" title="Covered + Uncovered code">Total</td>
+            <td width="5%" class="headerCovTableHead" title="Exercised code only">Hit</td>
+          </tr>
+          <tr>
+            <td class="headerItem">Test:</td>
+            <td class="headerValue">lcov.info</td>
+            <td></td>
+            <td class="headerItem">Lines:</td>
+            <td class="headerCovTableEntryHi">100.0&nbsp;%</td>
+            <td class="headerCovTableEntry">1</td>
+            <td class="headerCovTableEntry">1</td>
+          </tr>
+          <tr>
+            <td class="headerItem">Test Date:</td>
+            <td class="headerValue">2026-11-03 01:49:59</td>
+            <td></td>
+            <td class="headerItem">Functions:</td>
+            <td class="headerCovTableEntryHi">100.0&nbsp;%</td>
+            <td class="headerCovTableEntry">1</td>
+            <td class="headerCovTableEntry">1</td>
+          </tr>
+                  <tr><td><img src="../../../../glass.png" width=3 height=3 alt=""></td></tr>
+                </table>
+              </td>
+            </tr>
+
+            <tr><td class="ruler"><img src="../../../../glass.png" width=3 height=3 alt=""></td></tr>
+          </table>
+
+          <table cellpadding=0 cellspacing=0 border=0>
+            <tr>
+              <td><br></td>
+            </tr>
+            <tr>
+              <td>
+<pre class="sourceHeading">            Line data    Source code</pre>
+<pre class="source">
+<span id="L1"><span class="lineNum">       1</span>              : import Box from &quot;@mui/material/Box&quot;;</span>
+<span id="L2"><span class="lineNum">       2</span>              : import Typography from &quot;@mui/material/Typography&quot;;</span>
+<span id="L3"><span class="lineNum">       3</span>              : import type { ReactNode } from &quot;react&quot;;</span>
+<span id="L4"><span class="lineNum">       4</span>              : </span>
+<span id="L5"><span class="lineNum">       5</span>              : /**</span>
+<span id="L6"><span class="lineNum">       6</span>              :  * Page title block. Stacks the actions under the title on phones so the</span>
+<span id="L7"><span class="lineNum">       7</span>              :  * heading never gets squeezed and action buttons can wrap freely.</span>
+<span id="L8"><span class="lineNum">       8</span>              :  */</span>
+<span id="L9"><span class="lineNum">       9</span> <span class="tlaGNC tlaBgGNC">         135 : export function PageHeader({</span></span>
+<span id="L10"><span class="lineNum">      10</span>              :   title,</span>
+<span id="L11"><span class="lineNum">      11</span>              :   subtitle,</span>
+<span id="L12"><span class="lineNum">      12</span>              :   actions,</span>
+<span id="L13"><span class="lineNum">      13</span>              : }: {</span>
+<span id="L14"><span class="lineNum">      14</span>              :   title: ReactNode;</span>
+<span id="L15"><span class="lineNum">      15</span>              :   subtitle?: ReactNode;</span>
+<span id="L16"><span class="lineNum">      16</span>              :   actions?: ReactNode;</span>
+<span id="L17"><span class="lineNum">      17</span>              : }) {</span>
+<span id="L18"><span class="lineNum">      18</span> <span class="tlaGNC">         135 :   return (</span></span>
+<span id="L19"><span class="lineNum">      19</span>              :     &lt;Box</span>
+<span id="L20"><span class="lineNum">      20</span>              :       sx={{</span>
+<span id="L21"><span class="lineNum">      21</span>              :         display: &quot;flex&quot;,</span>
+<span id="L22"><span class="lineNum">      22</span>              :         flexDirection: { xs: &quot;column&quot;, sm: &quot;row&quot; },</span>
+<span id="L23"><span class="lineNum">      23</span>              :         alignItems: { xs: &quot;stretch&quot;, sm: &quot;center&quot; },</span>
+<span id="L24"><span class="lineNum">      24</span>              :         justifyContent: &quot;space-between&quot;,</span>
+<span id="L25"><span class="lineNum">      25</span>              :         gap: 2,</span>
+<span id="L26"><span class="lineNum">      26</span>              :         minWidth: 0,</span>
+<span id="L27"><span class="lineNum">      27</span>              :       }}</span>
+<span id="L28"><span class="lineNum">      28</span>              :     &gt;</span>
+<span id="L29"><span class="lineNum">      29</span>              :       &lt;Box sx={{ minWidth: 0 }}&gt;</span>
+<span id="L30"><span class="lineNum">      30</span>              :         &lt;Typography variant=&quot;h4&quot; sx={{ overflowWrap: &quot;anywhere&quot; }}&gt;</span>
+<span id="L31"><span class="lineNum">      31</span>              :           {title}</span>
+<span id="L32"><span class="lineNum">      32</span>              :         &lt;/Typography&gt;</span>
+<span id="L33"><span class="lineNum">      33</span>              :         {subtitle &amp;&amp; (</span>
+<span id="L34"><span class="lineNum">      34</span>              :           &lt;Typography variant=&quot;body2&quot; color=&quot;text.secondary&quot; sx={{ mt: 0.5 }}&gt;</span>
+<span id="L35"><span class="lineNum">      35</span>              :             {subtitle}</span>
+<span id="L36"><span class="lineNum">      36</span>              :           &lt;/Typography&gt;</span>
+<span id="L37"><span class="lineNum">      37</span>              :         )}</span>
+<span id="L38"><span class="lineNum">      38</span>              :       &lt;/Box&gt;</span>
+<span id="L39"><span class="lineNum">      39</span>              :       {actions &amp;&amp; (</span>
+<span id="L40"><span class="lineNum">      40</span>              :         &lt;Box</span>
+<span id="L41"><span class="lineNum">      41</span>              :           sx={{</span>
+<span id="L42"><span class="lineNum">      42</span>              :             display: &quot;flex&quot;,</span>
+<span id="L43"><span class="lineNum">      43</span>              :             alignItems: &quot;center&quot;,</span>
+<span id="L44"><span class="lineNum">      44</span>              :             flexWrap: &quot;wrap&quot;,</span>
+<span id="L45"><span class="lineNum">      45</span>              :             gap: 1,</span>
+<span id="L46"><span class="lineNum">      46</span>              :             justifyContent: { xs: &quot;flex-start&quot;, sm: &quot;flex-end&quot; },</span>
+<span id="L47"><span class="lineNum">      47</span>              :           }}</span>
+<span id="L48"><span class="lineNum">      48</span>              :         &gt;</span>
+<span id="L49"><span class="lineNum">      49</span>              :           {actions}</span>
+<span id="L50"><span class="lineNum">      50</span>              :         &lt;/Box&gt;</span>
+<span id="L51"><span class="lineNum">      51</span>              :       )}</span>
+<span id="L52"><span class="lineNum">      52</span>              :     &lt;/Box&gt;</span>
+<span id="L53"><span class="lineNum">      53</span>              :   );</span>
+<span id="L54"><span class="lineNum">      54</span>              : }</span>
+        </pre>
+              </td>
+            </tr>
+          </table>
+          <br>
+
+          <table width="100%" border=0 cellspacing=0 cellpadding=0>
+            <tr><td class="ruler"><img src="../../../../glass.png" width=3 height=3 alt=""></td></tr>
+            <tr><td class="versionInfo">Generated by: <a href="https://github.com//linux-test-project/lcov" target="_parent">LCOV version 2.0-1</a></td></tr>
+          </table>
+          <br>
+
+</body>
+</html>

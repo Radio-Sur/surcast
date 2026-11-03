@@ -37,7 +37,7 @@
           </tr>
           <tr>
             <td class="headerItem">Test Date:</td>
-            <td class="headerValue">2026-09-06 21:10:44</td>
+            <td class="headerValue">2026-11-03 01:49:59</td>
             <td></td>
             <td class="headerItem">Functions:</td>
             <td class="headerCovTableEntryLo">64.5&nbsp;%</td>
@@ -64,10 +64,10 @@
 <span id="L2"><span class="lineNum">       2</span>              : import { playlistsService } from &quot;@/lib/services/playlists&quot;;</span>
 <span id="L3"><span class="lineNum">       3</span>              : import type { Playlist, SongSelections } from &quot;@/types&quot;;</span>
 <span id="L4"><span class="lineNum">       4</span>              : </span>
-<span id="L5"><span class="lineNum">       5</span> <span class="tlaGNC tlaBgGNC">          12 : export function usePlaylists&lt;T = Playlist[]&gt;(select?: (playlists: Playlist[]) =&gt; T) {</span></span>
-<span id="L6"><span class="lineNum">       6</span> <span class="tlaGNC">          12 :   return useQuery({</span></span>
+<span id="L5"><span class="lineNum">       5</span> <span class="tlaGNC tlaBgGNC">          55 : export function usePlaylists&lt;T = Playlist[]&gt;(select?: (playlists: Playlist[]) =&gt; T) {</span></span>
+<span id="L6"><span class="lineNum">       6</span> <span class="tlaGNC">          55 :   return useQuery({</span></span>
 <span id="L7"><span class="lineNum">       7</span>              :     queryKey: [&quot;playlists&quot;],</span>
-<span id="L8"><span class="lineNum">       8</span> <span class="tlaGNC">           6 :     queryFn: () =&gt; playlistsService.list(),</span></span>
+<span id="L8"><span class="lineNum">       8</span> <span class="tlaGNC">          12 :     queryFn: () =&gt; playlistsService.list(),</span></span>
 <span id="L9"><span class="lineNum">       9</span>              :     select,</span>
 <span id="L10"><span class="lineNum">      10</span>              :   });</span>
 <span id="L11"><span class="lineNum">      11</span>              : }</span>

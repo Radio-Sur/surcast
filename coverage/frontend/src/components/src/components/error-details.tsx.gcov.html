@@ -1,0 +1,244 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN">
+
+<html lang="en">
+
+<head>
+  <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+  <title>LCOV - lcov.info - src/components/src/components/error-details.tsx</title>
+  <link rel="stylesheet" type="text/css" href="../../../../gcov.css">
+</head>
+
+<body>
+
+          <table width="100%" border=0 cellspacing=0 cellpadding=0>
+            <tr><td class="title">LCOV - code coverage report</td></tr>
+            <tr><td class="ruler"><img src="../../../../glass.png" width=3 height=3 alt=""></td></tr>
+
+            <tr>
+              <td width="100%">
+                <table cellpadding=1 border=0 width="100%">
+          <tr>
+            <td width="10%" class="headerItem">Current view:</td>
+            <td width="10%" class="headerValue"><a href="../../../../index.html">top level</a> - <a href="index.html">src/components/src/components</a> - error-details.tsx<span style="font-size: 80%;"> (source / <a href="error-details.tsx.func-c.html">functions</a>)</span></td>
+            <td width="5%"></td>
+            <td width="5%"></td>
+            <td width="5%" class="headerCovTableHead">Coverage</td>
+            <td width="5%" class="headerCovTableHead" title="Covered + Uncovered code">Total</td>
+            <td width="5%" class="headerCovTableHead" title="Exercised code only">Hit</td>
+          </tr>
+          <tr>
+            <td class="headerItem">Test:</td>
+            <td class="headerValue">lcov.info</td>
+            <td></td>
+            <td class="headerItem">Lines:</td>
+            <td class="headerCovTableEntryMed">76.5&nbsp;%</td>
+            <td class="headerCovTableEntry">17</td>
+            <td class="headerCovTableEntry">13</td>
+          </tr>
+          <tr>
+            <td class="headerItem">Test Date:</td>
+            <td class="headerValue">2026-11-03 01:49:59</td>
+            <td></td>
+            <td class="headerItem">Functions:</td>
+            <td class="headerCovTableEntryLo">62.5&nbsp;%</td>
+            <td class="headerCovTableEntry">8</td>
+            <td class="headerCovTableEntry">5</td>
+          </tr>
+                  <tr><td><img src="../../../../glass.png" width=3 height=3 alt=""></td></tr>
+                </table>
+              </td>
+            </tr>
+
+            <tr><td class="ruler"><img src="../../../../glass.png" width=3 height=3 alt=""></td></tr>
+          </table>
+
+          <table cellpadding=0 cellspacing=0 border=0>
+            <tr>
+              <td><br></td>
+            </tr>
+            <tr>
+              <td>
+<pre class="sourceHeading">            Line data    Source code</pre>
+<pre class="source">
+<span id="L1"><span class="lineNum">       1</span>              : import Close from &quot;@mui/icons-material/Close&quot;;</span>
+<span id="L2"><span class="lineNum">       2</span>              : import ExpandLess from &quot;@mui/icons-material/ExpandLess&quot;;</span>
+<span id="L3"><span class="lineNum">       3</span>              : import ExpandMore from &quot;@mui/icons-material/ExpandMore&quot;;</span>
+<span id="L4"><span class="lineNum">       4</span>              : import type { AlertColor } from &quot;@mui/material/Alert&quot;;</span>
+<span id="L5"><span class="lineNum">       5</span>              : import Alert from &quot;@mui/material/Alert&quot;;</span>
+<span id="L6"><span class="lineNum">       6</span>              : import Box from &quot;@mui/material/Box&quot;;</span>
+<span id="L7"><span class="lineNum">       7</span>              : import Button from &quot;@mui/material/Button&quot;;</span>
+<span id="L8"><span class="lineNum">       8</span>              : import Collapse from &quot;@mui/material/Collapse&quot;;</span>
+<span id="L9"><span class="lineNum">       9</span>              : import IconButton from &quot;@mui/material/IconButton&quot;;</span>
+<span id="L10"><span class="lineNum">      10</span>              : import Typography from &quot;@mui/material/Typography&quot;;</span>
+<span id="L11"><span class="lineNum">      11</span>              : import { type Ref, useState } from &quot;react&quot;;</span>
+<span id="L12"><span class="lineNum">      12</span>              : import { useTranslation } from &quot;react-i18next&quot;;</span>
+<span id="L13"><span class="lineNum">      13</span>              : import { CopyButton } from &quot;@/components/copy-button&quot;;</span>
+<span id="L14"><span class="lineNum">      14</span>              : import { codeFromStatus, errorMessage } from &quot;@/lib/error-codes&quot;;</span>
+<span id="L15"><span class="lineNum">      15</span>              : </span>
+<span id="L16"><span class="lineNum">      16</span>              : export interface ErrorDetailsInfo {</span>
+<span id="L17"><span class="lineNum">      17</span>              :   message: string;</span>
+<span id="L18"><span class="lineNum">      18</span>              :   code?: string;</span>
+<span id="L19"><span class="lineNum">      19</span>              :   status?: number;</span>
+<span id="L20"><span class="lineNum">      20</span>              :   category?: string;</span>
+<span id="L21"><span class="lineNum">      21</span>              :   /** Sanitized backend cause (e.g. pipeline reason). Never secrets. */</span>
+<span id="L22"><span class="lineNum">      22</span>              :   details?: string;</span>
+<span id="L23"><span class="lineNum">      23</span>              :   raw?: unknown;</span>
+<span id="L24"><span class="lineNum">      24</span>              : }</span>
+<span id="L25"><span class="lineNum">      25</span>              : </span>
+<span id="L26"><span class="lineNum">      26</span> <span class="tlaGNC tlaBgGNC">          77 : function formatRaw(raw: unknown): string {</span></span>
+<span id="L27"><span class="lineNum">      27</span> <span class="tlaGNC">          77 :   if (raw === undefined || raw === null) return &quot;&quot;;</span></span>
+<span id="L28"><span class="lineNum">      28</span> <span class="tlaGNC">          23 :   if (typeof raw === &quot;string&quot;) return raw;</span></span>
+<span id="L29"><span class="lineNum">      29</span> <span class="tlaGNC">           6 :   try {</span></span>
+<span id="L30"><span class="lineNum">      30</span> <span class="tlaGNC">           6 :     return JSON.stringify(raw, null, 2);</span></span>
+<span id="L31"><span class="lineNum">      31</span>              :   } catch {</span>
+<span id="L32"><span class="lineNum">      32</span> <span class="tlaUNC tlaBgUNC">           0 :     return String(raw);</span></span>
+<span id="L33"><span class="lineNum">      33</span>              :   }</span>
+<span id="L34"><span class="lineNum">      34</span>              : }</span>
+<span id="L35"><span class="lineNum">      35</span>              : </span>
+<span id="L36"><span class="lineNum">      36</span>              : /**</span>
+<span id="L37"><span class="lineNum">      37</span>              :  * Alert with a text-only &quot;details&quot; toggle: clicking the notification (or</span>
+<span id="L38"><span class="lineNum">      38</span>              :  * the button) expands localized metadata and a diagnostics copy button.</span>
+<span id="L39"><span class="lineNum">      39</span>              :  * Raw backend prose never becomes visible UI text. Exactly one pictogram — the</span>
+<span id="L40"><span class="lineNum">      40</span>              :  * severity icon — never an icon pair.</span>
+<span id="L41"><span class="lineNum">      41</span>              :  */</span>
+<span id="L42"><span class="lineNum">      42</span> <span class="tlaGNC tlaBgGNC">          79 : export function ErrorDetails({</span></span>
+<span id="L43"><span class="lineNum">      43</span>              :   title,</span>
+<span id="L44"><span class="lineNum">      44</span>              :   details,</span>
+<span id="L45"><span class="lineNum">      45</span>              :   severity = &quot;error&quot;,</span>
+<span id="L46"><span class="lineNum">      46</span>              :   onClose,</span>
+<span id="L47"><span class="lineNum">      47</span>              :   ref,</span>
+<span id="L48"><span class="lineNum">      48</span>              : }: {</span>
+<span id="L49"><span class="lineNum">      49</span>              :   title: string;</span>
+<span id="L50"><span class="lineNum">      50</span>              :   details?: ErrorDetailsInfo | null;</span>
+<span id="L51"><span class="lineNum">      51</span>              :   severity?: AlertColor;</span>
+<span id="L52"><span class="lineNum">      52</span>              :   onClose?: () =&gt; void;</span>
+<span id="L53"><span class="lineNum">      53</span>              :   // Forwarded to the underlying Alert so transitions measuring the DOM</span>
+<span id="L54"><span class="lineNum">      54</span>              :   // node (e.g. Snackbar's Grow calling reflow(node)) never see null.</span>
+<span id="L55"><span class="lineNum">      55</span>              :   ref?: Ref&lt;HTMLDivElement&gt;;</span>
+<span id="L56"><span class="lineNum">      56</span>              : }) {</span>
+<span id="L57"><span class="lineNum">      57</span> <span class="tlaGNC">          79 :   const { t } = useTranslation();</span></span>
+<span id="L58"><span class="lineNum">      58</span> <span class="tlaGNC">          79 :   const [expanded, setExpanded] = useState(false);</span></span>
+<span id="L59"><span class="lineNum">      59</span> <span class="tlaGNC">          79 :   const body = details?.details || formatRaw(details?.raw);</span></span>
+<span id="L60"><span class="lineNum">      60</span> <span class="tlaGNC">          79 :   const hasDetails = Boolean(details &amp;&amp; (details.code ?? details.status ?? details.category ?? body));</span></span>
+<span id="L61"><span class="lineNum">      61</span> <span class="tlaGNC">          79 :   const meta = details</span></span>
+<span id="L62"><span class="lineNum">      62</span>              :     ? [</span>
+<span id="L63"><span class="lineNum">      63</span>              :         details.status !== undefined &amp;&amp; `HTTP ${details.status}`,</span>
+<span id="L64"><span class="lineNum">      64</span>              :         details.code,</span>
+<span id="L65"><span class="lineNum">      65</span>              :         details.category &amp;&amp; t(`errors:category_${details.category}`, { defaultValue: &quot;&quot; }),</span>
+<span id="L66"><span class="lineNum">      66</span>              :       ]</span>
+<span id="L67"><span class="lineNum">      67</span>              :         .filter(Boolean)</span>
+<span id="L68"><span class="lineNum">      68</span>              :         .join(&quot; · &quot;)</span>
+<span id="L69"><span class="lineNum">      69</span>              :     : &quot;&quot;;</span>
+<span id="L70"><span class="lineNum">      70</span>              : </span>
+<span id="L71"><span class="lineNum">      71</span> <span class="tlaGNC">          79 :   return (</span></span>
+<span id="L72"><span class="lineNum">      72</span>              :     &lt;Alert</span>
+<span id="L73"><span class="lineNum">      73</span>              :       ref={ref}</span>
+<span id="L74"><span class="lineNum">      74</span>              :       severity={severity}</span>
+<span id="L75"><span class="lineNum">      75</span>              :       variant=&quot;filled&quot;</span>
+<span id="L76"><span class="lineNum">      76</span>              :       sx={{</span>
+<span id="L77"><span class="lineNum">      77</span>              :         width: &quot;100%&quot;,</span>
+<span id="L78"><span class="lineNum">      78</span>              :         alignItems: &quot;flex-start&quot;,</span>
+<span id="L79"><span class="lineNum">      79</span>              :         cursor: hasDetails ? &quot;pointer&quot; : undefined,</span>
+<span id="L80"><span class="lineNum">      80</span>              :         // Shared axis: the severity glyph box is 15px padding-top + 22px</span>
+<span id="L81"><span class="lineNum">      81</span>              :         // glyph = 37px tall, so the title row matches it and glyph, title,</span>
+<span id="L82"><span class="lineNum">      82</span>              :         // toggle and close all sit on one center line that never moves.</span>
+<span id="L83"><span class="lineNum">      83</span>              :         &quot;&amp; .MuiAlert-icon&quot;: { paddingTop: &quot;15px&quot;, paddingBottom: 0 },</span>
+<span id="L84"><span class="lineNum">      84</span>              :         &quot;&amp; .MuiAlert-action&quot;: { paddingTop: 0 },</span>
+<span id="L85"><span class="lineNum">      85</span>              :       }}</span>
+<span id="L86"><span class="lineNum">      86</span> <span class="tlaGNC">           1 :       onClick={() =&gt; {</span></span>
+<span id="L87"><span class="lineNum">      87</span> <span class="tlaGNC">           1 :         if (hasDetails) setExpanded((v) =&gt; !v);</span></span>
+<span id="L88"><span class="lineNum">      88</span>              :       }}</span>
+<span id="L89"><span class="lineNum">      89</span>              :     &gt;</span>
+<span id="L90"><span class="lineNum">      90</span>              :       &lt;Box</span>
+<span id="L91"><span class="lineNum">      91</span>              :         sx={{</span>
+<span id="L92"><span class="lineNum">      92</span>              :           display: &quot;flex&quot;,</span>
+<span id="L93"><span class="lineNum">      93</span>              :           alignItems: &quot;center&quot;,</span>
+<span id="L94"><span class="lineNum">      94</span>              :           gap: 1,</span>
+<span id="L95"><span class="lineNum">      95</span>              :           minHeight: 37,</span>
+<span id="L96"><span class="lineNum">      96</span>              :         }}</span>
+<span id="L97"><span class="lineNum">      97</span>              :       &gt;</span>
+<span id="L98"><span class="lineNum">      98</span>              :         &lt;Box sx={{ lineHeight: 1.5, flex: 1 }}&gt;</span>
+<span id="L99"><span class="lineNum">      99</span>              :           {details?.code || details?.status ? errorMessage(details.code, codeFromStatus(details.status)) : title}</span>
+<span id="L100"><span class="lineNum">     100</span>              :         &lt;/Box&gt;</span>
+<span id="L101"><span class="lineNum">     101</span>              :         {hasDetails &amp;&amp; (</span>
+<span id="L102"><span class="lineNum">     102</span>              :           &lt;Button</span>
+<span id="L103"><span class="lineNum">     103</span>              :             size=&quot;small&quot;</span>
+<span id="L104"><span class="lineNum">     104</span> <span class="tlaUNC tlaBgUNC">           0 :             onClick={(e) =&gt; {</span></span>
+<span id="L105"><span class="lineNum">     105</span> <span class="tlaUNC">           0 :               e.stopPropagation();</span></span>
+<span id="L106"><span class="lineNum">     106</span> <span class="tlaUNC">           0 :               setExpanded((v) =&gt; !v);</span></span>
+<span id="L107"><span class="lineNum">     107</span>              :             }}</span>
+<span id="L108"><span class="lineNum">     108</span>              :             endIcon={expanded ? &lt;ExpandLess fontSize=&quot;small&quot; /&gt; : &lt;ExpandMore fontSize=&quot;small&quot; /&gt;}</span>
+<span id="L109"><span class="lineNum">     109</span>              :             sx={{</span>
+<span id="L110"><span class="lineNum">     110</span>              :               color: &quot;inherit&quot;,</span>
+<span id="L111"><span class="lineNum">     111</span>              :               fontWeight: 700,</span>
+<span id="L112"><span class="lineNum">     112</span>              :               textTransform: &quot;none&quot;,</span>
+<span id="L113"><span class="lineNum">     113</span>              :               whiteSpace: &quot;nowrap&quot;,</span>
+<span id="L114"><span class="lineNum">     114</span>              :               opacity: 1,</span>
+<span id="L115"><span class="lineNum">     115</span>              :               flexShrink: 0,</span>
+<span id="L116"><span class="lineNum">     116</span>              :             }}</span>
+<span id="L117"><span class="lineNum">     117</span>              :           &gt;</span>
+<span id="L118"><span class="lineNum">     118</span>              :             {expanded ? t(&quot;errors:hide_details&quot;) : t(&quot;errors:show_details&quot;)}</span>
+<span id="L119"><span class="lineNum">     119</span>              :           &lt;/Button&gt;</span>
+<span id="L120"><span class="lineNum">     120</span>              :         )}</span>
+<span id="L121"><span class="lineNum">     121</span>              :         {onClose &amp;&amp; (</span>
+<span id="L122"><span class="lineNum">     122</span>              :           &lt;IconButton</span>
+<span id="L123"><span class="lineNum">     123</span>              :             aria-label={t(&quot;common:close&quot;, &quot;Close&quot;)}</span>
+<span id="L124"><span class="lineNum">     124</span>              :             size=&quot;small&quot;</span>
+<span id="L125"><span class="lineNum">     125</span>              :             color=&quot;inherit&quot;</span>
+<span id="L126"><span class="lineNum">     126</span> <span class="tlaGNC tlaBgGNC">           4 :             onClick={(e) =&gt; {</span></span>
+<span id="L127"><span class="lineNum">     127</span> <span class="tlaGNC">           4 :               e.stopPropagation();</span></span>
+<span id="L128"><span class="lineNum">     128</span> <span class="tlaGNC">           4 :               onClose();</span></span>
+<span id="L129"><span class="lineNum">     129</span>              :             }}</span>
+<span id="L130"><span class="lineNum">     130</span>              :             sx={{ flexShrink: 0 }}</span>
+<span id="L131"><span class="lineNum">     131</span>              :           &gt;</span>
+<span id="L132"><span class="lineNum">     132</span>              :             &lt;Close fontSize=&quot;small&quot; /&gt;</span>
+<span id="L133"><span class="lineNum">     133</span>              :           &lt;/IconButton&gt;</span>
+<span id="L134"><span class="lineNum">     134</span>              :         )}</span>
+<span id="L135"><span class="lineNum">     135</span>              :       &lt;/Box&gt;</span>
+<span id="L136"><span class="lineNum">     136</span>              :       {hasDetails &amp;&amp; details &amp;&amp; (</span>
+<span id="L137"><span class="lineNum">     137</span>              :         &lt;Collapse in={expanded}&gt;</span>
+<span id="L138"><span class="lineNum">     138</span>              :           &lt;Box</span>
+<span id="L139"><span class="lineNum">     139</span>              :             sx={{ mt: 1, maxWidth: 440, borderRadius: 1, bgcolor: &quot;rgba(0, 0, 0, 0.28)&quot;, p: 1.5 }}</span>
+<span id="L140"><span class="lineNum">     140</span> <span class="tlaUNC tlaBgUNC">           0 :             onClick={(e) =&gt; e.stopPropagation()}</span></span>
+<span id="L141"><span class="lineNum">     141</span>              :           &gt;</span>
+<span id="L142"><span class="lineNum">     142</span>              :             &lt;Box sx={{ display: &quot;flex&quot;, alignItems: &quot;center&quot;, justifyContent: &quot;space-between&quot;, gap: 1, pl: 0.5 }}&gt;</span>
+<span id="L143"><span class="lineNum">     143</span>              :               &lt;Typography variant=&quot;caption&quot; component=&quot;div&quot; sx={{ fontWeight: 700, letterSpacing: 0.4 }}&gt;</span>
+<span id="L144"><span class="lineNum">     144</span>              :                 {meta || t(&quot;errors:show_details&quot;)}</span>
+<span id="L145"><span class="lineNum">     145</span>              :               &lt;/Typography&gt;</span>
+<span id="L146"><span class="lineNum">     146</span>              :               {body &amp;&amp; &lt;CopyButton text={body} /&gt;}</span>
+<span id="L147"><span class="lineNum">     147</span>              :             &lt;/Box&gt;</span>
+<span id="L148"><span class="lineNum">     148</span>              :             {body &amp;&amp; (</span>
+<span id="L149"><span class="lineNum">     149</span>              :               &lt;Typography</span>
+<span id="L150"><span class="lineNum">     150</span>              :                 variant=&quot;caption&quot;</span>
+<span id="L151"><span class="lineNum">     151</span>              :                 component=&quot;pre&quot;</span>
+<span id="L152"><span class="lineNum">     152</span>              :                 sx={{</span>
+<span id="L153"><span class="lineNum">     153</span>              :                   m: 0,</span>
+<span id="L154"><span class="lineNum">     154</span>              :                   mt: 0.5,</span>
+<span id="L155"><span class="lineNum">     155</span>              :                   whiteSpace: &quot;pre-wrap&quot;,</span>
+<span id="L156"><span class="lineNum">     156</span>              :                   wordBreak: &quot;break-word&quot;,</span>
+<span id="L157"><span class="lineNum">     157</span>              :                   fontFamily: &quot;monospace&quot;,</span>
+<span id="L158"><span class="lineNum">     158</span>              :                 }}</span>
+<span id="L159"><span class="lineNum">     159</span>              :               &gt;</span>
+<span id="L160"><span class="lineNum">     160</span>              :                 {t(&quot;errors:technical_details&quot;)}</span>
+<span id="L161"><span class="lineNum">     161</span>              :               &lt;/Typography&gt;</span>
+<span id="L162"><span class="lineNum">     162</span>              :             )}</span>
+<span id="L163"><span class="lineNum">     163</span>              :           &lt;/Box&gt;</span>
+<span id="L164"><span class="lineNum">     164</span>              :         &lt;/Collapse&gt;</span>
+<span id="L165"><span class="lineNum">     165</span>              :       )}</span>
+<span id="L166"><span class="lineNum">     166</span>              :     &lt;/Alert&gt;</span>
+<span id="L167"><span class="lineNum">     167</span>              :   );</span>
+<span id="L168"><span class="lineNum">     168</span>              : }</span>
+        </pre>
+              </td>
+            </tr>
+          </table>
+          <br>
+
+          <table width="100%" border=0 cellspacing=0 cellpadding=0>
+            <tr><td class="ruler"><img src="../../../../glass.png" width=3 height=3 alt=""></td></tr>
+            <tr><td class="versionInfo">Generated by: <a href="https://github.com//linux-test-project/lcov" target="_parent">LCOV version 2.0-1</a></td></tr>
+          </table>
+          <br>
+
+</body>
+</html>

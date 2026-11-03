@@ -37,7 +37,7 @@
           </tr>
           <tr>
             <td class="headerItem">Test Date:</td>
-            <td class="headerValue">2026-09-06 21:10:44</td>
+            <td class="headerValue">2026-11-03 01:49:59</td>
             <td></td>
             <td class="headerItem">Functions:</td>
             <td class="headerCovTableEntryHi">100.0&nbsp;%</td>
@@ -64,10 +64,10 @@
 <span id="L2"><span class="lineNum">       2</span>              : import { schedulesService } from &quot;@/lib/services/schedules&quot;;</span>
 <span id="L3"><span class="lineNum">       3</span>              : import type { ScheduleSourceType } from &quot;@/types&quot;;</span>
 <span id="L4"><span class="lineNum">       4</span>              : </span>
-<span id="L5"><span class="lineNum">       5</span> <span class="tlaGNC tlaBgGNC">           6 : export function useSchedules(stationId: string) {</span></span>
-<span id="L6"><span class="lineNum">       6</span> <span class="tlaGNC">           6 :   return useQuery({</span></span>
+<span id="L5"><span class="lineNum">       5</span> <span class="tlaGNC tlaBgGNC">          12 : export function useSchedules(stationId: string) {</span></span>
+<span id="L6"><span class="lineNum">       6</span> <span class="tlaGNC">          12 :   return useQuery({</span></span>
 <span id="L7"><span class="lineNum">       7</span>              :     queryKey: [&quot;schedules&quot;, stationId],</span>
-<span id="L8"><span class="lineNum">       8</span> <span class="tlaGNC">           4 :     queryFn: () =&gt; schedulesService.list(stationId),</span></span>
+<span id="L8"><span class="lineNum">       8</span> <span class="tlaGNC">           5 :     queryFn: () =&gt; schedulesService.list(stationId),</span></span>
 <span id="L9"><span class="lineNum">       9</span>              :     enabled: !!stationId,</span>
 <span id="L10"><span class="lineNum">      10</span>              :   });</span>
 <span id="L11"><span class="lineNum">      11</span>              : }</span>

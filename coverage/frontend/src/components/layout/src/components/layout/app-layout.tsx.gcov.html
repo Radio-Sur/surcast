@@ -32,17 +32,17 @@
             <td></td>
             <td class="headerItem">Lines:</td>
             <td class="headerCovTableEntryHi">100.0&nbsp;%</td>
-            <td class="headerCovTableEntry">6</td>
-            <td class="headerCovTableEntry">6</td>
+            <td class="headerCovTableEntry">9</td>
+            <td class="headerCovTableEntry">9</td>
           </tr>
           <tr>
             <td class="headerItem">Test Date:</td>
-            <td class="headerValue">2026-09-06 21:10:44</td>
+            <td class="headerValue">2026-11-03 01:49:59</td>
             <td></td>
             <td class="headerItem">Functions:</td>
             <td class="headerCovTableEntryHi">100.0&nbsp;%</td>
-            <td class="headerCovTableEntry">1</td>
-            <td class="headerCovTableEntry">1</td>
+            <td class="headerCovTableEntry">3</td>
+            <td class="headerCovTableEntry">3</td>
           </tr>
                   <tr><td><img src="../../../../../../glass.png" width=3 height=3 alt=""></td></tr>
                 </table>
@@ -62,41 +62,52 @@
 <pre class="source">
 <span id="L1"><span class="lineNum">       1</span>              : import Box from &quot;@mui/material/Box&quot;;</span>
 <span id="L2"><span class="lineNum">       2</span>              : import CircularProgress from &quot;@mui/material/CircularProgress&quot;;</span>
-<span id="L3"><span class="lineNum">       3</span>              : import { Navigate, Outlet } from &quot;react-router-dom&quot;;</span>
-<span id="L4"><span class="lineNum">       4</span>              : import { ErrorBoundary } from &quot;@/components/error-boundary&quot;;</span>
-<span id="L5"><span class="lineNum">       5</span>              : import { useAuth } from &quot;@/hooks/use-auth&quot;;</span>
-<span id="L6"><span class="lineNum">       6</span>              : import { Header } from &quot;./header&quot;;</span>
-<span id="L7"><span class="lineNum">       7</span>              : import { Sidebar } from &quot;./sidebar&quot;;</span>
-<span id="L8"><span class="lineNum">       8</span>              : </span>
-<span id="L9"><span class="lineNum">       9</span> <span class="tlaGNC tlaBgGNC">           7 : export function AppLayout() {</span></span>
-<span id="L10"><span class="lineNum">      10</span> <span class="tlaGNC">           7 :   const { isAuthenticated, isLoading } = useAuth();</span></span>
-<span id="L11"><span class="lineNum">      11</span>              : </span>
-<span id="L12"><span class="lineNum">      12</span> <span class="tlaGNC">           7 :   if (isLoading) {</span></span>
-<span id="L13"><span class="lineNum">      13</span> <span class="tlaGNC">           4 :     return (</span></span>
-<span id="L14"><span class="lineNum">      14</span>              :       &lt;Box sx={{ minHeight: &quot;100vh&quot;, display: &quot;flex&quot;, alignItems: &quot;center&quot;, justifyContent: &quot;center&quot; }}&gt;</span>
-<span id="L15"><span class="lineNum">      15</span>              :         &lt;CircularProgress /&gt;</span>
-<span id="L16"><span class="lineNum">      16</span>              :       &lt;/Box&gt;</span>
-<span id="L17"><span class="lineNum">      17</span>              :     );</span>
-<span id="L18"><span class="lineNum">      18</span>              :   }</span>
-<span id="L19"><span class="lineNum">      19</span>              : </span>
-<span id="L20"><span class="lineNum">      20</span> <span class="tlaGNC">           3 :   if (!isAuthenticated) {</span></span>
-<span id="L21"><span class="lineNum">      21</span> <span class="tlaGNC">           1 :     return &lt;Navigate to=&quot;/login&quot; replace /&gt;;</span></span>
-<span id="L22"><span class="lineNum">      22</span>              :   }</span>
-<span id="L23"><span class="lineNum">      23</span>              : </span>
-<span id="L24"><span class="lineNum">      24</span> <span class="tlaGNC">           2 :   return (</span></span>
-<span id="L25"><span class="lineNum">      25</span>              :     &lt;Box sx={{ display: &quot;flex&quot;, minHeight: &quot;100vh&quot; }}&gt;</span>
-<span id="L26"><span class="lineNum">      26</span>              :       &lt;Sidebar /&gt;</span>
-<span id="L27"><span class="lineNum">      27</span>              :       &lt;Box sx={{ flex: 1, display: &quot;flex&quot;, flexDirection: &quot;column&quot; }}&gt;</span>
-<span id="L28"><span class="lineNum">      28</span>              :         &lt;Header /&gt;</span>
-<span id="L29"><span class="lineNum">      29</span>              :         &lt;Box component=&quot;main&quot; sx={{ flex: 1, p: 3 }}&gt;</span>
-<span id="L30"><span class="lineNum">      30</span>              :           &lt;ErrorBoundary&gt;</span>
-<span id="L31"><span class="lineNum">      31</span>              :             &lt;Outlet /&gt;</span>
-<span id="L32"><span class="lineNum">      32</span>              :           &lt;/ErrorBoundary&gt;</span>
-<span id="L33"><span class="lineNum">      33</span>              :         &lt;/Box&gt;</span>
-<span id="L34"><span class="lineNum">      34</span>              :       &lt;/Box&gt;</span>
-<span id="L35"><span class="lineNum">      35</span>              :     &lt;/Box&gt;</span>
-<span id="L36"><span class="lineNum">      36</span>              :   );</span>
-<span id="L37"><span class="lineNum">      37</span>              : }</span>
+<span id="L3"><span class="lineNum">       3</span>              : import { useState } from &quot;react&quot;;</span>
+<span id="L4"><span class="lineNum">       4</span>              : import { Navigate, Outlet } from &quot;react-router-dom&quot;;</span>
+<span id="L5"><span class="lineNum">       5</span>              : import { ErrorBoundary } from &quot;@/components/error-boundary&quot;;</span>
+<span id="L6"><span class="lineNum">       6</span>              : import { useAuth } from &quot;@/hooks/use-auth&quot;;</span>
+<span id="L7"><span class="lineNum">       7</span>              : import { Header } from &quot;./header&quot;;</span>
+<span id="L8"><span class="lineNum">       8</span>              : import { Sidebar } from &quot;./sidebar&quot;;</span>
+<span id="L9"><span class="lineNum">       9</span>              : </span>
+<span id="L10"><span class="lineNum">      10</span> <span class="tlaGNC tlaBgGNC">          11 : export function AppLayout() {</span></span>
+<span id="L11"><span class="lineNum">      11</span> <span class="tlaGNC">          11 :   const { isAuthenticated, isLoading } = useAuth();</span></span>
+<span id="L12"><span class="lineNum">      12</span> <span class="tlaGNC">          11 :   const [mobileNavOpen, setMobileNavOpen] = useState(false);</span></span>
+<span id="L13"><span class="lineNum">      13</span>              : </span>
+<span id="L14"><span class="lineNum">      14</span> <span class="tlaGNC">          11 :   if (isLoading) {</span></span>
+<span id="L15"><span class="lineNum">      15</span> <span class="tlaGNC">           5 :     return (</span></span>
+<span id="L16"><span class="lineNum">      16</span>              :       &lt;Box sx={{ minHeight: &quot;100vh&quot;, display: &quot;flex&quot;, alignItems: &quot;center&quot;, justifyContent: &quot;center&quot; }}&gt;</span>
+<span id="L17"><span class="lineNum">      17</span>              :         &lt;CircularProgress /&gt;</span>
+<span id="L18"><span class="lineNum">      18</span>              :       &lt;/Box&gt;</span>
+<span id="L19"><span class="lineNum">      19</span>              :     );</span>
+<span id="L20"><span class="lineNum">      20</span>              :   }</span>
+<span id="L21"><span class="lineNum">      21</span>              : </span>
+<span id="L22"><span class="lineNum">      22</span> <span class="tlaGNC">           6 :   if (!isAuthenticated) {</span></span>
+<span id="L23"><span class="lineNum">      23</span> <span class="tlaGNC">           1 :     return &lt;Navigate to=&quot;/login&quot; replace /&gt;;</span></span>
+<span id="L24"><span class="lineNum">      24</span>              :   }</span>
+<span id="L25"><span class="lineNum">      25</span>              : </span>
+<span id="L26"><span class="lineNum">      26</span> <span class="tlaGNC">           5 :   return (</span></span>
+<span id="L27"><span class="lineNum">      27</span>              :     &lt;Box sx={{ display: &quot;flex&quot;, minHeight: &quot;100dvh&quot;, width: &quot;100%&quot;, overflowX: &quot;clip&quot; }}&gt;</span>
+<span id="L28"><span class="lineNum">      28</span> <span class="tlaGNC">           1 :       &lt;Sidebar mobileOpen={mobileNavOpen} onClose={() =&gt; setMobileNavOpen(false)} /&gt;</span></span>
+<span id="L29"><span class="lineNum">      29</span>              :       &lt;Box sx={{ flex: 1, minWidth: 0, display: &quot;flex&quot;, flexDirection: &quot;column&quot; }}&gt;</span>
+<span id="L30"><span class="lineNum">      30</span> <span class="tlaGNC">           1 :         &lt;Header onMenuClick={() =&gt; setMobileNavOpen(true)} /&gt;</span></span>
+<span id="L31"><span class="lineNum">      31</span>              :         &lt;Box</span>
+<span id="L32"><span class="lineNum">      32</span>              :           component=&quot;main&quot;</span>
+<span id="L33"><span class="lineNum">      33</span>              :           sx={{</span>
+<span id="L34"><span class="lineNum">      34</span>              :             flex: 1,</span>
+<span id="L35"><span class="lineNum">      35</span>              :             minWidth: 0,</span>
+<span id="L36"><span class="lineNum">      36</span>              :             px: { xs: 2, sm: 3 },</span>
+<span id="L37"><span class="lineNum">      37</span>              :             py: { xs: 2, sm: 3 },</span>
+<span id="L38"><span class="lineNum">      38</span>              :             pb: { xs: &quot;calc(24px + env(safe-area-inset-bottom))&quot;, sm: 3 },</span>
+<span id="L39"><span class="lineNum">      39</span>              :           }}</span>
+<span id="L40"><span class="lineNum">      40</span>              :         &gt;</span>
+<span id="L41"><span class="lineNum">      41</span>              :           &lt;ErrorBoundary&gt;</span>
+<span id="L42"><span class="lineNum">      42</span>              :             &lt;Outlet /&gt;</span>
+<span id="L43"><span class="lineNum">      43</span>              :           &lt;/ErrorBoundary&gt;</span>
+<span id="L44"><span class="lineNum">      44</span>              :         &lt;/Box&gt;</span>
+<span id="L45"><span class="lineNum">      45</span>              :       &lt;/Box&gt;</span>
+<span id="L46"><span class="lineNum">      46</span>              :     &lt;/Box&gt;</span>
+<span id="L47"><span class="lineNum">      47</span>              :   );</span>
+<span id="L48"><span class="lineNum">      48</span>              : }</span>
         </pre>
               </td>
             </tr>

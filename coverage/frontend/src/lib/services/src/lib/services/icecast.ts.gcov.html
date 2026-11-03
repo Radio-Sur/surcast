@@ -37,7 +37,7 @@
           </tr>
           <tr>
             <td class="headerItem">Test Date:</td>
-            <td class="headerValue">2026-09-06 21:10:44</td>
+            <td class="headerValue">2026-11-03 01:49:59</td>
             <td></td>
             <td class="headerItem">Functions:</td>
             <td class="headerCovTableEntryHi">100.0&nbsp;%</td>
@@ -99,7 +99,7 @@
 <span id="L37"><span class="lineNum">      37</span>              : </span>
 <span id="L38"><span class="lineNum">      38</span> <span class="tlaGNC tlaBgGNC">           2 : export function createIcecastService(client: HttpClient) {</span></span>
 <span id="L39"><span class="lineNum">      39</span> <span class="tlaGNC">           2 :   return {</span></span>
-<span id="L40"><span class="lineNum">      40</span> <span class="tlaGNC">           5 :     status: () =&gt; client.get&lt;IcecastStatusResponse&gt;(&quot;/admin/icecast&quot;),</span></span>
+<span id="L40"><span class="lineNum">      40</span> <span class="tlaGNC">           6 :     status: () =&gt; client.get&lt;IcecastStatusResponse&gt;(&quot;/admin/icecast&quot;),</span></span>
 <span id="L41"><span class="lineNum">      41</span> <span class="tlaGNC">           1 :     update: (update: IcecastSettingsUpdate) =&gt; client.patch&lt;IcecastActionResponse&gt;(&quot;/admin/icecast&quot;, update),</span></span>
 <span id="L42"><span class="lineNum">      42</span> <span class="tlaGNC">           1 :     start: () =&gt; client.post&lt;IcecastActionResponse&gt;(&quot;/admin/icecast/start&quot;),</span></span>
 <span id="L43"><span class="lineNum">      43</span> <span class="tlaGNC">           1 :     stop: () =&gt; client.post&lt;IcecastActionResponse&gt;(&quot;/admin/icecast/stop&quot;),</span></span>

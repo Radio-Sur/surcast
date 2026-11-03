@@ -37,7 +37,7 @@
           </tr>
           <tr>
             <td class="headerItem">Test Date:</td>
-            <td class="headerValue">2026-09-06 21:10:44</td>
+            <td class="headerValue">2026-11-03 01:49:59</td>
             <td></td>
             <td class="headerItem">Functions:</td>
             <td class="headerCovTableEntryHi">100.0&nbsp;%</td>
@@ -64,11 +64,11 @@
 <span id="L2"><span class="lineNum">       2</span>              : import type { HttpClient } from &quot;@/lib/http-client&quot;;</span>
 <span id="L3"><span class="lineNum">       3</span>              : import type { QueueItem } from &quot;@/types&quot;;</span>
 <span id="L4"><span class="lineNum">       4</span>              : </span>
-<span id="L5"><span class="lineNum">       5</span> <span class="tlaGNC tlaBgGNC">           2 : export function createStationQueueService(client: HttpClient) {</span></span>
-<span id="L6"><span class="lineNum">       6</span> <span class="tlaGNC">           2 :   return {</span></span>
+<span id="L5"><span class="lineNum">       5</span> <span class="tlaGNC tlaBgGNC">           4 : export function createStationQueueService(client: HttpClient) {</span></span>
+<span id="L6"><span class="lineNum">       6</span> <span class="tlaGNC">           4 :   return {</span></span>
 <span id="L7"><span class="lineNum">       7</span> <span class="tlaGNC">           1 :     list: (stationId: string) =&gt; client.get&lt;QueueItem[]&gt;(`/stations/${stationId}/queue`),</span></span>
 <span id="L8"><span class="lineNum">       8</span> <span class="tlaGNC">           1 :     add: (stationId: string, song_ids: string[]) =&gt; client.post(`/stations/${stationId}/queue`, { song_ids }),</span></span>
-<span id="L9"><span class="lineNum">       9</span> <span class="tlaGNC">           1 :     remove: (stationId: string, itemId: string) =&gt; client.delete(`/stations/${stationId}/queue/${itemId}`),</span></span>
+<span id="L9"><span class="lineNum">       9</span> <span class="tlaGNC">           2 :     remove: (stationId: string, itemId: string) =&gt; client.delete(`/stations/${stationId}/queue/${itemId}`),</span></span>
 <span id="L10"><span class="lineNum">      10</span> <span class="tlaGNC">           1 :     reorder: (stationId: string, queue_item_ids: string[]) =&gt;</span></span>
 <span id="L11"><span class="lineNum">      11</span> <span class="tlaGNC">           1 :       client.put(`/stations/${stationId}/queue/reorder`, { queue_item_ids }),</span></span>
 <span id="L12"><span class="lineNum">      12</span> <span class="tlaGNC">           1 :     insert: (stationId: string, params: { song_id: string; position: number }) =&gt;</span></span>
@@ -78,7 +78,7 @@
 <span id="L16"><span class="lineNum">      16</span>              :   };</span>
 <span id="L17"><span class="lineNum">      17</span>              : }</span>
 <span id="L18"><span class="lineNum">      18</span>              : </span>
-<span id="L19"><span class="lineNum">      19</span> <span class="tlaGNC">           2 : export const stationQueueService = createStationQueueService(httpClient);</span></span>
+<span id="L19"><span class="lineNum">      19</span> <span class="tlaGNC">           4 : export const stationQueueService = createStationQueueService(httpClient);</span></span>
         </pre>
               </td>
             </tr>

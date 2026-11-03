@@ -37,7 +37,7 @@
           </tr>
           <tr>
             <td class="headerItem">Test Date:</td>
-            <td class="headerValue">2026-09-06 21:10:44</td>
+            <td class="headerValue">2026-11-03 01:49:59</td>
             <td></td>
             <td class="headerItem">Functions:</td>
             <td class="headerCovTableEntryHi">100.0&nbsp;%</td>
@@ -64,33 +64,33 @@
 <span id="L2"><span class="lineNum">       2</span>              : import { stationLibraryService } from &quot;@/lib/services/station-library&quot;;</span>
 <span id="L3"><span class="lineNum">       3</span>              : import type { SongSelections } from &quot;@/types&quot;;</span>
 <span id="L4"><span class="lineNum">       4</span>              : </span>
-<span id="L5"><span class="lineNum">       5</span> <span class="tlaGNC tlaBgGNC">           9 : export function useStationSongs(stationId: string, page: number = 1, perPage: number = 50) {</span></span>
-<span id="L6"><span class="lineNum">       6</span> <span class="tlaGNC">           9 :   return useQuery({</span></span>
+<span id="L5"><span class="lineNum">       5</span> <span class="tlaGNC tlaBgGNC">          41 : export function useStationSongs(stationId: string, page: number = 1, perPage: number = 50) {</span></span>
+<span id="L6"><span class="lineNum">       6</span> <span class="tlaGNC">          41 :   return useQuery({</span></span>
 <span id="L7"><span class="lineNum">       7</span>              :     queryKey: [&quot;station-songs&quot;, stationId, page, perPage],</span>
-<span id="L8"><span class="lineNum">       8</span> <span class="tlaGNC">           4 :     queryFn: () =&gt; stationLibraryService.list(stationId, { page, per_page: perPage }),</span></span>
+<span id="L8"><span class="lineNum">       8</span> <span class="tlaGNC">           8 :     queryFn: () =&gt; stationLibraryService.list(stationId, { page, per_page: perPage }),</span></span>
 <span id="L9"><span class="lineNum">       9</span>              :     enabled: !!stationId,</span>
 <span id="L10"><span class="lineNum">      10</span>              :   });</span>
 <span id="L11"><span class="lineNum">      11</span>              : }</span>
 <span id="L12"><span class="lineNum">      12</span>              : </span>
-<span id="L13"><span class="lineNum">      13</span> <span class="tlaGNC">          15 : export function useStationSongsAll(stationId: string) {</span></span>
-<span id="L14"><span class="lineNum">      14</span> <span class="tlaGNC">          15 :   return useQuery({</span></span>
+<span id="L13"><span class="lineNum">      13</span> <span class="tlaGNC">          72 : export function useStationSongsAll(stationId: string) {</span></span>
+<span id="L14"><span class="lineNum">      14</span> <span class="tlaGNC">          72 :   return useQuery({</span></span>
 <span id="L15"><span class="lineNum">      15</span>              :     queryKey: [&quot;station-songs&quot;, stationId, &quot;all&quot;],</span>
-<span id="L16"><span class="lineNum">      16</span> <span class="tlaGNC">           8 :     queryFn: () =&gt; stationLibraryService.list(stationId, { per_page: 100000 }),</span></span>
+<span id="L16"><span class="lineNum">      16</span> <span class="tlaGNC">          13 :     queryFn: () =&gt; stationLibraryService.list(stationId, { per_page: 100000 }),</span></span>
 <span id="L17"><span class="lineNum">      17</span>              :     enabled: !!stationId,</span>
 <span id="L18"><span class="lineNum">      18</span>              :     staleTime: 30000,</span>
 <span id="L19"><span class="lineNum">      19</span>              :   });</span>
 <span id="L20"><span class="lineNum">      20</span>              : }</span>
 <span id="L21"><span class="lineNum">      21</span>              : </span>
-<span id="L22"><span class="lineNum">      22</span> <span class="tlaGNC">          11 : export function useAddStationSongs(stationId: string) {</span></span>
-<span id="L23"><span class="lineNum">      23</span> <span class="tlaGNC">          11 :   return useMutation({</span></span>
+<span id="L22"><span class="lineNum">      22</span> <span class="tlaGNC">          36 : export function useAddStationSongs(stationId: string) {</span></span>
+<span id="L23"><span class="lineNum">      23</span> <span class="tlaGNC">          36 :   return useMutation({</span></span>
 <span id="L24"><span class="lineNum">      24</span> <span class="tlaGNC">           1 :     mutationFn: (data: SongSelections) =&gt; stationLibraryService.add(stationId, data),</span></span>
 <span id="L25"><span class="lineNum">      25</span>              :   });</span>
 <span id="L26"><span class="lineNum">      26</span>              : }</span>
 <span id="L27"><span class="lineNum">      27</span>              : </span>
-<span id="L28"><span class="lineNum">      28</span> <span class="tlaGNC">           8 : export function useRemoveStationSong(stationId: string) {</span></span>
-<span id="L29"><span class="lineNum">      29</span> <span class="tlaGNC">           8 :   const queryClient = useQueryClient();</span></span>
+<span id="L28"><span class="lineNum">      28</span> <span class="tlaGNC">          40 : export function useRemoveStationSong(stationId: string) {</span></span>
+<span id="L29"><span class="lineNum">      29</span> <span class="tlaGNC">          40 :   const queryClient = useQueryClient();</span></span>
 <span id="L30"><span class="lineNum">      30</span>              : </span>
-<span id="L31"><span class="lineNum">      31</span> <span class="tlaGNC">           8 :   return useMutation({</span></span>
+<span id="L31"><span class="lineNum">      31</span> <span class="tlaGNC">          40 :   return useMutation({</span></span>
 <span id="L32"><span class="lineNum">      32</span> <span class="tlaGNC">           1 :     mutationFn: (songId: string) =&gt; stationLibraryService.remove(stationId, songId),</span></span>
 <span id="L33"><span class="lineNum">      33</span> <span class="tlaGNC">           1 :     onSuccess: () =&gt; {</span></span>
 <span id="L34"><span class="lineNum">      34</span> <span class="tlaGNC">           1 :       queryClient.invalidateQueries({ queryKey: [&quot;station-songs&quot;, stationId] });</span></span>

@@ -37,7 +37,7 @@
           </tr>
           <tr>
             <td class="headerItem">Test Date:</td>
-            <td class="headerValue">2026-09-06 21:10:44</td>
+            <td class="headerValue">2026-11-03 01:49:59</td>
             <td></td>
             <td class="headerItem">Functions:</td>
             <td class="headerCovTableEntryLo">50.0&nbsp;%</td>
@@ -95,18 +95,18 @@
 <span id="L33"><span class="lineNum">      33</span>              :           mt: 1.5,</span>
 <span id="L34"><span class="lineNum">      34</span>              :         }}</span>
 <span id="L35"><span class="lineNum">      35</span>              :       &gt;</span>
-<span id="L36"><span class="lineNum">      36</span>              :         &lt;Box&gt;</span>
-<span id="L37"><span class="lineNum">      37</span>              :           &lt;Typography variant=&quot;h6&quot; sx={{ fontWeight: 700, lineHeight: 1.2 }}&gt;</span>
+<span id="L36"><span class="lineNum">      36</span>              :         &lt;Box sx={{ flex: 1, minWidth: 0 }}&gt;</span>
+<span id="L37"><span class="lineNum">      37</span>              :           &lt;Typography variant=&quot;h6&quot; noWrap title={group.playlist_name} sx={{ fontWeight: 700, lineHeight: 1.2 }}&gt;</span>
 <span id="L38"><span class="lineNum">      38</span>              :             {group.playlist_name}</span>
 <span id="L39"><span class="lineNum">      39</span>              :           &lt;/Typography&gt;</span>
-<span id="L40"><span class="lineNum">      40</span>              :           &lt;Typography variant=&quot;caption&quot; sx={{ opacity: 0.7 }}&gt;</span>
+<span id="L40"><span class="lineNum">      40</span>              :           &lt;Typography variant=&quot;caption&quot; component=&quot;div&quot; noWrap sx={{ opacity: 0.7 }}&gt;</span>
 <span id="L41"><span class="lineNum">      41</span>              :             {t(&quot;stations:playlist_group_total&quot;, {</span>
 <span id="L42"><span class="lineNum">      42</span>              :               count: group.songs.length,</span>
 <span id="L43"><span class="lineNum">      43</span>              :               duration: fmt(group.total_duration),</span>
 <span id="L44"><span class="lineNum">      44</span>              :             })}</span>
 <span id="L45"><span class="lineNum">      45</span>              :           &lt;/Typography&gt;</span>
 <span id="L46"><span class="lineNum">      46</span>              :         &lt;/Box&gt;</span>
-<span id="L47"><span class="lineNum">      47</span>              :         &lt;PlaylistPlay sx={{ fontSize: 32, opacity: 0.4 }} /&gt;</span>
+<span id="L47"><span class="lineNum">      47</span>              :         &lt;PlaylistPlay sx={{ fontSize: 32, opacity: 0.4, flexShrink: 0, ml: 1 }} /&gt;</span>
 <span id="L48"><span class="lineNum">      48</span>              :       &lt;/Box&gt;</span>
 <span id="L49"><span class="lineNum">      49</span>              : </span>
 <span id="L50"><span class="lineNum">      50</span>              :       {currentSong &amp;&amp; (</span>
@@ -129,39 +129,44 @@
 <span id="L67"><span class="lineNum">      67</span>              :               &lt;Typography variant=&quot;caption&quot; sx={{ opacity: 0.6, fontSize: 11 }}&gt;</span>
 <span id="L68"><span class="lineNum">      68</span>              :                 {t(&quot;stations:queue_current_track&quot;)}</span>
 <span id="L69"><span class="lineNum">      69</span>              :               &lt;/Typography&gt;</span>
-<span id="L70"><span class="lineNum">      70</span>              :               &lt;Typography variant=&quot;body1&quot; sx={{ fontWeight: 600, mt: 0.25 }}&gt;</span>
+<span id="L70"><span class="lineNum">      70</span>              :               &lt;Typography variant=&quot;body1&quot; noWrap title={currentSong.title} sx={{ fontWeight: 600, mt: 0.25 }}&gt;</span>
 <span id="L71"><span class="lineNum">      71</span>              :                 {currentSong.title}</span>
 <span id="L72"><span class="lineNum">      72</span>              :               &lt;/Typography&gt;</span>
-<span id="L73"><span class="lineNum">      73</span>              :               &lt;Typography variant=&quot;body2&quot; sx={{ opacity: 0.8 }}&gt;</span>
-<span id="L74"><span class="lineNum">      74</span>              :                 {currentSong.artist || t(&quot;common:unknown_artist&quot;)}</span>
-<span id="L75"><span class="lineNum">      75</span>              :                 {currentSong.album ? ` · ${currentSong.album}` : &quot;&quot;}</span>
-<span id="L76"><span class="lineNum">      76</span>              :               &lt;/Typography&gt;</span>
-<span id="L77"><span class="lineNum">      77</span>              :               &lt;Typography variant=&quot;caption&quot; sx={{ opacity: 0.6, mt: 0.5, mb: 0.25, display: &quot;block&quot; }}&gt;</span>
-<span id="L78"><span class="lineNum">      78</span>              :                 {t(&quot;stations:queue_song_of&quot;, {</span>
-<span id="L79"><span class="lineNum">      79</span>              :                   current: (group.current_song_index ?? 0) + 1,</span>
-<span id="L80"><span class="lineNum">      80</span>              :                   total: group.songs.length,</span>
-<span id="L81"><span class="lineNum">      81</span>              :                 })}</span>
-<span id="L82"><span class="lineNum">      82</span>              :               &lt;/Typography&gt;</span>
-<span id="L83"><span class="lineNum">      83</span>              :             &lt;/Box&gt;</span>
-<span id="L84"><span class="lineNum">      84</span>              :             &lt;Box sx={{ display: &quot;flex&quot;, alignItems: &quot;center&quot;, gap: 1, ml: 1 }}&gt;</span>
-<span id="L85"><span class="lineNum">      85</span>              :               &lt;Box</span>
-<span id="L86"><span class="lineNum">      86</span>              :                 sx={{</span>
-<span id="L87"><span class="lineNum">      87</span>              :                   width: 8,</span>
-<span id="L88"><span class="lineNum">      88</span>              :                   height: 8,</span>
-<span id="L89"><span class="lineNum">      89</span>              :                   borderRadius: &quot;50%&quot;,</span>
-<span id="L90"><span class="lineNum">      90</span>              :                   bgcolor: connected ? &quot;success.light&quot; : &quot;error.light&quot;,</span>
-<span id="L91"><span class="lineNum">      91</span>              :                 }}</span>
-<span id="L92"><span class="lineNum">      92</span>              :               /&gt;</span>
-<span id="L93"><span class="lineNum">      93</span> <span class="tlaUNC tlaBgUNC">           0 :               &lt;IconButton size=&quot;small&quot; onClick={() =&gt; onSkip?.()} disabled={isSkipping} sx={{ color: &quot;inherit&quot; }}&gt;</span></span>
-<span id="L94"><span class="lineNum">      94</span>              :                 {isSkipping ? &lt;CircularProgress size={16} sx={{ color: &quot;inherit&quot; }} /&gt; : &lt;SkipNext /&gt;}</span>
-<span id="L95"><span class="lineNum">      95</span>              :               &lt;/IconButton&gt;</span>
-<span id="L96"><span class="lineNum">      96</span>              :             &lt;/Box&gt;</span>
-<span id="L97"><span class="lineNum">      97</span>              :           &lt;/Box&gt;</span>
-<span id="L98"><span class="lineNum">      98</span>              :         &lt;/Box&gt;</span>
-<span id="L99"><span class="lineNum">      99</span>              :       )}</span>
-<span id="L100"><span class="lineNum">     100</span>              :     &lt;/&gt;</span>
-<span id="L101"><span class="lineNum">     101</span>              :   );</span>
-<span id="L102"><span class="lineNum">     102</span>              : }</span>
+<span id="L73"><span class="lineNum">      73</span>              :               &lt;Typography</span>
+<span id="L74"><span class="lineNum">      74</span>              :                 variant=&quot;body2&quot;</span>
+<span id="L75"><span class="lineNum">      75</span>              :                 noWrap</span>
+<span id="L76"><span class="lineNum">      76</span>              :                 title={`${currentSong.artist} · ${currentSong.album}`}</span>
+<span id="L77"><span class="lineNum">      77</span>              :                 sx={{ opacity: 0.8 }}</span>
+<span id="L78"><span class="lineNum">      78</span>              :               &gt;</span>
+<span id="L79"><span class="lineNum">      79</span>              :                 {currentSong.artist || t(&quot;common:unknown_artist&quot;)}</span>
+<span id="L80"><span class="lineNum">      80</span>              :                 {currentSong.album ? ` · ${currentSong.album}` : &quot;&quot;}</span>
+<span id="L81"><span class="lineNum">      81</span>              :               &lt;/Typography&gt;</span>
+<span id="L82"><span class="lineNum">      82</span>              :               &lt;Typography variant=&quot;caption&quot; sx={{ opacity: 0.6, mt: 0.5, mb: 0.25, display: &quot;block&quot; }}&gt;</span>
+<span id="L83"><span class="lineNum">      83</span>              :                 {t(&quot;stations:queue_song_of&quot;, {</span>
+<span id="L84"><span class="lineNum">      84</span>              :                   current: (group.current_song_index ?? 0) + 1,</span>
+<span id="L85"><span class="lineNum">      85</span>              :                   total: group.songs.length,</span>
+<span id="L86"><span class="lineNum">      86</span>              :                 })}</span>
+<span id="L87"><span class="lineNum">      87</span>              :               &lt;/Typography&gt;</span>
+<span id="L88"><span class="lineNum">      88</span>              :             &lt;/Box&gt;</span>
+<span id="L89"><span class="lineNum">      89</span>              :             &lt;Box sx={{ display: &quot;flex&quot;, alignItems: &quot;center&quot;, gap: 1, ml: 1, flexShrink: 0 }}&gt;</span>
+<span id="L90"><span class="lineNum">      90</span>              :               &lt;Box</span>
+<span id="L91"><span class="lineNum">      91</span>              :                 sx={{</span>
+<span id="L92"><span class="lineNum">      92</span>              :                   width: 8,</span>
+<span id="L93"><span class="lineNum">      93</span>              :                   height: 8,</span>
+<span id="L94"><span class="lineNum">      94</span>              :                   borderRadius: &quot;50%&quot;,</span>
+<span id="L95"><span class="lineNum">      95</span>              :                   bgcolor: connected ? &quot;success.light&quot; : &quot;error.light&quot;,</span>
+<span id="L96"><span class="lineNum">      96</span>              :                 }}</span>
+<span id="L97"><span class="lineNum">      97</span>              :               /&gt;</span>
+<span id="L98"><span class="lineNum">      98</span> <span class="tlaUNC tlaBgUNC">           0 :               &lt;IconButton size=&quot;small&quot; onClick={() =&gt; onSkip?.()} disabled={isSkipping} sx={{ color: &quot;inherit&quot; }}&gt;</span></span>
+<span id="L99"><span class="lineNum">      99</span>              :                 {isSkipping ? &lt;CircularProgress size={16} sx={{ color: &quot;inherit&quot; }} /&gt; : &lt;SkipNext /&gt;}</span>
+<span id="L100"><span class="lineNum">     100</span>              :               &lt;/IconButton&gt;</span>
+<span id="L101"><span class="lineNum">     101</span>              :             &lt;/Box&gt;</span>
+<span id="L102"><span class="lineNum">     102</span>              :           &lt;/Box&gt;</span>
+<span id="L103"><span class="lineNum">     103</span>              :         &lt;/Box&gt;</span>
+<span id="L104"><span class="lineNum">     104</span>              :       )}</span>
+<span id="L105"><span class="lineNum">     105</span>              :     &lt;/&gt;</span>
+<span id="L106"><span class="lineNum">     106</span>              :   );</span>
+<span id="L107"><span class="lineNum">     107</span>              : }</span>
         </pre>
               </td>
             </tr>

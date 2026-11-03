@@ -31,13 +31,13 @@
             <td class="headerValue">lcov.backend.info</td>
             <td></td>
             <td class="headerItem">Lines:</td>
-            <td class="headerCovTableEntryHi">93.3&nbsp;%</td>
+            <td class="headerCovTableEntryHi">92.9&nbsp;%</td>
             <td class="headerCovTableEntry">254</td>
-            <td class="headerCovTableEntry">237</td>
+            <td class="headerCovTableEntry">236</td>
           </tr>
           <tr>
             <td class="headerItem">Test Date:</td>
-            <td class="headerValue">2026-09-06 21:10:43</td>
+            <td class="headerValue">2026-11-03 01:49:58</td>
             <td></td>
             <td class="headerItem">Functions:</td>
             <td class="headerCovTableEntryLo">24.2&nbsp;%</td>
@@ -90,29 +90,29 @@
 <span id="L28"><span class="lineNum">      28</span>              :     exclude_id: Option&lt;Uuid&gt;,</span>
 <span id="L29"><span class="lineNum">      29</span>              : }</span>
 <span id="L30"><span class="lineNum">      30</span>              : </span>
-<span id="L31"><span class="lineNum">      31</span> <span class="tlaGNC tlaBgGNC">           8 : fn validate_event_input(</span></span>
-<span id="L32"><span class="lineNum">      32</span> <span class="tlaGNC">           8 :     start_time: NaiveTime,</span></span>
-<span id="L33"><span class="lineNum">      33</span> <span class="tlaGNC">           8 :     end_time: NaiveTime,</span></span>
-<span id="L34"><span class="lineNum">      34</span> <span class="tlaGNC">           8 :     source_type: &amp;SourceType,</span></span>
-<span id="L35"><span class="lineNum">      35</span> <span class="tlaGNC">           8 :     playlist_id: Option&lt;Uuid&gt;,</span></span>
-<span id="L36"><span class="lineNum">      36</span> <span class="tlaGNC">           8 :     _recurrence_type: &amp;RecurrenceType,</span></span>
-<span id="L37"><span class="lineNum">      37</span> <span class="tlaGNC">           8 : ) -&gt; Result&lt;(), AppError&gt; {</span></span>
-<span id="L38"><span class="lineNum">      38</span> <span class="tlaGNC">           8 :     if end_time == start_time {</span></span>
-<span id="L39"><span class="lineNum">      39</span> <span class="tlaUNC tlaBgUNC">           0 :         return Err(AppError::BadRequest(&quot;end_time must differ from start_time&quot;.into()));</span></span>
-<span id="L40"><span class="lineNum">      40</span> <span class="tlaGNC tlaBgGNC">           8 :     }</span></span>
+<span id="L31"><span class="lineNum">      31</span> <span class="tlaGNC tlaBgGNC">           9 : fn validate_event_input(</span></span>
+<span id="L32"><span class="lineNum">      32</span> <span class="tlaGNC">           9 :     start_time: NaiveTime,</span></span>
+<span id="L33"><span class="lineNum">      33</span> <span class="tlaGNC">           9 :     end_time: NaiveTime,</span></span>
+<span id="L34"><span class="lineNum">      34</span> <span class="tlaGNC">           9 :     source_type: &amp;SourceType,</span></span>
+<span id="L35"><span class="lineNum">      35</span> <span class="tlaGNC">           9 :     playlist_id: Option&lt;Uuid&gt;,</span></span>
+<span id="L36"><span class="lineNum">      36</span> <span class="tlaGNC">           9 :     _recurrence_type: &amp;RecurrenceType,</span></span>
+<span id="L37"><span class="lineNum">      37</span> <span class="tlaGNC">           9 : ) -&gt; Result&lt;(), AppError&gt; {</span></span>
+<span id="L38"><span class="lineNum">      38</span> <span class="tlaGNC">           9 :     if end_time == start_time {</span></span>
+<span id="L39"><span class="lineNum">      39</span> <span class="tlaUNC tlaBgUNC">           0 :         return Err(AppError::bad_request(&quot;end_time must differ from start_time&quot;.into()).with_code(&quot;INVALID_TIME_RANGE&quot;));</span></span>
+<span id="L40"><span class="lineNum">      40</span> <span class="tlaGNC tlaBgGNC">           9 :     }</span></span>
 <span id="L41"><span class="lineNum">      41</span>              : </span>
-<span id="L42"><span class="lineNum">      42</span> <span class="tlaGNC">           8 :     if *source_type == SourceType::Playlist &amp;&amp; playlist_id.is_none() {</span></span>
-<span id="L43"><span class="lineNum">      43</span> <span class="tlaUNC tlaBgUNC">           0 :         return Err(AppError::BadRequest(&quot;playlist_id is required when source_type is playlist&quot;.into()));</span></span>
-<span id="L44"><span class="lineNum">      44</span> <span class="tlaGNC tlaBgGNC">           8 :     }</span></span>
+<span id="L42"><span class="lineNum">      42</span> <span class="tlaGNC">           9 :     if *source_type == SourceType::Playlist &amp;&amp; playlist_id.is_none() {</span></span>
+<span id="L43"><span class="lineNum">      43</span> <span class="tlaUNC tlaBgUNC">           0 :         return Err(AppError::bad_request(&quot;playlist_id is required when source_type is playlist&quot;.into()).with_code(&quot;PLAYLIST_REQUIRED&quot;));</span></span>
+<span id="L44"><span class="lineNum">      44</span> <span class="tlaGNC tlaBgGNC">           9 :     }</span></span>
 <span id="L45"><span class="lineNum">      45</span>              : </span>
-<span id="L46"><span class="lineNum">      46</span> <span class="tlaGNC">           8 :     Ok(())</span></span>
-<span id="L47"><span class="lineNum">      47</span> <span class="tlaGNC">           8 : }</span></span>
+<span id="L46"><span class="lineNum">      46</span> <span class="tlaGNC">           9 :     Ok(())</span></span>
+<span id="L47"><span class="lineNum">      47</span> <span class="tlaGNC">           9 : }</span></span>
 <span id="L48"><span class="lineNum">      48</span>              : </span>
-<span id="L49"><span class="lineNum">      49</span> <span class="tlaGNC">           8 : async fn check_event_overlap(params: &amp;EventOverlapParams) -&gt; Result&lt;(), AppError&gt; {</span></span>
-<span id="L50"><span class="lineNum">      50</span> <span class="tlaGNC">           8 :     let all = repository::find_all_events_for_station(&amp;params.db, params.station_id).await?;</span></span>
+<span id="L49"><span class="lineNum">      49</span> <span class="tlaGNC">           9 : async fn check_event_overlap(params: &amp;EventOverlapParams) -&gt; Result&lt;(), AppError&gt; {</span></span>
+<span id="L50"><span class="lineNum">      50</span> <span class="tlaGNC">           9 :     let all = repository::find_all_events_for_station(&amp;params.db, params.station_id).await?;</span></span>
 <span id="L51"><span class="lineNum">      51</span>              : </span>
-<span id="L52"><span class="lineNum">      52</span> <span class="tlaGNC">           8 :     if all.is_empty() {</span></span>
-<span id="L53"><span class="lineNum">      53</span> <span class="tlaGNC">           5 :         return Ok(());</span></span>
+<span id="L52"><span class="lineNum">      52</span> <span class="tlaGNC">           9 :     if all.is_empty() {</span></span>
+<span id="L53"><span class="lineNum">      53</span> <span class="tlaGNC">           6 :         return Ok(());</span></span>
 <span id="L54"><span class="lineNum">      54</span> <span class="tlaGNC">           3 :     }</span></span>
 <span id="L55"><span class="lineNum">      55</span>              : </span>
 <span id="L56"><span class="lineNum">      56</span> <span class="tlaGNC">           3 :     let exclude = params.exclude_id.unwrap_or_default();</span></span>
@@ -165,20 +165,20 @@
 <span id="L103"><span class="lineNum">     103</span>              :     }</span>
 <span id="L104"><span class="lineNum">     104</span>              : </span>
 <span id="L105"><span class="lineNum">     105</span> <span class="tlaGNC tlaBgGNC">           3 :     if !conflicts.is_empty() {</span></span>
-<span id="L106"><span class="lineNum">     106</span> <span class="tlaGNC">           1 :         return Err(AppError::Conflict(format!(</span></span>
-<span id="L107"><span class="lineNum">     107</span> <span class="tlaGNC">           1 :             &quot;Time range overlaps with existing event(s): {}&quot;,</span></span>
-<span id="L108"><span class="lineNum">     108</span> <span class="tlaGNC">           1 :             conflicts.join(&quot;, &quot;)</span></span>
-<span id="L109"><span class="lineNum">     109</span> <span class="tlaGNC">           1 :         )));</span></span>
+<span id="L106"><span class="lineNum">     106</span> <span class="tlaGNC">           1 :         return Err(</span></span>
+<span id="L107"><span class="lineNum">     107</span> <span class="tlaGNC">           1 :             AppError::conflict(format!(&quot;Time range overlaps with existing event(s): {}&quot;, conflicts.join(&quot;, &quot;)))</span></span>
+<span id="L108"><span class="lineNum">     108</span> <span class="tlaGNC">           1 :                 .with_code(&quot;SCHEDULE_OVERLAP&quot;),</span></span>
+<span id="L109"><span class="lineNum">     109</span> <span class="tlaGNC">           1 :         );</span></span>
 <span id="L110"><span class="lineNum">     110</span> <span class="tlaGNC">           2 :     }</span></span>
 <span id="L111"><span class="lineNum">     111</span>              : </span>
 <span id="L112"><span class="lineNum">     112</span> <span class="tlaGNC">           2 :     Ok(())</span></span>
-<span id="L113"><span class="lineNum">     113</span> <span class="tlaGNC">           8 : }</span></span>
+<span id="L113"><span class="lineNum">     113</span> <span class="tlaGNC">           9 : }</span></span>
 <span id="L114"><span class="lineNum">     114</span>              : </span>
 <span id="L115"><span class="lineNum">     115</span> <span class="tlaGNC">          10 : async fn build_event_response(db: &amp;sqlx::PgPool, row: StationScheduleEvent) -&gt; Result&lt;ScheduleEventResponse, AppError&gt; {</span></span>
 <span id="L116"><span class="lineNum">     116</span> <span class="tlaGNC">          10 :     let playlist_name = if let Some(pid) = row.playlist_id {</span></span>
-<span id="L117"><span class="lineNum">     117</span> <span class="tlaGNC">           3 :         repository::find_playlist_name_for_schedule(db, pid).await?</span></span>
+<span id="L117"><span class="lineNum">     117</span> <span class="tlaUNC tlaBgUNC">           0 :         repository::find_playlist_name_for_schedule(db, pid).await?</span></span>
 <span id="L118"><span class="lineNum">     118</span>              :     } else {</span>
-<span id="L119"><span class="lineNum">     119</span> <span class="tlaGNC">           7 :         None</span></span>
+<span id="L119"><span class="lineNum">     119</span> <span class="tlaGNC tlaBgGNC">          10 :         None</span></span>
 <span id="L120"><span class="lineNum">     120</span>              :     };</span>
 <span id="L121"><span class="lineNum">     121</span>              : </span>
 <span id="L122"><span class="lineNum">     122</span> <span class="tlaGNC">          10 :     let recurrence_days: Option&lt;Vec&lt;i32&gt;&gt; = row</span></span>
@@ -228,82 +228,82 @@
 <span id="L166"><span class="lineNum">     166</span>              : </span>
 <span id="L167"><span class="lineNum">     167</span> <span class="tlaGNC">           3 :     let mut responses = Vec::new();</span></span>
 <span id="L168"><span class="lineNum">     168</span> <span class="tlaGNC">           3 :     for row in rows {</span></span>
-<span id="L169"><span class="lineNum">     169</span> <span class="tlaGNC">           3 :         responses.push(build_event_response(&amp;db, row).await?);</span></span>
+<span id="L169"><span class="lineNum">     169</span> <span class="tlaGNC">           2 :         responses.push(build_event_response(&amp;db, row).await?);</span></span>
 <span id="L170"><span class="lineNum">     170</span>              :     }</span>
 <span id="L171"><span class="lineNum">     171</span>              : </span>
 <span id="L172"><span class="lineNum">     172</span> <span class="tlaGNC">           3 :     Ok(Json(responses))</span></span>
 <span id="L173"><span class="lineNum">     173</span> <span class="tlaGNC">           3 : }</span></span>
 <span id="L174"><span class="lineNum">     174</span>              : </span>
-<span id="L175"><span class="lineNum">     175</span> <span class="tlaGNC">           6 : pub async fn create_schedule_event(</span></span>
-<span id="L176"><span class="lineNum">     176</span> <span class="tlaGNC">           6 :     Extension(_user): Extension&lt;AuthUser&gt;,</span></span>
-<span id="L177"><span class="lineNum">     177</span> <span class="tlaGNC">           6 :     State(db): State&lt;PgPool&gt;,</span></span>
-<span id="L178"><span class="lineNum">     178</span> <span class="tlaGNC">           6 :     Path(station_id): Path&lt;Uuid&gt;,</span></span>
-<span id="L179"><span class="lineNum">     179</span> <span class="tlaGNC">           6 :     Json(req): Json&lt;CreateScheduleEventRequest&gt;,</span></span>
-<span id="L180"><span class="lineNum">     180</span> <span class="tlaGNC">           6 : ) -&gt; Result&lt;(StatusCode, Json&lt;ScheduleEventResponse&gt;), AppError&gt; {</span></span>
-<span id="L181"><span class="lineNum">     181</span> <span class="tlaGNC">           6 :     let start_date = NaiveDate::parse_from_str(&amp;req.start_date, &quot;%Y-%m-%d&quot;)</span></span>
-<span id="L182"><span class="lineNum">     182</span> <span class="tlaGNC">           6 :         .map_err(|_| AppError::BadRequest(&quot;Invalid start_date format, use YYYY-MM-DD&quot;.into()))?;</span></span>
+<span id="L175"><span class="lineNum">     175</span> <span class="tlaGNC">           7 : pub async fn create_schedule_event(</span></span>
+<span id="L176"><span class="lineNum">     176</span> <span class="tlaGNC">           7 :     Extension(_user): Extension&lt;AuthUser&gt;,</span></span>
+<span id="L177"><span class="lineNum">     177</span> <span class="tlaGNC">           7 :     State(db): State&lt;PgPool&gt;,</span></span>
+<span id="L178"><span class="lineNum">     178</span> <span class="tlaGNC">           7 :     Path(station_id): Path&lt;Uuid&gt;,</span></span>
+<span id="L179"><span class="lineNum">     179</span> <span class="tlaGNC">           7 :     Json(req): Json&lt;CreateScheduleEventRequest&gt;,</span></span>
+<span id="L180"><span class="lineNum">     180</span> <span class="tlaGNC">           7 : ) -&gt; Result&lt;(StatusCode, Json&lt;ScheduleEventResponse&gt;), AppError&gt; {</span></span>
+<span id="L181"><span class="lineNum">     181</span> <span class="tlaGNC">           7 :     let start_date = NaiveDate::parse_from_str(&amp;req.start_date, &quot;%Y-%m-%d&quot;)</span></span>
+<span id="L182"><span class="lineNum">     182</span> <span class="tlaGNC">           7 :         .map_err(|_| AppError::bad_request(&quot;Invalid start_date format, use YYYY-MM-DD&quot;.into()))?;</span></span>
 <span id="L183"><span class="lineNum">     183</span>              : </span>
-<span id="L184"><span class="lineNum">     184</span> <span class="tlaGNC">           6 :     let start_time = NaiveTime::parse_from_str(&amp;req.start_time, &quot;%H:%M&quot;)</span></span>
-<span id="L185"><span class="lineNum">     185</span> <span class="tlaGNC">           6 :         .map_err(|_| AppError::BadRequest(&quot;Invalid start_time format, use HH:MM&quot;.into()))?;</span></span>
+<span id="L184"><span class="lineNum">     184</span> <span class="tlaGNC">           7 :     let start_time = NaiveTime::parse_from_str(&amp;req.start_time, &quot;%H:%M&quot;)</span></span>
+<span id="L185"><span class="lineNum">     185</span> <span class="tlaGNC">           7 :         .map_err(|_| AppError::bad_request(&quot;Invalid start_time format, use HH:MM&quot;.into()))?;</span></span>
 <span id="L186"><span class="lineNum">     186</span>              : </span>
-<span id="L187"><span class="lineNum">     187</span> <span class="tlaGNC">           6 :     let end_time =</span></span>
-<span id="L188"><span class="lineNum">     188</span> <span class="tlaGNC">           6 :         NaiveTime::parse_from_str(&amp;req.end_time, &quot;%H:%M&quot;).map_err(|_| AppError::BadRequest(&quot;Invalid end_time format, use HH:MM&quot;.into()))?;</span></span>
+<span id="L187"><span class="lineNum">     187</span> <span class="tlaGNC">           7 :     let end_time = NaiveTime::parse_from_str(&amp;req.end_time, &quot;%H:%M&quot;)</span></span>
+<span id="L188"><span class="lineNum">     188</span> <span class="tlaGNC">           7 :         .map_err(|_| AppError::bad_request(&quot;Invalid end_time format, use HH:MM&quot;.into()))?;</span></span>
 <span id="L189"><span class="lineNum">     189</span>              : </span>
-<span id="L190"><span class="lineNum">     190</span> <span class="tlaGNC">           6 :     let source_type = req.source_type.unwrap_or(SourceType::Playlist);</span></span>
-<span id="L191"><span class="lineNum">     191</span> <span class="tlaGNC">           6 :     let recurrence_type = req.recurrence_type.unwrap_or(RecurrenceType::None);</span></span>
-<span id="L192"><span class="lineNum">     192</span> <span class="tlaGNC">           6 :     validate_event_input(start_time, end_time, &amp;source_type, req.playlist_id, &amp;recurrence_type)?;</span></span>
+<span id="L190"><span class="lineNum">     190</span> <span class="tlaGNC">           7 :     let source_type = req.source_type.unwrap_or(SourceType::Playlist);</span></span>
+<span id="L191"><span class="lineNum">     191</span> <span class="tlaGNC">           7 :     let recurrence_type = req.recurrence_type.unwrap_or(RecurrenceType::None);</span></span>
+<span id="L192"><span class="lineNum">     192</span> <span class="tlaGNC">           7 :     validate_event_input(start_time, end_time, &amp;source_type, req.playlist_id, &amp;recurrence_type)?;</span></span>
 <span id="L193"><span class="lineNum">     193</span>              : </span>
-<span id="L194"><span class="lineNum">     194</span> <span class="tlaGNC">           6 :     let recurrence_days_str = req</span></span>
-<span id="L195"><span class="lineNum">     195</span> <span class="tlaGNC">           6 :         .recurrence_days</span></span>
-<span id="L196"><span class="lineNum">     196</span> <span class="tlaGNC">           6 :         .as_ref()</span></span>
-<span id="L197"><span class="lineNum">     197</span> <span class="tlaGNC">           6 :         .map(|days| days.iter().map(|d| d.to_string()).collect::&lt;Vec&lt;_&gt;&gt;().join(&quot;,&quot;));</span></span>
+<span id="L194"><span class="lineNum">     194</span> <span class="tlaGNC">           7 :     let recurrence_days_str = req</span></span>
+<span id="L195"><span class="lineNum">     195</span> <span class="tlaGNC">           7 :         .recurrence_days</span></span>
+<span id="L196"><span class="lineNum">     196</span> <span class="tlaGNC">           7 :         .as_ref()</span></span>
+<span id="L197"><span class="lineNum">     197</span> <span class="tlaGNC">           7 :         .map(|days| days.iter().map(|d| d.to_string()).collect::&lt;Vec&lt;_&gt;&gt;().join(&quot;,&quot;));</span></span>
 <span id="L198"><span class="lineNum">     198</span>              : </span>
-<span id="L199"><span class="lineNum">     199</span> <span class="tlaGNC">           6 :     let recurrence_end_date = match req.recurrence_end_date {</span></span>
+<span id="L199"><span class="lineNum">     199</span> <span class="tlaGNC">           7 :     let recurrence_end_date = match req.recurrence_end_date {</span></span>
 <span id="L200"><span class="lineNum">     200</span> <span class="tlaUNC tlaBgUNC">           0 :         Some(ref d) =&gt; Some(</span></span>
 <span id="L201"><span class="lineNum">     201</span> <span class="tlaUNC">           0 :             NaiveDate::parse_from_str(d, &quot;%Y-%m-%d&quot;)</span></span>
-<span id="L202"><span class="lineNum">     202</span> <span class="tlaUNC">           0 :                 .map_err(|_| AppError::BadRequest(&quot;Invalid recurrence_end_date format, use YYYY-MM-DD&quot;.into()))?,</span></span>
+<span id="L202"><span class="lineNum">     202</span> <span class="tlaUNC">           0 :                 .map_err(|_| AppError::bad_request(&quot;Invalid recurrence_end_date format, use YYYY-MM-DD&quot;.into()))?,</span></span>
 <span id="L203"><span class="lineNum">     203</span>              :         ),</span>
-<span id="L204"><span class="lineNum">     204</span> <span class="tlaGNC tlaBgGNC">           6 :         None =&gt; None,</span></span>
+<span id="L204"><span class="lineNum">     204</span> <span class="tlaGNC tlaBgGNC">           7 :         None =&gt; None,</span></span>
 <span id="L205"><span class="lineNum">     205</span>              :     };</span>
 <span id="L206"><span class="lineNum">     206</span>              : </span>
-<span id="L207"><span class="lineNum">     207</span> <span class="tlaGNC">           6 :     check_event_overlap(&amp;EventOverlapParams {</span></span>
-<span id="L208"><span class="lineNum">     208</span> <span class="tlaGNC">           6 :         db: db.clone(),</span></span>
-<span id="L209"><span class="lineNum">     209</span> <span class="tlaGNC">           6 :         station_id,</span></span>
-<span id="L210"><span class="lineNum">     210</span> <span class="tlaGNC">           6 :         start_date,</span></span>
-<span id="L211"><span class="lineNum">     211</span> <span class="tlaGNC">           6 :         start_time,</span></span>
-<span id="L212"><span class="lineNum">     212</span> <span class="tlaGNC">           6 :         end_time,</span></span>
-<span id="L213"><span class="lineNum">     213</span> <span class="tlaGNC">           6 :         recurrence_type: recurrence_type.clone(),</span></span>
-<span id="L214"><span class="lineNum">     214</span> <span class="tlaGNC">           6 :         recurrence_interval: req.recurrence_interval,</span></span>
-<span id="L215"><span class="lineNum">     215</span> <span class="tlaGNC">           6 :         recurrence_days: recurrence_days_str.clone(),</span></span>
-<span id="L216"><span class="lineNum">     216</span> <span class="tlaGNC">           6 :         recurrence_end_date,</span></span>
-<span id="L217"><span class="lineNum">     217</span> <span class="tlaGNC">           6 :         recurrence_count: req.recurrence_count,</span></span>
-<span id="L218"><span class="lineNum">     218</span> <span class="tlaGNC">           6 :         exclude_id: None,</span></span>
-<span id="L219"><span class="lineNum">     219</span> <span class="tlaGNC">           6 :     })</span></span>
-<span id="L220"><span class="lineNum">     220</span> <span class="tlaGNC">           6 :     .await?;</span></span>
+<span id="L207"><span class="lineNum">     207</span> <span class="tlaGNC">           7 :     check_event_overlap(&amp;EventOverlapParams {</span></span>
+<span id="L208"><span class="lineNum">     208</span> <span class="tlaGNC">           7 :         db: db.clone(),</span></span>
+<span id="L209"><span class="lineNum">     209</span> <span class="tlaGNC">           7 :         station_id,</span></span>
+<span id="L210"><span class="lineNum">     210</span> <span class="tlaGNC">           7 :         start_date,</span></span>
+<span id="L211"><span class="lineNum">     211</span> <span class="tlaGNC">           7 :         start_time,</span></span>
+<span id="L212"><span class="lineNum">     212</span> <span class="tlaGNC">           7 :         end_time,</span></span>
+<span id="L213"><span class="lineNum">     213</span> <span class="tlaGNC">           7 :         recurrence_type: recurrence_type.clone(),</span></span>
+<span id="L214"><span class="lineNum">     214</span> <span class="tlaGNC">           7 :         recurrence_interval: req.recurrence_interval,</span></span>
+<span id="L215"><span class="lineNum">     215</span> <span class="tlaGNC">           7 :         recurrence_days: recurrence_days_str.clone(),</span></span>
+<span id="L216"><span class="lineNum">     216</span> <span class="tlaGNC">           7 :         recurrence_end_date,</span></span>
+<span id="L217"><span class="lineNum">     217</span> <span class="tlaGNC">           7 :         recurrence_count: req.recurrence_count,</span></span>
+<span id="L218"><span class="lineNum">     218</span> <span class="tlaGNC">           7 :         exclude_id: None,</span></span>
+<span id="L219"><span class="lineNum">     219</span> <span class="tlaGNC">           7 :     })</span></span>
+<span id="L220"><span class="lineNum">     220</span> <span class="tlaGNC">           7 :     .await?;</span></span>
 <span id="L221"><span class="lineNum">     221</span>              : </span>
-<span id="L222"><span class="lineNum">     222</span> <span class="tlaGNC">           5 :     let row = repository::insert_event(</span></span>
-<span id="L223"><span class="lineNum">     223</span> <span class="tlaGNC">           5 :         &amp;db,</span></span>
-<span id="L224"><span class="lineNum">     224</span> <span class="tlaGNC">           5 :         station_id,</span></span>
-<span id="L225"><span class="lineNum">     225</span> <span class="tlaGNC">           5 :         &amp;req.title,</span></span>
-<span id="L226"><span class="lineNum">     226</span> <span class="tlaGNC">           5 :         start_date,</span></span>
-<span id="L227"><span class="lineNum">     227</span> <span class="tlaGNC">           5 :         start_time,</span></span>
-<span id="L228"><span class="lineNum">     228</span> <span class="tlaGNC">           5 :         end_time,</span></span>
-<span id="L229"><span class="lineNum">     229</span> <span class="tlaGNC">           5 :         &amp;source_type,</span></span>
-<span id="L230"><span class="lineNum">     230</span> <span class="tlaGNC">           5 :         req.playlist_id,</span></span>
-<span id="L231"><span class="lineNum">     231</span> <span class="tlaGNC">           5 :         req.auto_dj_mode,</span></span>
-<span id="L232"><span class="lineNum">     232</span> <span class="tlaGNC">           5 :         req.auto_dj_avoid_repeat,</span></span>
-<span id="L233"><span class="lineNum">     233</span> <span class="tlaGNC">           5 :         req.auto_dj_min_gap,</span></span>
-<span id="L234"><span class="lineNum">     234</span> <span class="tlaGNC">           5 :         req.auto_dj_songs_ahead,</span></span>
-<span id="L235"><span class="lineNum">     235</span> <span class="tlaGNC">           5 :         &amp;recurrence_type,</span></span>
-<span id="L236"><span class="lineNum">     236</span> <span class="tlaGNC">           5 :         req.recurrence_interval,</span></span>
-<span id="L237"><span class="lineNum">     237</span> <span class="tlaGNC">           5 :         recurrence_days_str,</span></span>
-<span id="L238"><span class="lineNum">     238</span> <span class="tlaGNC">           5 :         recurrence_end_date,</span></span>
-<span id="L239"><span class="lineNum">     239</span> <span class="tlaGNC">           5 :         req.recurrence_count,</span></span>
-<span id="L240"><span class="lineNum">     240</span> <span class="tlaGNC">           5 :     )</span></span>
-<span id="L241"><span class="lineNum">     241</span> <span class="tlaGNC">           5 :     .await?;</span></span>
+<span id="L222"><span class="lineNum">     222</span> <span class="tlaGNC">           6 :     let row = repository::insert_event(</span></span>
+<span id="L223"><span class="lineNum">     223</span> <span class="tlaGNC">           6 :         &amp;db,</span></span>
+<span id="L224"><span class="lineNum">     224</span> <span class="tlaGNC">           6 :         station_id,</span></span>
+<span id="L225"><span class="lineNum">     225</span> <span class="tlaGNC">           6 :         &amp;req.title,</span></span>
+<span id="L226"><span class="lineNum">     226</span> <span class="tlaGNC">           6 :         start_date,</span></span>
+<span id="L227"><span class="lineNum">     227</span> <span class="tlaGNC">           6 :         start_time,</span></span>
+<span id="L228"><span class="lineNum">     228</span> <span class="tlaGNC">           6 :         end_time,</span></span>
+<span id="L229"><span class="lineNum">     229</span> <span class="tlaGNC">           6 :         &amp;source_type,</span></span>
+<span id="L230"><span class="lineNum">     230</span> <span class="tlaGNC">           6 :         req.playlist_id,</span></span>
+<span id="L231"><span class="lineNum">     231</span> <span class="tlaGNC">           6 :         req.auto_dj_mode,</span></span>
+<span id="L232"><span class="lineNum">     232</span> <span class="tlaGNC">           6 :         req.auto_dj_avoid_repeat,</span></span>
+<span id="L233"><span class="lineNum">     233</span> <span class="tlaGNC">           6 :         req.auto_dj_min_gap,</span></span>
+<span id="L234"><span class="lineNum">     234</span> <span class="tlaGNC">           6 :         req.auto_dj_songs_ahead,</span></span>
+<span id="L235"><span class="lineNum">     235</span> <span class="tlaGNC">           6 :         &amp;recurrence_type,</span></span>
+<span id="L236"><span class="lineNum">     236</span> <span class="tlaGNC">           6 :         req.recurrence_interval,</span></span>
+<span id="L237"><span class="lineNum">     237</span> <span class="tlaGNC">           6 :         recurrence_days_str,</span></span>
+<span id="L238"><span class="lineNum">     238</span> <span class="tlaGNC">           6 :         recurrence_end_date,</span></span>
+<span id="L239"><span class="lineNum">     239</span> <span class="tlaGNC">           6 :         req.recurrence_count,</span></span>
+<span id="L240"><span class="lineNum">     240</span> <span class="tlaGNC">           6 :     )</span></span>
+<span id="L241"><span class="lineNum">     241</span> <span class="tlaGNC">           6 :     .await?;</span></span>
 <span id="L242"><span class="lineNum">     242</span>              : </span>
-<span id="L243"><span class="lineNum">     243</span> <span class="tlaGNC">           5 :     Ok((StatusCode::CREATED, Json(build_event_response(&amp;db, row).await?)))</span></span>
-<span id="L244"><span class="lineNum">     244</span> <span class="tlaGNC">           6 : }</span></span>
+<span id="L243"><span class="lineNum">     243</span> <span class="tlaGNC">           6 :     Ok((StatusCode::CREATED, Json(build_event_response(&amp;db, row).await?)))</span></span>
+<span id="L244"><span class="lineNum">     244</span> <span class="tlaGNC">           7 : }</span></span>
 <span id="L245"><span class="lineNum">     245</span>              : </span>
 <span id="L246"><span class="lineNum">     246</span> <span class="tlaGNC">           2 : pub async fn update_schedule_event(</span></span>
 <span id="L247"><span class="lineNum">     247</span> <span class="tlaGNC">           2 :     Extension(_user): Extension&lt;AuthUser&gt;,</span></span>
@@ -313,20 +313,20 @@
 <span id="L251"><span class="lineNum">     251</span> <span class="tlaGNC">           2 : ) -&gt; Result&lt;Json&lt;ScheduleEventResponse&gt;, AppError&gt; {</span></span>
 <span id="L252"><span class="lineNum">     252</span> <span class="tlaGNC">           2 :     let existing = repository::find_event_by_id(&amp;db, event_id)</span></span>
 <span id="L253"><span class="lineNum">     253</span> <span class="tlaGNC">           2 :         .await?</span></span>
-<span id="L254"><span class="lineNum">     254</span> <span class="tlaGNC">           2 :         .ok_or_else(|| AppError::NotFound(&quot;Schedule event not found&quot;.into()))?;</span></span>
+<span id="L254"><span class="lineNum">     254</span> <span class="tlaGNC">           2 :         .ok_or_else(|| AppError::not_found(&quot;Schedule event not found&quot;.into()))?;</span></span>
 <span id="L255"><span class="lineNum">     255</span>              : </span>
 <span id="L256"><span class="lineNum">     256</span> <span class="tlaGNC">           2 :     let start_date = match req.start_date {</span></span>
-<span id="L257"><span class="lineNum">     257</span> <span class="tlaUNC tlaBgUNC">           0 :         Some(ref d) =&gt; NaiveDate::parse_from_str(d, &quot;%Y-%m-%d&quot;).map_err(|_| AppError::BadRequest(&quot;Invalid start_date format&quot;.into()))?,</span></span>
+<span id="L257"><span class="lineNum">     257</span> <span class="tlaUNC tlaBgUNC">           0 :         Some(ref d) =&gt; NaiveDate::parse_from_str(d, &quot;%Y-%m-%d&quot;).map_err(|_| AppError::bad_request(&quot;Invalid start_date format&quot;.into()))?,</span></span>
 <span id="L258"><span class="lineNum">     258</span> <span class="tlaGNC tlaBgGNC">           2 :         None =&gt; existing.start_date,</span></span>
 <span id="L259"><span class="lineNum">     259</span>              :     };</span>
 <span id="L260"><span class="lineNum">     260</span>              : </span>
 <span id="L261"><span class="lineNum">     261</span> <span class="tlaGNC">           2 :     let start_time = match req.start_time {</span></span>
-<span id="L262"><span class="lineNum">     262</span> <span class="tlaUNC tlaBgUNC">           0 :         Some(ref t) =&gt; NaiveTime::parse_from_str(t, &quot;%H:%M&quot;).map_err(|_| AppError::BadRequest(&quot;Invalid start_time&quot;.into()))?,</span></span>
+<span id="L262"><span class="lineNum">     262</span> <span class="tlaUNC tlaBgUNC">           0 :         Some(ref t) =&gt; NaiveTime::parse_from_str(t, &quot;%H:%M&quot;).map_err(|_| AppError::bad_request(&quot;Invalid start_time&quot;.into()))?,</span></span>
 <span id="L263"><span class="lineNum">     263</span> <span class="tlaGNC tlaBgGNC">           2 :         None =&gt; existing.start_time,</span></span>
 <span id="L264"><span class="lineNum">     264</span>              :     };</span>
 <span id="L265"><span class="lineNum">     265</span>              : </span>
 <span id="L266"><span class="lineNum">     266</span> <span class="tlaGNC">           2 :     let end_time = match req.end_time {</span></span>
-<span id="L267"><span class="lineNum">     267</span> <span class="tlaUNC tlaBgUNC">           0 :         Some(ref t) =&gt; NaiveTime::parse_from_str(t, &quot;%H:%M&quot;).map_err(|_| AppError::BadRequest(&quot;Invalid end_time&quot;.into()))?,</span></span>
+<span id="L267"><span class="lineNum">     267</span> <span class="tlaUNC tlaBgUNC">           0 :         Some(ref t) =&gt; NaiveTime::parse_from_str(t, &quot;%H:%M&quot;).map_err(|_| AppError::bad_request(&quot;Invalid end_time&quot;.into()))?,</span></span>
 <span id="L268"><span class="lineNum">     268</span> <span class="tlaGNC tlaBgGNC">           2 :         None =&gt; existing.end_time,</span></span>
 <span id="L269"><span class="lineNum">     269</span>              :     };</span>
 <span id="L270"><span class="lineNum">     270</span>              : </span>
@@ -345,7 +345,7 @@
 <span id="L283"><span class="lineNum">     283</span>              : </span>
 <span id="L284"><span class="lineNum">     284</span> <span class="tlaGNC">           2 :     let recurrence_end_date = match req.recurrence_end_date {</span></span>
 <span id="L285"><span class="lineNum">     285</span> <span class="tlaUNC tlaBgUNC">           0 :         Some(Some(ref d)) =&gt; {</span></span>
-<span id="L286"><span class="lineNum">     286</span> <span class="tlaUNC">           0 :             Some(NaiveDate::parse_from_str(d, &quot;%Y-%m-%d&quot;).map_err(|_| AppError::BadRequest(&quot;Invalid recurrence_end_date&quot;.into()))?)</span></span>
+<span id="L286"><span class="lineNum">     286</span> <span class="tlaUNC">           0 :             Some(NaiveDate::parse_from_str(d, &quot;%Y-%m-%d&quot;).map_err(|_| AppError::bad_request(&quot;Invalid recurrence_end_date&quot;.into()))?)</span></span>
 <span id="L287"><span class="lineNum">     287</span>              :         }</span>
 <span id="L288"><span class="lineNum">     288</span> <span class="tlaUNC">           0 :         Some(None) =&gt; None,</span></span>
 <span id="L289"><span class="lineNum">     289</span> <span class="tlaGNC tlaBgGNC">           2 :         None =&gt; existing.recurrence_end_date,</span></span>
@@ -400,7 +400,7 @@
 <span id="L338"><span class="lineNum">     338</span> <span class="tlaGNC">           2 :     let affected = repository::delete_event(&amp;db, event_id).await?;</span></span>
 <span id="L339"><span class="lineNum">     339</span>              : </span>
 <span id="L340"><span class="lineNum">     340</span> <span class="tlaGNC">           2 :     if affected == 0 {</span></span>
-<span id="L341"><span class="lineNum">     341</span> <span class="tlaUNC tlaBgUNC">           0 :         return Err(AppError::NotFound(&quot;Schedule event not found&quot;.into()));</span></span>
+<span id="L341"><span class="lineNum">     341</span> <span class="tlaUNC tlaBgUNC">           0 :         return Err(AppError::not_found(&quot;Schedule event not found&quot;.into()));</span></span>
 <span id="L342"><span class="lineNum">     342</span> <span class="tlaGNC tlaBgGNC">           2 :     }</span></span>
 <span id="L343"><span class="lineNum">     343</span>              : </span>
 <span id="L344"><span class="lineNum">     344</span> <span class="tlaGNC">           2 :     Ok(StatusCode::NO_CONTENT)</span></span>

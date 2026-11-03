@@ -37,7 +37,7 @@
           </tr>
           <tr>
             <td class="headerItem">Test Date:</td>
-            <td class="headerValue">2026-09-06 21:10:44</td>
+            <td class="headerValue">2026-11-03 01:49:59</td>
             <td></td>
             <td class="headerItem">Functions:</td>
             <td class="headerCovTableEntryLo">33.3&nbsp;%</td>
@@ -76,7 +76,7 @@
 <span id="L14"><span class="lineNum">      14</span>              :   album: string;</span>
 <span id="L15"><span class="lineNum">      15</span>              : }</span>
 <span id="L16"><span class="lineNum">      16</span>              : </span>
-<span id="L17"><span class="lineNum">      17</span> <span class="tlaGNC tlaBgGNC">          41 : export function EditSongDialog({</span></span>
+<span id="L17"><span class="lineNum">      17</span> <span class="tlaGNC tlaBgGNC">          62 : export function EditSongDialog({</span></span>
 <span id="L18"><span class="lineNum">      18</span>              :   song,</span>
 <span id="L19"><span class="lineNum">      19</span>              :   isPending,</span>
 <span id="L20"><span class="lineNum">      20</span>              :   onSave,</span>
@@ -87,14 +87,14 @@
 <span id="L25"><span class="lineNum">      25</span>              :   onSave: (data: EditSongData) =&gt; void;</span>
 <span id="L26"><span class="lineNum">      26</span>              :   onClose: () =&gt; void;</span>
 <span id="L27"><span class="lineNum">      27</span>              : }) {</span>
-<span id="L28"><span class="lineNum">      28</span> <span class="tlaGNC">          41 :   const { t } = useTranslation();</span></span>
-<span id="L29"><span class="lineNum">      29</span> <span class="tlaGNC">          41 :   const [editData, setEditData] = useState&lt;EditSongData | null&gt;(null);</span></span>
+<span id="L28"><span class="lineNum">      28</span> <span class="tlaGNC">          62 :   const { t } = useTranslation();</span></span>
+<span id="L29"><span class="lineNum">      29</span> <span class="tlaGNC">          62 :   const [editData, setEditData] = useState&lt;EditSongData | null&gt;(null);</span></span>
 <span id="L30"><span class="lineNum">      30</span>              : </span>
-<span id="L31"><span class="lineNum">      31</span> <span class="tlaGNC">          41 :   useEffect(() =&gt; {</span></span>
-<span id="L32"><span class="lineNum">      32</span> <span class="tlaGNC">          11 :     setEditData(song);</span></span>
+<span id="L31"><span class="lineNum">      31</span> <span class="tlaGNC">          62 :   useEffect(() =&gt; {</span></span>
+<span id="L32"><span class="lineNum">      32</span> <span class="tlaGNC">          15 :     setEditData(song);</span></span>
 <span id="L33"><span class="lineNum">      33</span>              :   }, [song]);</span>
 <span id="L34"><span class="lineNum">      34</span>              : </span>
-<span id="L35"><span class="lineNum">      35</span> <span class="tlaGNC">          41 :   return (</span></span>
+<span id="L35"><span class="lineNum">      35</span> <span class="tlaGNC">          62 :   return (</span></span>
 <span id="L36"><span class="lineNum">      36</span>              :     &lt;Dialog open={!!song} onClose={onClose} maxWidth=&quot;sm&quot; fullWidth slotProps={{ paper: { sx: { borderRadius: 3 } } }}&gt;</span>
 <span id="L37"><span class="lineNum">      37</span>              :       &lt;DialogTitle sx={{ px: 3, pt: 3 }}&gt;{t(&quot;songs:edit_title&quot;)}&lt;/DialogTitle&gt;</span>
 <span id="L38"><span class="lineNum">      38</span>              :       &lt;DialogContent</span>

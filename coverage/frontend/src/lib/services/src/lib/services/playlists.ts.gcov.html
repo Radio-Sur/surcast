@@ -37,7 +37,7 @@
           </tr>
           <tr>
             <td class="headerItem">Test Date:</td>
-            <td class="headerValue">2026-09-06 21:10:44</td>
+            <td class="headerValue">2026-11-03 01:49:59</td>
             <td></td>
             <td class="headerItem">Functions:</td>
             <td class="headerCovTableEntryLo">57.1&nbsp;%</td>
@@ -64,9 +64,9 @@
 <span id="L2"><span class="lineNum">       2</span>              : import type { HttpClient } from &quot;@/lib/http-client&quot;;</span>
 <span id="L3"><span class="lineNum">       3</span>              : import type { PaginatedPlaylistSongs, Playlist, PlaylistSong, SongSelections } from &quot;@/types&quot;;</span>
 <span id="L4"><span class="lineNum">       4</span>              : </span>
-<span id="L5"><span class="lineNum">       5</span> <span class="tlaGNC tlaBgGNC">           4 : export function createPlaylistsService(client: HttpClient) {</span></span>
-<span id="L6"><span class="lineNum">       6</span> <span class="tlaGNC">           4 :   return {</span></span>
-<span id="L7"><span class="lineNum">       7</span> <span class="tlaGNC">           6 :     list: () =&gt; client.get&lt;Playlist[]&gt;(&quot;/playlists&quot;),</span></span>
+<span id="L5"><span class="lineNum">       5</span> <span class="tlaGNC tlaBgGNC">           9 : export function createPlaylistsService(client: HttpClient) {</span></span>
+<span id="L6"><span class="lineNum">       6</span> <span class="tlaGNC">           9 :   return {</span></span>
+<span id="L7"><span class="lineNum">       7</span> <span class="tlaGNC">          12 :     list: () =&gt; client.get&lt;Playlist[]&gt;(&quot;/playlists&quot;),</span></span>
 <span id="L8"><span class="lineNum">       8</span> <span class="tlaGNC">           7 :     get: (id: string) =&gt; client.get&lt;Playlist&gt;(`/playlists/${id}`),</span></span>
 <span id="L9"><span class="lineNum">       9</span> <span class="tlaUNC tlaBgUNC">           0 :     create: (data: { name: string; description?: string }) =&gt; client.post&lt;Playlist&gt;(&quot;/playlists&quot;, data),</span></span>
 <span id="L10"><span class="lineNum">      10</span> <span class="tlaGNC tlaBgGNC">           1 :     update: (id: string, data: { name?: string; description?: string }) =&gt;</span></span>
@@ -97,7 +97,7 @@
 <span id="L35"><span class="lineNum">      35</span>              :   };</span>
 <span id="L36"><span class="lineNum">      36</span>              : }</span>
 <span id="L37"><span class="lineNum">      37</span>              : </span>
-<span id="L38"><span class="lineNum">      38</span> <span class="tlaGNC tlaBgGNC">           4 : export const playlistsService = createPlaylistsService(httpClient);</span></span>
+<span id="L38"><span class="lineNum">      38</span> <span class="tlaGNC tlaBgGNC">           9 : export const playlistsService = createPlaylistsService(httpClient);</span></span>
         </pre>
               </td>
             </tr>

@@ -31,18 +31,18 @@
             <td class="headerValue">lcov.backend.info</td>
             <td></td>
             <td class="headerItem">Lines:</td>
-            <td class="headerCovTableEntryMed">82.9&nbsp;%</td>
-            <td class="headerCovTableEntry">35</td>
-            <td class="headerCovTableEntry">29</td>
+            <td class="headerCovTableEntryHi">95.4&nbsp;%</td>
+            <td class="headerCovTableEntry">280</td>
+            <td class="headerCovTableEntry">267</td>
           </tr>
           <tr>
             <td class="headerItem">Test Date:</td>
-            <td class="headerValue">2026-09-06 21:10:43</td>
+            <td class="headerValue">2026-11-03 01:49:58</td>
             <td></td>
             <td class="headerItem">Functions:</td>
-            <td class="headerCovTableEntryLo">29.9&nbsp;%</td>
-            <td class="headerCovTableEntry">264</td>
-            <td class="headerCovTableEntry">79</td>
+            <td class="headerCovTableEntryLo">35.5&nbsp;%</td>
+            <td class="headerCovTableEntry">363</td>
+            <td class="headerCovTableEntry">129</td>
           </tr>
                   <tr><td><img src="../glass.png" width=3 height=3 alt=""></td></tr>
                 </table>
@@ -65,76 +65,426 @@
 <span id="L3"><span class="lineNum">       3</span>              : use axum::Json;</span>
 <span id="L4"><span class="lineNum">       4</span>              : use serde_json::json;</span>
 <span id="L5"><span class="lineNum">       5</span>              : </span>
-<span id="L6"><span class="lineNum">       6</span>              : #[derive(Debug)]</span>
-<span id="L7"><span class="lineNum">       7</span>              : pub enum AppError {</span>
-<span id="L8"><span class="lineNum">       8</span>              :     Unauthorized(String),</span>
-<span id="L9"><span class="lineNum">       9</span>              :     BadRequest(String),</span>
-<span id="L10"><span class="lineNum">      10</span>              :     NotFound(String),</span>
-<span id="L11"><span class="lineNum">      11</span>              :     Conflict(String),</span>
-<span id="L12"><span class="lineNum">      12</span>              :     #[allow(dead_code)]</span>
-<span id="L13"><span class="lineNum">      13</span>              :     Internal(String),</span>
-<span id="L14"><span class="lineNum">      14</span>              : }</span>
-<span id="L15"><span class="lineNum">      15</span>              : </span>
-<span id="L16"><span class="lineNum">      16</span>              : impl std::fmt::Display for AppError {</span>
-<span id="L17"><span class="lineNum">      17</span> <span class="tlaGNC tlaBgGNC">           7 :     fn fmt(&amp;self, f: &amp;mut std::fmt::Formatter&lt;'_&gt;) -&gt; std::fmt::Result {</span></span>
-<span id="L18"><span class="lineNum">      18</span> <span class="tlaGNC">           7 :         match self {</span></span>
-<span id="L19"><span class="lineNum">      19</span> <span class="tlaUNC tlaBgUNC">           0 :             AppError::Unauthorized(msg)</span></span>
-<span id="L20"><span class="lineNum">      20</span> <span class="tlaUNC">           0 :             | AppError::BadRequest(msg)</span></span>
-<span id="L21"><span class="lineNum">      21</span> <span class="tlaUNC">           0 :             | AppError::NotFound(msg)</span></span>
-<span id="L22"><span class="lineNum">      22</span> <span class="tlaUNC">           0 :             | AppError::Conflict(msg)</span></span>
-<span id="L23"><span class="lineNum">      23</span> <span class="tlaGNC tlaBgGNC">           7 :             | AppError::Internal(msg) =&gt; write!(f, &quot;{msg}&quot;),</span></span>
-<span id="L24"><span class="lineNum">      24</span>              :         }</span>
-<span id="L25"><span class="lineNum">      25</span> <span class="tlaGNC">           7 :     }</span></span>
-<span id="L26"><span class="lineNum">      26</span>              : }</span>
-<span id="L27"><span class="lineNum">      27</span>              : </span>
-<span id="L28"><span class="lineNum">      28</span>              : impl IntoResponse for AppError {</span>
-<span id="L29"><span class="lineNum">      29</span> <span class="tlaGNC">          16 :     fn into_response(self) -&gt; Response {</span></span>
-<span id="L30"><span class="lineNum">      30</span> <span class="tlaGNC">          16 :         let (status, message) = match self {</span></span>
-<span id="L31"><span class="lineNum">      31</span> <span class="tlaGNC">           3 :             AppError::Unauthorized(msg) =&gt; (StatusCode::UNAUTHORIZED, msg),</span></span>
-<span id="L32"><span class="lineNum">      32</span> <span class="tlaGNC">           5 :             AppError::BadRequest(msg) =&gt; (StatusCode::BAD_REQUEST, msg),</span></span>
-<span id="L33"><span class="lineNum">      33</span> <span class="tlaGNC">           7 :             AppError::NotFound(msg) =&gt; (StatusCode::NOT_FOUND, msg),</span></span>
-<span id="L34"><span class="lineNum">      34</span> <span class="tlaGNC">           1 :             AppError::Conflict(msg) =&gt; (StatusCode::CONFLICT, msg),</span></span>
-<span id="L35"><span class="lineNum">      35</span> <span class="tlaUNC tlaBgUNC">           0 :             AppError::Internal(_) =&gt; (StatusCode::INTERNAL_SERVER_ERROR, &quot;Internal server error&quot;.into()),</span></span>
-<span id="L36"><span class="lineNum">      36</span>              :         };</span>
-<span id="L37"><span class="lineNum">      37</span>              : </span>
-<span id="L38"><span class="lineNum">      38</span> <span class="tlaGNC tlaBgGNC">          16 :         (status, Json(json!({ &quot;error&quot;: message }))).into_response()</span></span>
-<span id="L39"><span class="lineNum">      39</span> <span class="tlaGNC">          16 :     }</span></span>
-<span id="L40"><span class="lineNum">      40</span>              : }</span>
-<span id="L41"><span class="lineNum">      41</span>              : </span>
-<span id="L42"><span class="lineNum">      42</span>              : pub trait DbResult&lt;T&gt; {</span>
-<span id="L43"><span class="lineNum">      43</span>              :     fn db_error(self, ctx: &amp;str) -&gt; Result&lt;T, AppError&gt;;</span>
-<span id="L44"><span class="lineNum">      44</span>              : }</span>
-<span id="L45"><span class="lineNum">      45</span>              : </span>
-<span id="L46"><span class="lineNum">      46</span>              : impl&lt;T, E: std::fmt::Display&gt; DbResult&lt;T&gt; for Result&lt;T, E&gt; {</span>
-<span id="L47"><span class="lineNum">      47</span> <span class="tlaGNC">        5637 :     fn db_error(self, ctx: &amp;str) -&gt; Result&lt;T, AppError&gt; {</span></span>
-<span id="L48"><span class="lineNum">      48</span> <span class="tlaGNC">        5637 :         self.map_err(|e| {</span></span>
-<span id="L49"><span class="lineNum">      49</span> <span class="tlaGNC">         141 :             tracing::error!(&quot;{ctx}: {e}&quot;);</span></span>
-<span id="L50"><span class="lineNum">      50</span> <span class="tlaGNC">         141 :             AppError::Internal(&quot;Database operation failed&quot;.into())</span></span>
-<span id="L51"><span class="lineNum">      51</span> <span class="tlaGNC">         141 :         })</span></span>
-<span id="L52"><span class="lineNum">      52</span> <span class="tlaGNC">        5637 :     }</span></span>
-<span id="L53"><span class="lineNum">      53</span>              : }</span>
-<span id="L54"><span class="lineNum">      54</span>              : </span>
-<span id="L55"><span class="lineNum">      55</span>              : #[cfg(test)]</span>
-<span id="L56"><span class="lineNum">      56</span>              : mod tests {</span>
-<span id="L57"><span class="lineNum">      57</span>              :     use super::*;</span>
-<span id="L58"><span class="lineNum">      58</span>              : </span>
-<span id="L59"><span class="lineNum">      59</span>              :     #[test]</span>
-<span id="L60"><span class="lineNum">      60</span> <span class="tlaGNC">           1 :     fn test_db_result_ok() {</span></span>
-<span id="L61"><span class="lineNum">      61</span> <span class="tlaGNC">           1 :         let result: Result&lt;i32, &amp;str&gt; = Ok(42);</span></span>
-<span id="L62"><span class="lineNum">      62</span> <span class="tlaGNC">           1 :         let res = result.db_error(&quot;my context&quot;);</span></span>
-<span id="L63"><span class="lineNum">      63</span> <span class="tlaGNC">           1 :         assert_eq!(res.unwrap(), 42);</span></span>
-<span id="L64"><span class="lineNum">      64</span> <span class="tlaGNC">           1 :     }</span></span>
-<span id="L65"><span class="lineNum">      65</span>              : </span>
-<span id="L66"><span class="lineNum">      66</span>              :     #[test]</span>
-<span id="L67"><span class="lineNum">      67</span> <span class="tlaGNC">           1 :     fn test_db_result_err_type() {</span></span>
-<span id="L68"><span class="lineNum">      68</span> <span class="tlaGNC">           1 :         let result: Result&lt;i32, &amp;str&gt; = Err(&quot;db failure&quot;);</span></span>
-<span id="L69"><span class="lineNum">      69</span> <span class="tlaGNC">           1 :         let res = result.db_error(&quot;my context&quot;);</span></span>
-<span id="L70"><span class="lineNum">      70</span> <span class="tlaGNC">           1 :         match res {</span></span>
-<span id="L71"><span class="lineNum">      71</span> <span class="tlaGNC">           1 :             Err(AppError::Internal(msg)) =&gt; assert_eq!(msg, &quot;Database operation failed&quot;),</span></span>
-<span id="L72"><span class="lineNum">      72</span> <span class="tlaUNC tlaBgUNC">           0 :             _ =&gt; panic!(&quot;Expected AppError::Internal&quot;),</span></span>
-<span id="L73"><span class="lineNum">      73</span>              :         }</span>
-<span id="L74"><span class="lineNum">      74</span> <span class="tlaGNC tlaBgGNC">           1 :     }</span></span>
-<span id="L75"><span class="lineNum">      75</span>              : }</span>
+<span id="L6"><span class="lineNum">       6</span>              : /// Machine-readable error categories. One per icon/color on the frontend.</span>
+<span id="L7"><span class="lineNum">       7</span>              : /// Kept generic on purpose: the UI maps category -&gt; presentation, `code`</span>
+<span id="L8"><span class="lineNum">       8</span>              : /// pinpoints the case. Human-readable text is diagnostic only; clients must</span>
+<span id="L9"><span class="lineNum">       9</span>              : /// translate the stable code instead of displaying server prose.</span>
+<span id="L10"><span class="lineNum">      10</span>              : #[derive(Debug, Clone, Copy, PartialEq, Eq)]</span>
+<span id="L11"><span class="lineNum">      11</span>              : pub enum ErrorCategory {</span>
+<span id="L12"><span class="lineNum">      12</span>              :     Auth,</span>
+<span id="L13"><span class="lineNum">      13</span>              :     Validation,</span>
+<span id="L14"><span class="lineNum">      14</span>              :     NotFound,</span>
+<span id="L15"><span class="lineNum">      15</span>              :     Conflict,</span>
+<span id="L16"><span class="lineNum">      16</span>              :     Stream,</span>
+<span id="L17"><span class="lineNum">      17</span>              :     Icecast,</span>
+<span id="L18"><span class="lineNum">      18</span>              :     Server,</span>
+<span id="L19"><span class="lineNum">      19</span>              : }</span>
+<span id="L20"><span class="lineNum">      20</span>              : </span>
+<span id="L21"><span class="lineNum">      21</span>              : impl ErrorCategory {</span>
+<span id="L22"><span class="lineNum">      22</span> <span class="tlaGNC tlaBgGNC">          60 :     pub fn as_str(self) -&gt; &amp;'static str {</span></span>
+<span id="L23"><span class="lineNum">      23</span> <span class="tlaGNC">          60 :         match self {</span></span>
+<span id="L24"><span class="lineNum">      24</span> <span class="tlaGNC">          21 :             ErrorCategory::Auth =&gt; &quot;auth&quot;,</span></span>
+<span id="L25"><span class="lineNum">      25</span> <span class="tlaGNC">          12 :             ErrorCategory::Validation =&gt; &quot;validation&quot;,</span></span>
+<span id="L26"><span class="lineNum">      26</span> <span class="tlaGNC">          13 :             ErrorCategory::NotFound =&gt; &quot;not_found&quot;,</span></span>
+<span id="L27"><span class="lineNum">      27</span> <span class="tlaGNC">           6 :             ErrorCategory::Conflict =&gt; &quot;conflict&quot;,</span></span>
+<span id="L28"><span class="lineNum">      28</span> <span class="tlaGNC">           3 :             ErrorCategory::Stream =&gt; &quot;stream&quot;,</span></span>
+<span id="L29"><span class="lineNum">      29</span> <span class="tlaGNC">           2 :             ErrorCategory::Icecast =&gt; &quot;icecast&quot;,</span></span>
+<span id="L30"><span class="lineNum">      30</span> <span class="tlaGNC">           3 :             ErrorCategory::Server =&gt; &quot;server&quot;,</span></span>
+<span id="L31"><span class="lineNum">      31</span>              :         }</span>
+<span id="L32"><span class="lineNum">      32</span> <span class="tlaGNC">          60 :     }</span></span>
+<span id="L33"><span class="lineNum">      33</span>              : }</span>
+<span id="L34"><span class="lineNum">      34</span>              : </span>
+<span id="L35"><span class="lineNum">      35</span>              : #[derive(Debug)]</span>
+<span id="L36"><span class="lineNum">      36</span>              : pub enum AppError {</span>
+<span id="L37"><span class="lineNum">      37</span>              :     Unauthorized {</span>
+<span id="L38"><span class="lineNum">      38</span>              :         message: String,</span>
+<span id="L39"><span class="lineNum">      39</span>              :         code: &amp;'static str,</span>
+<span id="L40"><span class="lineNum">      40</span>              :     },</span>
+<span id="L41"><span class="lineNum">      41</span>              :     Forbidden {</span>
+<span id="L42"><span class="lineNum">      42</span>              :         message: String,</span>
+<span id="L43"><span class="lineNum">      43</span>              :         code: &amp;'static str,</span>
+<span id="L44"><span class="lineNum">      44</span>              :     },</span>
+<span id="L45"><span class="lineNum">      45</span>              :     BadRequest {</span>
+<span id="L46"><span class="lineNum">      46</span>              :         message: String,</span>
+<span id="L47"><span class="lineNum">      47</span>              :         code: &amp;'static str,</span>
+<span id="L48"><span class="lineNum">      48</span>              :     },</span>
+<span id="L49"><span class="lineNum">      49</span>              :     NotFound {</span>
+<span id="L50"><span class="lineNum">      50</span>              :         message: String,</span>
+<span id="L51"><span class="lineNum">      51</span>              :         code: &amp;'static str,</span>
+<span id="L52"><span class="lineNum">      52</span>              :     },</span>
+<span id="L53"><span class="lineNum">      53</span>              :     Conflict {</span>
+<span id="L54"><span class="lineNum">      54</span>              :         message: String,</span>
+<span id="L55"><span class="lineNum">      55</span>              :         code: &amp;'static str,</span>
+<span id="L56"><span class="lineNum">      56</span>              :     },</span>
+<span id="L57"><span class="lineNum">      57</span>              :     Stream {</span>
+<span id="L58"><span class="lineNum">      58</span>              :         message: String,</span>
+<span id="L59"><span class="lineNum">      59</span>              :         code: &amp;'static str,</span>
+<span id="L60"><span class="lineNum">      60</span>              :         /// Sanitized cause detail for the client (pipeline reason, blocking</span>
+<span id="L61"><span class="lineNum">      61</span>              :         /// elements). Never secrets: no tokens, passwords, or DB internals.</span>
+<span id="L62"><span class="lineNum">      62</span>              :         details: Option&lt;String&gt;,</span>
+<span id="L63"><span class="lineNum">      63</span>              :     },</span>
+<span id="L64"><span class="lineNum">      64</span>              :     Icecast {</span>
+<span id="L65"><span class="lineNum">      65</span>              :         message: String,</span>
+<span id="L66"><span class="lineNum">      66</span>              :         code: &amp;'static str,</span>
+<span id="L67"><span class="lineNum">      67</span>              :     },</span>
+<span id="L68"><span class="lineNum">      68</span>              :     Internal {</span>
+<span id="L69"><span class="lineNum">      69</span>              :         message: String,</span>
+<span id="L70"><span class="lineNum">      70</span>              :         code: &amp;'static str,</span>
+<span id="L71"><span class="lineNum">      71</span>              :     },</span>
+<span id="L72"><span class="lineNum">      72</span>              : }</span>
+<span id="L73"><span class="lineNum">      73</span>              : </span>
+<span id="L74"><span class="lineNum">      74</span>              : impl AppError {</span>
+<span id="L75"><span class="lineNum">      75</span> <span class="tlaGNC">           7 :     pub fn unauthorized(message: String) -&gt; Self {</span></span>
+<span id="L76"><span class="lineNum">      76</span> <span class="tlaGNC">           7 :         Self::Unauthorized {</span></span>
+<span id="L77"><span class="lineNum">      77</span> <span class="tlaGNC">           7 :             message,</span></span>
+<span id="L78"><span class="lineNum">      78</span> <span class="tlaGNC">           7 :             code: &quot;UNAUTHORIZED&quot;,</span></span>
+<span id="L79"><span class="lineNum">      79</span> <span class="tlaGNC">           7 :         }</span></span>
+<span id="L80"><span class="lineNum">      80</span> <span class="tlaGNC">           7 :     }</span></span>
+<span id="L81"><span class="lineNum">      81</span>              : </span>
+<span id="L82"><span class="lineNum">      82</span> <span class="tlaGNC">          14 :     pub fn forbidden(message: String) -&gt; Self {</span></span>
+<span id="L83"><span class="lineNum">      83</span> <span class="tlaGNC">          14 :         Self::Forbidden {</span></span>
+<span id="L84"><span class="lineNum">      84</span> <span class="tlaGNC">          14 :             message,</span></span>
+<span id="L85"><span class="lineNum">      85</span> <span class="tlaGNC">          14 :             code: &quot;FORBIDDEN&quot;,</span></span>
+<span id="L86"><span class="lineNum">      86</span> <span class="tlaGNC">          14 :         }</span></span>
+<span id="L87"><span class="lineNum">      87</span> <span class="tlaGNC">          14 :     }</span></span>
+<span id="L88"><span class="lineNum">      88</span>              : </span>
+<span id="L89"><span class="lineNum">      89</span> <span class="tlaGNC">          29 :     pub fn bad_request(message: String) -&gt; Self {</span></span>
+<span id="L90"><span class="lineNum">      90</span> <span class="tlaGNC">          29 :         Self::BadRequest {</span></span>
+<span id="L91"><span class="lineNum">      91</span> <span class="tlaGNC">          29 :             message,</span></span>
+<span id="L92"><span class="lineNum">      92</span> <span class="tlaGNC">          29 :             code: &quot;BAD_REQUEST&quot;,</span></span>
+<span id="L93"><span class="lineNum">      93</span> <span class="tlaGNC">          29 :         }</span></span>
+<span id="L94"><span class="lineNum">      94</span> <span class="tlaGNC">          29 :     }</span></span>
+<span id="L95"><span class="lineNum">      95</span>              : </span>
+<span id="L96"><span class="lineNum">      96</span> <span class="tlaGNC">          14 :     pub fn not_found(message: String) -&gt; Self {</span></span>
+<span id="L97"><span class="lineNum">      97</span> <span class="tlaGNC">          14 :         Self::NotFound {</span></span>
+<span id="L98"><span class="lineNum">      98</span> <span class="tlaGNC">          14 :             message,</span></span>
+<span id="L99"><span class="lineNum">      99</span> <span class="tlaGNC">          14 :             code: &quot;NOT_FOUND&quot;,</span></span>
+<span id="L100"><span class="lineNum">     100</span> <span class="tlaGNC">          14 :         }</span></span>
+<span id="L101"><span class="lineNum">     101</span> <span class="tlaGNC">          14 :     }</span></span>
+<span id="L102"><span class="lineNum">     102</span>              : </span>
+<span id="L103"><span class="lineNum">     103</span> <span class="tlaGNC">           7 :     pub fn conflict(message: String) -&gt; Self {</span></span>
+<span id="L104"><span class="lineNum">     104</span> <span class="tlaGNC">           7 :         Self::Conflict { message, code: &quot;CONFLICT&quot; }</span></span>
+<span id="L105"><span class="lineNum">     105</span> <span class="tlaGNC">           7 :     }</span></span>
+<span id="L106"><span class="lineNum">     106</span>              : </span>
+<span id="L107"><span class="lineNum">     107</span> <span class="tlaGNC">         156 :     pub fn internal(message: String) -&gt; Self {</span></span>
+<span id="L108"><span class="lineNum">     108</span> <span class="tlaGNC">         156 :         Self::Internal { message, code: &quot;INTERNAL&quot; }</span></span>
+<span id="L109"><span class="lineNum">     109</span> <span class="tlaGNC">         156 :     }</span></span>
+<span id="L110"><span class="lineNum">     110</span>              : </span>
+<span id="L111"><span class="lineNum">     111</span> <span class="tlaGNC">           5 :     pub fn stream(message: String) -&gt; Self {</span></span>
+<span id="L112"><span class="lineNum">     112</span> <span class="tlaGNC">           5 :         Self::Stream {</span></span>
+<span id="L113"><span class="lineNum">     113</span> <span class="tlaGNC">           5 :             message,</span></span>
+<span id="L114"><span class="lineNum">     114</span> <span class="tlaGNC">           5 :             code: &quot;STREAM_ERROR&quot;,</span></span>
+<span id="L115"><span class="lineNum">     115</span> <span class="tlaGNC">           5 :             details: None,</span></span>
+<span id="L116"><span class="lineNum">     116</span> <span class="tlaGNC">           5 :         }</span></span>
+<span id="L117"><span class="lineNum">     117</span> <span class="tlaGNC">           5 :     }</span></span>
+<span id="L118"><span class="lineNum">     118</span>              : </span>
+<span id="L119"><span class="lineNum">     119</span>              :     /// Attaches a sanitized cause detail (shown to the client). Callers must</span>
+<span id="L120"><span class="lineNum">     120</span>              :     /// only pass data free of secrets (pipeline reasons and element states</span>
+<span id="L121"><span class="lineNum">     121</span>              :     /// qualify; tokens, passwords and DB internals do not).</span>
+<span id="L122"><span class="lineNum">     122</span> <span class="tlaGNC">           1 :     pub fn with_details(mut self, details: String) -&gt; Self {</span></span>
+<span id="L123"><span class="lineNum">     123</span> <span class="tlaGNC">           1 :         if let Self::Stream { details: slot, .. } = &amp;mut self {</span></span>
+<span id="L124"><span class="lineNum">     124</span> <span class="tlaGNC">           1 :             *slot = Some(details);</span></span>
+<span id="L125"><span class="lineNum">     125</span> <span class="tlaGNC">           1 :         }</span></span>
+<span id="L126"><span class="lineNum">     126</span> <span class="tlaGNC">           1 :         self</span></span>
+<span id="L127"><span class="lineNum">     127</span> <span class="tlaGNC">           1 :     }</span></span>
+<span id="L128"><span class="lineNum">     128</span>              : </span>
+<span id="L129"><span class="lineNum">     129</span> <span class="tlaGNC">           2 :     pub fn icecast(message: String) -&gt; Self {</span></span>
+<span id="L130"><span class="lineNum">     130</span> <span class="tlaGNC">           2 :         Self::Icecast {</span></span>
+<span id="L131"><span class="lineNum">     131</span> <span class="tlaGNC">           2 :             message,</span></span>
+<span id="L132"><span class="lineNum">     132</span> <span class="tlaGNC">           2 :             code: &quot;ICECAST_ERROR&quot;,</span></span>
+<span id="L133"><span class="lineNum">     133</span> <span class="tlaGNC">           2 :         }</span></span>
+<span id="L134"><span class="lineNum">     134</span> <span class="tlaGNC">           2 :     }</span></span>
+<span id="L135"><span class="lineNum">     135</span>              : </span>
+<span id="L136"><span class="lineNum">     136</span>              :     /// Maps a pipeline failure to a categorized stream error, keeping the</span>
+<span id="L137"><span class="lineNum">     137</span>              :     /// caller-provided human message but choosing the code from the cause.</span>
+<span id="L138"><span class="lineNum">     138</span> <span class="tlaGNC">           6 :     pub(crate) fn from_pipeline(error: &amp;crate::streamer::pipeline::PipelineError, message: String) -&gt; Self {</span></span>
+<span id="L139"><span class="lineNum">     139</span>              :         use crate::streamer::pipeline::PipelineError as PE;</span>
+<span id="L140"><span class="lineNum">     140</span> <span class="tlaGNC">           6 :         let code = match error {</span></span>
+<span id="L141"><span class="lineNum">     141</span> <span class="tlaGNC">           2 :             PE::MissingElement(_) | PE::Initialization(_) =&gt; &quot;STREAM_INIT_FAILED&quot;,</span></span>
+<span id="L142"><span class="lineNum">     142</span> <span class="tlaGNC">           2 :             PE::InvalidTarget(_) | PE::InvalidTransitionMode(_) =&gt; &quot;STREAM_CONFIG_FAILED&quot;,</span></span>
+<span id="L143"><span class="lineNum">     143</span> <span class="tlaGNC">           1 :             PE::StalePlan =&gt; &quot;STREAM_STALE_PLAN&quot;,</span></span>
+<span id="L144"><span class="lineNum">     144</span> <span class="tlaGNC">           1 :             PE::Pipeline(_) =&gt; &quot;STREAM_PLAYBACK_FAILED&quot;,</span></span>
+<span id="L145"><span class="lineNum">     145</span>              :         };</span>
+<span id="L146"><span class="lineNum">     146</span> <span class="tlaGNC">           6 :         Self::Stream {</span></span>
+<span id="L147"><span class="lineNum">     147</span> <span class="tlaGNC">           6 :             message,</span></span>
+<span id="L148"><span class="lineNum">     148</span> <span class="tlaGNC">           6 :             code,</span></span>
+<span id="L149"><span class="lineNum">     149</span> <span class="tlaGNC">           6 :             details: Some(error.to_string()),</span></span>
+<span id="L150"><span class="lineNum">     150</span> <span class="tlaGNC">           6 :         }</span></span>
+<span id="L151"><span class="lineNum">     151</span> <span class="tlaGNC">           6 :     }</span></span>
+<span id="L152"><span class="lineNum">     152</span>              : </span>
+<span id="L153"><span class="lineNum">     153</span>              :     /// Override the generic code, e.g. stream/icecast specifics.</span>
+<span id="L154"><span class="lineNum">     154</span> <span class="tlaGNC">         191 :     pub fn with_code(self, code: &amp;'static str) -&gt; Self {</span></span>
+<span id="L155"><span class="lineNum">     155</span> <span class="tlaGNC">         191 :         match self {</span></span>
+<span id="L156"><span class="lineNum">     156</span> <span class="tlaGNC">           5 :             Self::Unauthorized { message, .. } =&gt; Self::Unauthorized { message, code },</span></span>
+<span id="L157"><span class="lineNum">     157</span> <span class="tlaGNC">          13 :             Self::Forbidden { message, .. } =&gt; Self::Forbidden { message, code },</span></span>
+<span id="L158"><span class="lineNum">     158</span> <span class="tlaGNC">          10 :             Self::BadRequest { message, .. } =&gt; Self::BadRequest { message, code },</span></span>
+<span id="L159"><span class="lineNum">     159</span> <span class="tlaUNC tlaBgUNC">           0 :             Self::NotFound { message, .. } =&gt; Self::NotFound { message, code },</span></span>
+<span id="L160"><span class="lineNum">     160</span> <span class="tlaGNC tlaBgGNC">           4 :             Self::Conflict { message, .. } =&gt; Self::Conflict { message, code },</span></span>
+<span id="L161"><span class="lineNum">     161</span> <span class="tlaGNC">           2 :             Self::Stream { message, details, .. } =&gt; Self::Stream { message, code, details },</span></span>
+<span id="L162"><span class="lineNum">     162</span> <span class="tlaGNC">           2 :             Self::Icecast { message, .. } =&gt; Self::Icecast { message, code },</span></span>
+<span id="L163"><span class="lineNum">     163</span> <span class="tlaGNC">         155 :             Self::Internal { message, .. } =&gt; Self::Internal { message, code },</span></span>
+<span id="L164"><span class="lineNum">     164</span>              :         }</span>
+<span id="L165"><span class="lineNum">     165</span> <span class="tlaGNC">         191 :     }</span></span>
+<span id="L166"><span class="lineNum">     166</span>              : </span>
+<span id="L167"><span class="lineNum">     167</span> <span class="tlaGNC">          60 :     fn status(&amp;self) -&gt; StatusCode {</span></span>
+<span id="L168"><span class="lineNum">     168</span> <span class="tlaGNC">          60 :         match self {</span></span>
+<span id="L169"><span class="lineNum">     169</span> <span class="tlaGNC">           7 :             Self::Unauthorized { .. } =&gt; StatusCode::UNAUTHORIZED,</span></span>
+<span id="L170"><span class="lineNum">     170</span> <span class="tlaGNC">          14 :             Self::Forbidden { .. } =&gt; StatusCode::FORBIDDEN,</span></span>
+<span id="L171"><span class="lineNum">     171</span> <span class="tlaGNC">          12 :             Self::BadRequest { .. } =&gt; StatusCode::BAD_REQUEST,</span></span>
+<span id="L172"><span class="lineNum">     172</span> <span class="tlaGNC">          13 :             Self::NotFound { .. } =&gt; StatusCode::NOT_FOUND,</span></span>
+<span id="L173"><span class="lineNum">     173</span> <span class="tlaGNC">           6 :             Self::Conflict { .. } =&gt; StatusCode::CONFLICT,</span></span>
+<span id="L174"><span class="lineNum">     174</span> <span class="tlaGNC">           8 :             Self::Stream { .. } | Self::Icecast { .. } | Self::Internal { .. } =&gt; StatusCode::INTERNAL_SERVER_ERROR,</span></span>
+<span id="L175"><span class="lineNum">     175</span>              :         }</span>
+<span id="L176"><span class="lineNum">     176</span> <span class="tlaGNC">          60 :     }</span></span>
+<span id="L177"><span class="lineNum">     177</span>              : </span>
+<span id="L178"><span class="lineNum">     178</span> <span class="tlaGNC">          60 :     fn category(&amp;self) -&gt; ErrorCategory {</span></span>
+<span id="L179"><span class="lineNum">     179</span> <span class="tlaGNC">          60 :         match self {</span></span>
+<span id="L180"><span class="lineNum">     180</span> <span class="tlaGNC">          21 :             Self::Unauthorized { .. } | Self::Forbidden { .. } =&gt; ErrorCategory::Auth,</span></span>
+<span id="L181"><span class="lineNum">     181</span> <span class="tlaGNC">          12 :             Self::BadRequest { .. } =&gt; ErrorCategory::Validation,</span></span>
+<span id="L182"><span class="lineNum">     182</span> <span class="tlaGNC">          13 :             Self::NotFound { .. } =&gt; ErrorCategory::NotFound,</span></span>
+<span id="L183"><span class="lineNum">     183</span> <span class="tlaGNC">           6 :             Self::Conflict { .. } =&gt; ErrorCategory::Conflict,</span></span>
+<span id="L184"><span class="lineNum">     184</span> <span class="tlaGNC">           3 :             Self::Stream { .. } =&gt; ErrorCategory::Stream,</span></span>
+<span id="L185"><span class="lineNum">     185</span> <span class="tlaGNC">           2 :             Self::Icecast { .. } =&gt; ErrorCategory::Icecast,</span></span>
+<span id="L186"><span class="lineNum">     186</span> <span class="tlaGNC">           3 :             Self::Internal { .. } =&gt; ErrorCategory::Server,</span></span>
+<span id="L187"><span class="lineNum">     187</span>              :         }</span>
+<span id="L188"><span class="lineNum">     188</span> <span class="tlaGNC">          60 :     }</span></span>
+<span id="L189"><span class="lineNum">     189</span>              : </span>
+<span id="L190"><span class="lineNum">     190</span> <span class="tlaGNC">          63 :     fn message(&amp;self) -&gt; &amp;str {</span></span>
+<span id="L191"><span class="lineNum">     191</span> <span class="tlaGNC">          63 :         match self {</span></span>
+<span id="L192"><span class="lineNum">     192</span> <span class="tlaGNC">           7 :             Self::Unauthorized { message, .. }</span></span>
+<span id="L193"><span class="lineNum">     193</span> <span class="tlaGNC">          14 :             | Self::Forbidden { message, .. }</span></span>
+<span id="L194"><span class="lineNum">     194</span> <span class="tlaGNC">          12 :             | Self::BadRequest { message, .. }</span></span>
+<span id="L195"><span class="lineNum">     195</span> <span class="tlaGNC">          13 :             | Self::NotFound { message, .. }</span></span>
+<span id="L196"><span class="lineNum">     196</span> <span class="tlaGNC">           6 :             | Self::Conflict { message, .. }</span></span>
+<span id="L197"><span class="lineNum">     197</span> <span class="tlaGNC">           3 :             | Self::Stream { message, .. }</span></span>
+<span id="L198"><span class="lineNum">     198</span> <span class="tlaGNC">           2 :             | Self::Icecast { message, .. }</span></span>
+<span id="L199"><span class="lineNum">     199</span> <span class="tlaGNC">          63 :             | Self::Internal { message, .. } =&gt; message,</span></span>
+<span id="L200"><span class="lineNum">     200</span>              :         }</span>
+<span id="L201"><span class="lineNum">     201</span> <span class="tlaGNC">          63 :     }</span></span>
+<span id="L202"><span class="lineNum">     202</span>              : </span>
+<span id="L203"><span class="lineNum">     203</span> <span class="tlaGNC">          66 :     pub fn code(&amp;self) -&gt; &amp;'static str {</span></span>
+<span id="L204"><span class="lineNum">     204</span> <span class="tlaGNC">          66 :         match self {</span></span>
+<span id="L205"><span class="lineNum">     205</span> <span class="tlaGNC">           7 :             Self::Unauthorized { code, .. }</span></span>
+<span id="L206"><span class="lineNum">     206</span> <span class="tlaGNC">          14 :             | Self::Forbidden { code, .. }</span></span>
+<span id="L207"><span class="lineNum">     207</span> <span class="tlaGNC">          12 :             | Self::BadRequest { code, .. }</span></span>
+<span id="L208"><span class="lineNum">     208</span> <span class="tlaGNC">          13 :             | Self::NotFound { code, .. }</span></span>
+<span id="L209"><span class="lineNum">     209</span> <span class="tlaGNC">           6 :             | Self::Conflict { code, .. }</span></span>
+<span id="L210"><span class="lineNum">     210</span> <span class="tlaGNC">           3 :             | Self::Stream { code, .. }</span></span>
+<span id="L211"><span class="lineNum">     211</span> <span class="tlaGNC">           2 :             | Self::Icecast { code, .. }</span></span>
+<span id="L212"><span class="lineNum">     212</span> <span class="tlaGNC">          66 :             | Self::Internal { code, .. } =&gt; code,</span></span>
+<span id="L213"><span class="lineNum">     213</span>              :         }</span>
+<span id="L214"><span class="lineNum">     214</span> <span class="tlaGNC">          66 :     }</span></span>
+<span id="L215"><span class="lineNum">     215</span>              : }</span>
+<span id="L216"><span class="lineNum">     216</span>              : </span>
+<span id="L217"><span class="lineNum">     217</span>              : /// Axum extractors, body limits and method routing can reject a request before</span>
+<span id="L218"><span class="lineNum">     218</span>              : /// a handler creates AppError. Give those responses the same code contract.</span>
+<span id="L219"><span class="lineNum">     219</span> <span class="tlaGNC">         513 : pub async fn normalize_errors(req: axum::http::Request&lt;axum::body::Body&gt;, next: axum::middleware::Next) -&gt; Response {</span></span>
+<span id="L220"><span class="lineNum">     220</span> <span class="tlaGNC">         513 :     let response = next.run(req).await;</span></span>
+<span id="L221"><span class="lineNum">     221</span> <span class="tlaGNC">         513 :     let status = response.status();</span></span>
+<span id="L222"><span class="lineNum">     222</span> <span class="tlaGNC">         513 :     if !status.is_client_error() &amp;&amp; !status.is_server_error() {</span></span>
+<span id="L223"><span class="lineNum">     223</span> <span class="tlaGNC">         460 :         return response;</span></span>
+<span id="L224"><span class="lineNum">     224</span> <span class="tlaGNC">          53 :     }</span></span>
+<span id="L225"><span class="lineNum">     225</span> <span class="tlaGNC">          53 :     let (mut parts, body) = response.into_parts();</span></span>
+<span id="L226"><span class="lineNum">     226</span> <span class="tlaGNC">          53 :     let bytes = axum::body::to_bytes(body, 64 * 1024).await.unwrap_or_default();</span></span>
+<span id="L227"><span class="lineNum">     227</span> <span class="tlaGNC">          53 :     if serde_json::from_slice::&lt;serde_json::Value&gt;(&amp;bytes)</span></span>
+<span id="L228"><span class="lineNum">     228</span> <span class="tlaGNC">          53 :         .ok()</span></span>
+<span id="L229"><span class="lineNum">     229</span> <span class="tlaGNC">          53 :         .is_some_and(|body| body.get(&quot;code&quot;).is_some_and(serde_json::Value::is_string))</span></span>
+<span id="L230"><span class="lineNum">     230</span>              :     {</span>
+<span id="L231"><span class="lineNum">     231</span> <span class="tlaGNC">          50 :         return Response::from_parts(parts, axum::body::Body::from(bytes));</span></span>
+<span id="L232"><span class="lineNum">     232</span> <span class="tlaGNC">           3 :     }</span></span>
+<span id="L233"><span class="lineNum">     233</span> <span class="tlaGNC">           3 :     let (code, category) = match status.as_u16() {</span></span>
+<span id="L234"><span class="lineNum">     234</span> <span class="tlaGNC">           2 :         400 | 422 =&gt; (&quot;BAD_REQUEST&quot;, &quot;validation&quot;),</span></span>
+<span id="L235"><span class="lineNum">     235</span> <span class="tlaUNC tlaBgUNC">           0 :         401 =&gt; (&quot;UNAUTHORIZED&quot;, &quot;auth&quot;),</span></span>
+<span id="L236"><span class="lineNum">     236</span> <span class="tlaUNC">           0 :         403 =&gt; (&quot;FORBIDDEN&quot;, &quot;auth&quot;),</span></span>
+<span id="L237"><span class="lineNum">     237</span> <span class="tlaUNC">           0 :         404 =&gt; (&quot;NOT_FOUND&quot;, &quot;not_found&quot;),</span></span>
+<span id="L238"><span class="lineNum">     238</span> <span class="tlaGNC tlaBgGNC">           1 :         405 =&gt; (&quot;METHOD_NOT_ALLOWED&quot;, &quot;validation&quot;),</span></span>
+<span id="L239"><span class="lineNum">     239</span> <span class="tlaUNC tlaBgUNC">           0 :         408 | 504 =&gt; (&quot;REQUEST_TIMEOUT&quot;, &quot;server&quot;),</span></span>
+<span id="L240"><span class="lineNum">     240</span> <span class="tlaUNC">           0 :         409 =&gt; (&quot;CONFLICT&quot;, &quot;conflict&quot;),</span></span>
+<span id="L241"><span class="lineNum">     241</span> <span class="tlaUNC">           0 :         413 =&gt; (&quot;PAYLOAD_TOO_LARGE&quot;, &quot;validation&quot;),</span></span>
+<span id="L242"><span class="lineNum">     242</span> <span class="tlaUNC">           0 :         415 =&gt; (&quot;UNSUPPORTED_MEDIA_TYPE&quot;, &quot;validation&quot;),</span></span>
+<span id="L243"><span class="lineNum">     243</span> <span class="tlaUNC">           0 :         429 =&gt; (&quot;RATE_LIMITED&quot;, &quot;validation&quot;),</span></span>
+<span id="L244"><span class="lineNum">     244</span> <span class="tlaUNC">           0 :         502 | 503 =&gt; (&quot;SERVICE_UNAVAILABLE&quot;, &quot;server&quot;),</span></span>
+<span id="L245"><span class="lineNum">     245</span> <span class="tlaUNC">           0 :         _ =&gt; (&quot;INTERNAL&quot;, &quot;server&quot;),</span></span>
+<span id="L246"><span class="lineNum">     246</span>              :     };</span>
+<span id="L247"><span class="lineNum">     247</span> <span class="tlaGNC tlaBgGNC">           3 :     parts.headers.remove(axum::http::header::CONTENT_LENGTH);</span></span>
+<span id="L248"><span class="lineNum">     248</span> <span class="tlaGNC">           3 :     parts.headers.insert(</span></span>
+<span id="L249"><span class="lineNum">     249</span> <span class="tlaGNC">           3 :         axum::http::header::CONTENT_TYPE,</span></span>
+<span id="L250"><span class="lineNum">     250</span> <span class="tlaGNC">           3 :         axum::http::HeaderValue::from_static(&quot;application/json&quot;),</span></span>
+<span id="L251"><span class="lineNum">     251</span>              :     );</span>
+<span id="L252"><span class="lineNum">     252</span> <span class="tlaGNC">           3 :     Response::from_parts(parts, axum::body::Body::from(json!({&quot;code&quot;:code,&quot;category&quot;:category}).to_string()))</span></span>
+<span id="L253"><span class="lineNum">     253</span> <span class="tlaGNC">         513 : }</span></span>
+<span id="L254"><span class="lineNum">     254</span>              : </span>
+<span id="L255"><span class="lineNum">     255</span>              : impl std::fmt::Display for AppError {</span>
+<span id="L256"><span class="lineNum">     256</span> <span class="tlaGNC">           6 :     fn fmt(&amp;self, f: &amp;mut std::fmt::Formatter&lt;'_&gt;) -&gt; std::fmt::Result {</span></span>
+<span id="L257"><span class="lineNum">     257</span> <span class="tlaGNC">           6 :         write!(f, &quot;[{}] {}&quot;, self.code(), self.message())</span></span>
+<span id="L258"><span class="lineNum">     258</span> <span class="tlaGNC">           6 :     }</span></span>
+<span id="L259"><span class="lineNum">     259</span>              : }</span>
+<span id="L260"><span class="lineNum">     260</span>              : </span>
+<span id="L261"><span class="lineNum">     261</span>              : impl IntoResponse for AppError {</span>
+<span id="L262"><span class="lineNum">     262</span> <span class="tlaGNC">          60 :     fn into_response(self) -&gt; Response {</span></span>
+<span id="L263"><span class="lineNum">     263</span> <span class="tlaGNC">          60 :         let status = self.status();</span></span>
+<span id="L264"><span class="lineNum">     264</span>              :         // Never leak server internals: Stream carries only the friendly</span>
+<span id="L265"><span class="lineNum">     265</span>              :         // message plus a code; the cause stays in server logs.</span>
+<span id="L266"><span class="lineNum">     266</span> <span class="tlaGNC">          60 :         let message = match &amp;self {</span></span>
+<span id="L267"><span class="lineNum">     267</span> <span class="tlaGNC">           3 :             Self::Internal { .. } =&gt; &quot;Internal server error&quot;,</span></span>
+<span id="L268"><span class="lineNum">     268</span> <span class="tlaGNC">          57 :             _ =&gt; self.message(),</span></span>
+<span id="L269"><span class="lineNum">     269</span>              :         };</span>
+<span id="L270"><span class="lineNum">     270</span> <span class="tlaGNC">          60 :         let mut body = json!({</span></span>
+<span id="L271"><span class="lineNum">     271</span> <span class="tlaGNC">          60 :             &quot;error&quot;: message,</span></span>
+<span id="L272"><span class="lineNum">     272</span> <span class="tlaGNC">          60 :             &quot;code&quot;: self.code(),</span></span>
+<span id="L273"><span class="lineNum">     273</span> <span class="tlaGNC">          60 :             &quot;category&quot;: self.category().as_str(),</span></span>
+<span id="L274"><span class="lineNum">     274</span>              :         });</span>
+<span id="L275"><span class="lineNum">     275</span>              :         if let Self::Stream {</span>
+<span id="L276"><span class="lineNum">     276</span> <span class="tlaGNC">           1 :             details: Some(details), ..</span></span>
+<span id="L277"><span class="lineNum">     277</span> <span class="tlaGNC">           3 :         } = &amp;self</span></span>
+<span id="L278"><span class="lineNum">     278</span> <span class="tlaGNC">           1 :         {</span></span>
+<span id="L279"><span class="lineNum">     279</span> <span class="tlaGNC">           1 :             body[&quot;details&quot;] = json!(details);</span></span>
+<span id="L280"><span class="lineNum">     280</span> <span class="tlaGNC">          59 :         }</span></span>
+<span id="L281"><span class="lineNum">     281</span> <span class="tlaGNC">          60 :         (status, Json(body)).into_response()</span></span>
+<span id="L282"><span class="lineNum">     282</span> <span class="tlaGNC">          60 :     }</span></span>
+<span id="L283"><span class="lineNum">     283</span>              : }</span>
+<span id="L284"><span class="lineNum">     284</span>              : </span>
+<span id="L285"><span class="lineNum">     285</span>              : pub trait DbResult&lt;T&gt; {</span>
+<span id="L286"><span class="lineNum">     286</span>              :     fn db_error(self, ctx: &amp;str) -&gt; Result&lt;T, AppError&gt;;</span>
+<span id="L287"><span class="lineNum">     287</span>              : }</span>
+<span id="L288"><span class="lineNum">     288</span>              : </span>
+<span id="L289"><span class="lineNum">     289</span>              : impl&lt;T, E: std::fmt::Display&gt; DbResult&lt;T&gt; for Result&lt;T, E&gt; {</span>
+<span id="L290"><span class="lineNum">     290</span> <span class="tlaGNC">        3582 :     fn db_error(self, ctx: &amp;str) -&gt; Result&lt;T, AppError&gt; {</span></span>
+<span id="L291"><span class="lineNum">     291</span> <span class="tlaGNC">        3582 :         self.map_err(|e| {</span></span>
+<span id="L292"><span class="lineNum">     292</span> <span class="tlaGNC">         153 :             tracing::error!(&quot;{ctx}: {e}&quot;);</span></span>
+<span id="L293"><span class="lineNum">     293</span> <span class="tlaGNC">         153 :             AppError::internal(&quot;Database operation failed&quot;.to_string()).with_code(&quot;DB_ERROR&quot;)</span></span>
+<span id="L294"><span class="lineNum">     294</span> <span class="tlaGNC">         153 :         })</span></span>
+<span id="L295"><span class="lineNum">     295</span> <span class="tlaGNC">        3582 :     }</span></span>
+<span id="L296"><span class="lineNum">     296</span>              : }</span>
+<span id="L297"><span class="lineNum">     297</span>              : </span>
+<span id="L298"><span class="lineNum">     298</span>              : #[cfg(test)]</span>
+<span id="L299"><span class="lineNum">     299</span>              : mod tests {</span>
+<span id="L300"><span class="lineNum">     300</span>              :     use super::*;</span>
+<span id="L301"><span class="lineNum">     301</span>              : </span>
+<span id="L302"><span class="lineNum">     302</span> <span class="tlaGNC">          11 :     async fn response_body(error: AppError) -&gt; (StatusCode, serde_json::Value) {</span></span>
+<span id="L303"><span class="lineNum">     303</span> <span class="tlaGNC">          11 :         let response = error.into_response();</span></span>
+<span id="L304"><span class="lineNum">     304</span> <span class="tlaGNC">          11 :         let status = response.status();</span></span>
+<span id="L305"><span class="lineNum">     305</span> <span class="tlaGNC">          11 :         let body = axum::body::to_bytes(response.into_body(), 1024 * 64).await.unwrap();</span></span>
+<span id="L306"><span class="lineNum">     306</span> <span class="tlaGNC">          11 :         (status, serde_json::from_slice(&amp;body).unwrap())</span></span>
+<span id="L307"><span class="lineNum">     307</span> <span class="tlaGNC">          11 :     }</span></span>
+<span id="L308"><span class="lineNum">     308</span>              : </span>
+<span id="L309"><span class="lineNum">     309</span>              :     #[test]</span>
+<span id="L310"><span class="lineNum">     310</span> <span class="tlaGNC">           1 :     fn test_db_result_ok() {</span></span>
+<span id="L311"><span class="lineNum">     311</span> <span class="tlaGNC">           1 :         let result: Result&lt;i32, &amp;str&gt; = Ok(42);</span></span>
+<span id="L312"><span class="lineNum">     312</span> <span class="tlaGNC">           1 :         let res = result.db_error(&quot;my context&quot;);</span></span>
+<span id="L313"><span class="lineNum">     313</span> <span class="tlaGNC">           1 :         assert_eq!(res.unwrap(), 42);</span></span>
+<span id="L314"><span class="lineNum">     314</span> <span class="tlaGNC">           1 :     }</span></span>
+<span id="L315"><span class="lineNum">     315</span>              : </span>
+<span id="L316"><span class="lineNum">     316</span>              :     #[test]</span>
+<span id="L317"><span class="lineNum">     317</span> <span class="tlaGNC">           1 :     fn test_db_result_err_type() {</span></span>
+<span id="L318"><span class="lineNum">     318</span> <span class="tlaGNC">           1 :         let result: Result&lt;i32, &amp;str&gt; = Err(&quot;db failure&quot;);</span></span>
+<span id="L319"><span class="lineNum">     319</span> <span class="tlaGNC">           1 :         let res = result.db_error(&quot;my context&quot;);</span></span>
+<span id="L320"><span class="lineNum">     320</span> <span class="tlaGNC">           1 :         match res {</span></span>
+<span id="L321"><span class="lineNum">     321</span> <span class="tlaGNC">           1 :             Err(AppError::Internal { .. }) =&gt; {}</span></span>
+<span id="L322"><span class="lineNum">     322</span> <span class="tlaUNC tlaBgUNC">           0 :             _ =&gt; panic!(&quot;Expected AppError::Internal&quot;),</span></span>
+<span id="L323"><span class="lineNum">     323</span>              :         }</span>
+<span id="L324"><span class="lineNum">     324</span> <span class="tlaGNC tlaBgGNC">           1 :     }</span></span>
+<span id="L325"><span class="lineNum">     325</span>              : </span>
+<span id="L326"><span class="lineNum">     326</span>              :     #[tokio::test]</span>
+<span id="L327"><span class="lineNum">     327</span> <span class="tlaGNC">           1 :     async fn test_envelope_shape_per_variant() {</span></span>
+<span id="L328"><span class="lineNum">     328</span> <span class="tlaGNC">           7 :         for (error, status, code, category) in [</span></span>
+<span id="L329"><span class="lineNum">     329</span> <span class="tlaGNC">           1 :             (</span></span>
+<span id="L330"><span class="lineNum">     330</span> <span class="tlaGNC">           1 :                 AppError::unauthorized(&quot;nope&quot;.to_string()),</span></span>
+<span id="L331"><span class="lineNum">     331</span> <span class="tlaGNC">           1 :                 StatusCode::UNAUTHORIZED,</span></span>
+<span id="L332"><span class="lineNum">     332</span> <span class="tlaGNC">           1 :                 &quot;UNAUTHORIZED&quot;,</span></span>
+<span id="L333"><span class="lineNum">     333</span> <span class="tlaGNC">           1 :                 &quot;auth&quot;,</span></span>
+<span id="L334"><span class="lineNum">     334</span> <span class="tlaGNC">           1 :             ),</span></span>
+<span id="L335"><span class="lineNum">     335</span> <span class="tlaGNC">           1 :             (AppError::forbidden(&quot;nope&quot;.to_string()), StatusCode::FORBIDDEN, &quot;FORBIDDEN&quot;, &quot;auth&quot;),</span></span>
+<span id="L336"><span class="lineNum">     336</span> <span class="tlaGNC">           1 :             (</span></span>
+<span id="L337"><span class="lineNum">     337</span> <span class="tlaGNC">           1 :                 AppError::bad_request(&quot;nope&quot;.to_string()),</span></span>
+<span id="L338"><span class="lineNum">     338</span> <span class="tlaGNC">           1 :                 StatusCode::BAD_REQUEST,</span></span>
+<span id="L339"><span class="lineNum">     339</span> <span class="tlaGNC">           1 :                 &quot;BAD_REQUEST&quot;,</span></span>
+<span id="L340"><span class="lineNum">     340</span> <span class="tlaGNC">           1 :                 &quot;validation&quot;,</span></span>
+<span id="L341"><span class="lineNum">     341</span> <span class="tlaGNC">           1 :             ),</span></span>
+<span id="L342"><span class="lineNum">     342</span> <span class="tlaGNC">           1 :             (</span></span>
+<span id="L343"><span class="lineNum">     343</span> <span class="tlaGNC">           1 :                 AppError::not_found(&quot;nope&quot;.to_string()),</span></span>
+<span id="L344"><span class="lineNum">     344</span> <span class="tlaGNC">           1 :                 StatusCode::NOT_FOUND,</span></span>
+<span id="L345"><span class="lineNum">     345</span> <span class="tlaGNC">           1 :                 &quot;NOT_FOUND&quot;,</span></span>
+<span id="L346"><span class="lineNum">     346</span> <span class="tlaGNC">           1 :                 &quot;not_found&quot;,</span></span>
+<span id="L347"><span class="lineNum">     347</span> <span class="tlaGNC">           1 :             ),</span></span>
+<span id="L348"><span class="lineNum">     348</span> <span class="tlaGNC">           1 :             (AppError::conflict(&quot;nope&quot;.to_string()), StatusCode::CONFLICT, &quot;CONFLICT&quot;, &quot;conflict&quot;),</span></span>
+<span id="L349"><span class="lineNum">     349</span> <span class="tlaGNC">           1 :             (</span></span>
+<span id="L350"><span class="lineNum">     350</span> <span class="tlaGNC">           1 :                 AppError::internal(&quot;boom&quot;.to_string()),</span></span>
+<span id="L351"><span class="lineNum">     351</span> <span class="tlaGNC">           1 :                 StatusCode::INTERNAL_SERVER_ERROR,</span></span>
+<span id="L352"><span class="lineNum">     352</span> <span class="tlaGNC">           1 :                 &quot;INTERNAL&quot;,</span></span>
+<span id="L353"><span class="lineNum">     353</span> <span class="tlaGNC">           1 :                 &quot;server&quot;,</span></span>
+<span id="L354"><span class="lineNum">     354</span> <span class="tlaGNC">           1 :             ),</span></span>
+<span id="L355"><span class="lineNum">     355</span> <span class="tlaGNC">           1 :             (</span></span>
+<span id="L356"><span class="lineNum">     356</span> <span class="tlaGNC">           1 :                 AppError::stream(&quot;stall&quot;.to_string()),</span></span>
+<span id="L357"><span class="lineNum">     357</span> <span class="tlaGNC">           1 :                 StatusCode::INTERNAL_SERVER_ERROR,</span></span>
+<span id="L358"><span class="lineNum">     358</span> <span class="tlaGNC">           1 :                 &quot;STREAM_ERROR&quot;,</span></span>
+<span id="L359"><span class="lineNum">     359</span> <span class="tlaGNC">           1 :                 &quot;stream&quot;,</span></span>
+<span id="L360"><span class="lineNum">     360</span> <span class="tlaGNC">           1 :             ),</span></span>
+<span id="L361"><span class="lineNum">     361</span> <span class="tlaGNC">           1 :         ] {</span></span>
+<span id="L362"><span class="lineNum">     362</span> <span class="tlaGNC">           7 :             let (actual_status, body) = response_body(error).await;</span></span>
+<span id="L363"><span class="lineNum">     363</span> <span class="tlaGNC">           7 :             assert_eq!(actual_status, status);</span></span>
+<span id="L364"><span class="lineNum">     364</span> <span class="tlaGNC">           7 :             assert_eq!(body[&quot;code&quot;], code);</span></span>
+<span id="L365"><span class="lineNum">     365</span> <span class="tlaGNC">           7 :             assert_eq!(body[&quot;category&quot;], category);</span></span>
+<span id="L366"><span class="lineNum">     366</span> <span class="tlaGNC">           7 :             assert!(body[&quot;error&quot;].is_string());</span></span>
+<span id="L367"><span class="lineNum">     367</span> <span class="tlaGNC">           1 :         }</span></span>
+<span id="L368"><span class="lineNum">     368</span> <span class="tlaGNC">           1 :     }</span></span>
+<span id="L369"><span class="lineNum">     369</span>              : </span>
+<span id="L370"><span class="lineNum">     370</span>              :     #[tokio::test]</span>
+<span id="L371"><span class="lineNum">     371</span> <span class="tlaGNC">           1 :     async fn test_internal_message_is_redacted_but_code_survives() {</span></span>
+<span id="L372"><span class="lineNum">     372</span> <span class="tlaGNC">           1 :         let (_, body) = response_body(AppError::internal(&quot;secret db password&quot;.to_string()).with_code(&quot;DB_ERROR&quot;)).await;</span></span>
+<span id="L373"><span class="lineNum">     373</span> <span class="tlaGNC">           1 :         assert_eq!(body[&quot;error&quot;], &quot;Internal server error&quot;);</span></span>
+<span id="L374"><span class="lineNum">     374</span> <span class="tlaGNC">           1 :         assert_eq!(body[&quot;code&quot;], &quot;DB_ERROR&quot;);</span></span>
+<span id="L375"><span class="lineNum">     375</span> <span class="tlaGNC">           1 :         assert_eq!(body[&quot;category&quot;], &quot;server&quot;);</span></span>
+<span id="L376"><span class="lineNum">     376</span> <span class="tlaGNC">           1 :     }</span></span>
+<span id="L377"><span class="lineNum">     377</span>              : </span>
+<span id="L378"><span class="lineNum">     378</span>              :     #[tokio::test]</span>
+<span id="L379"><span class="lineNum">     379</span> <span class="tlaGNC">           1 :     async fn test_with_code_override() {</span></span>
+<span id="L380"><span class="lineNum">     380</span> <span class="tlaGNC">           1 :         let (_, body) = response_body(AppError::internal(&quot;x&quot;.to_string()).with_code(&quot;STREAM_PLAYBACK_FAILED&quot;)).await;</span></span>
+<span id="L381"><span class="lineNum">     381</span> <span class="tlaGNC">           1 :         assert_eq!(body[&quot;code&quot;], &quot;STREAM_PLAYBACK_FAILED&quot;);</span></span>
+<span id="L382"><span class="lineNum">     382</span> <span class="tlaGNC">           1 :     }</span></span>
+<span id="L383"><span class="lineNum">     383</span>              : </span>
+<span id="L384"><span class="lineNum">     384</span>              :     #[tokio::test]</span>
+<span id="L385"><span class="lineNum">     385</span> <span class="tlaGNC">           1 :     async fn test_stream_message_is_not_redacted() {</span></span>
+<span id="L386"><span class="lineNum">     386</span> <span class="tlaGNC">           1 :         let (_, body) = response_body(AppError::stream(&quot;Stream playback failed&quot;.to_string())).await;</span></span>
+<span id="L387"><span class="lineNum">     387</span> <span class="tlaGNC">           1 :         assert_eq!(body[&quot;error&quot;], &quot;Stream playback failed&quot;);</span></span>
+<span id="L388"><span class="lineNum">     388</span> <span class="tlaGNC">           1 :         assert_eq!(body[&quot;category&quot;], &quot;stream&quot;);</span></span>
+<span id="L389"><span class="lineNum">     389</span> <span class="tlaGNC">           1 :         assert!(body.get(&quot;details&quot;).is_none());</span></span>
+<span id="L390"><span class="lineNum">     390</span> <span class="tlaGNC">           1 :     }</span></span>
+<span id="L391"><span class="lineNum">     391</span>              : </span>
+<span id="L392"><span class="lineNum">     392</span>              :     #[tokio::test]</span>
+<span id="L393"><span class="lineNum">     393</span> <span class="tlaGNC">           1 :     async fn test_stream_details_reach_the_client() {</span></span>
+<span id="L394"><span class="lineNum">     394</span> <span class="tlaGNC">           1 :         let (_, body) =</span></span>
+<span id="L395"><span class="lineNum">     395</span> <span class="tlaGNC">           1 :             response_body(AppError::stream(&quot;Stream playback failed&quot;.to_string()).with_details(&quot;stalled at Paused&quot;.to_string())).await;</span></span>
+<span id="L396"><span class="lineNum">     396</span> <span class="tlaGNC">           1 :         assert_eq!(body[&quot;details&quot;], &quot;stalled at Paused&quot;);</span></span>
+<span id="L397"><span class="lineNum">     397</span> <span class="tlaGNC">           1 :     }</span></span>
+<span id="L398"><span class="lineNum">     398</span>              : </span>
+<span id="L399"><span class="lineNum">     399</span>              :     #[test]</span>
+<span id="L400"><span class="lineNum">     400</span> <span class="tlaGNC">           1 :     fn test_from_pipeline_picks_code_from_cause() {</span></span>
+<span id="L401"><span class="lineNum">     401</span>              :         use crate::streamer::pipeline::PipelineError;</span>
+<span id="L402"><span class="lineNum">     402</span> <span class="tlaGNC">           1 :         let cases = [</span></span>
+<span id="L403"><span class="lineNum">     403</span> <span class="tlaGNC">           1 :             (PipelineError::MissingElement(&quot;x&quot;), &quot;STREAM_INIT_FAILED&quot;),</span></span>
+<span id="L404"><span class="lineNum">     404</span> <span class="tlaGNC">           1 :             (PipelineError::Initialization(&quot;x&quot;.into()), &quot;STREAM_INIT_FAILED&quot;),</span></span>
+<span id="L405"><span class="lineNum">     405</span> <span class="tlaGNC">           1 :             (PipelineError::InvalidTarget(&quot;x&quot;.into()), &quot;STREAM_CONFIG_FAILED&quot;),</span></span>
+<span id="L406"><span class="lineNum">     406</span> <span class="tlaGNC">           1 :             (PipelineError::InvalidTransitionMode(&quot;x&quot;.into()), &quot;STREAM_CONFIG_FAILED&quot;),</span></span>
+<span id="L407"><span class="lineNum">     407</span> <span class="tlaGNC">           1 :             (PipelineError::StalePlan, &quot;STREAM_STALE_PLAN&quot;),</span></span>
+<span id="L408"><span class="lineNum">     408</span> <span class="tlaGNC">           1 :             (PipelineError::Pipeline(&quot;x&quot;.into()), &quot;STREAM_PLAYBACK_FAILED&quot;),</span></span>
+<span id="L409"><span class="lineNum">     409</span> <span class="tlaGNC">           1 :         ];</span></span>
+<span id="L410"><span class="lineNum">     410</span> <span class="tlaGNC">           6 :         for (cause, code) in cases {</span></span>
+<span id="L411"><span class="lineNum">     411</span> <span class="tlaGNC">           6 :             match AppError::from_pipeline(&amp;cause, &quot;friendly&quot;.to_string()) {</span></span>
+<span id="L412"><span class="lineNum">     412</span>              :                 AppError::Stream {</span>
+<span id="L413"><span class="lineNum">     413</span> <span class="tlaGNC">           6 :                     message,</span></span>
+<span id="L414"><span class="lineNum">     414</span> <span class="tlaGNC">           6 :                     code: actual,</span></span>
+<span id="L415"><span class="lineNum">     415</span> <span class="tlaGNC">           6 :                     details,</span></span>
+<span id="L416"><span class="lineNum">     416</span>              :                 } =&gt; {</span>
+<span id="L417"><span class="lineNum">     417</span> <span class="tlaGNC">           6 :                     assert_eq!(message, &quot;friendly&quot;);</span></span>
+<span id="L418"><span class="lineNum">     418</span> <span class="tlaGNC">           6 :                     assert_eq!(actual, code);</span></span>
+<span id="L419"><span class="lineNum">     419</span> <span class="tlaGNC">           6 :                     assert!(details.is_some(), &quot;pipeline cause must reach the client&quot;);</span></span>
+<span id="L420"><span class="lineNum">     420</span>              :                 }</span>
+<span id="L421"><span class="lineNum">     421</span> <span class="tlaUNC tlaBgUNC">           0 :                 other =&gt; panic!(&quot;expected Stream, got {other:?}&quot;),</span></span>
+<span id="L422"><span class="lineNum">     422</span>              :             }</span>
+<span id="L423"><span class="lineNum">     423</span>              :         }</span>
+<span id="L424"><span class="lineNum">     424</span> <span class="tlaGNC tlaBgGNC">           1 :     }</span></span>
+<span id="L425"><span class="lineNum">     425</span>              : }</span>
         </pre>
               </td>
             </tr>

@@ -37,7 +37,7 @@
           </tr>
           <tr>
             <td class="headerItem">Test Date:</td>
-            <td class="headerValue">2026-09-06 21:10:44</td>
+            <td class="headerValue">2026-11-03 01:49:59</td>
             <td></td>
             <td class="headerItem">Functions:</td>
             <td class="headerCovTableEntryHi">100.0&nbsp;%</td>
@@ -64,8 +64,8 @@
 <span id="L2"><span class="lineNum">       2</span>              : import type { HttpClient } from &quot;@/lib/http-client&quot;;</span>
 <span id="L3"><span class="lineNum">       3</span>              : import type { AutoFillConfig, AutoFillPlaylistEntry, ScheduleSourceType } from &quot;@/types&quot;;</span>
 <span id="L4"><span class="lineNum">       4</span>              : </span>
-<span id="L5"><span class="lineNum">       5</span> <span class="tlaGNC tlaBgGNC">           3 : export function createAutoFillService(client: HttpClient) {</span></span>
-<span id="L6"><span class="lineNum">       6</span> <span class="tlaGNC">           3 :   return {</span></span>
+<span id="L5"><span class="lineNum">       5</span> <span class="tlaGNC tlaBgGNC">           4 : export function createAutoFillService(client: HttpClient) {</span></span>
+<span id="L6"><span class="lineNum">       6</span> <span class="tlaGNC">           4 :   return {</span></span>
 <span id="L7"><span class="lineNum">       7</span> <span class="tlaGNC">           5 :     get: (stationId: string) =&gt; client.get&lt;AutoFillConfig&gt;(`/stations/${stationId}/auto-fill`),</span></span>
 <span id="L8"><span class="lineNum">       8</span> <span class="tlaGNC">           1 :     update: (</span></span>
 <span id="L9"><span class="lineNum">       9</span>              :       stationId: string,</span>
@@ -89,7 +89,7 @@
 <span id="L27"><span class="lineNum">      27</span>              :   };</span>
 <span id="L28"><span class="lineNum">      28</span>              : }</span>
 <span id="L29"><span class="lineNum">      29</span>              : </span>
-<span id="L30"><span class="lineNum">      30</span> <span class="tlaGNC">           3 : export const autoFillService = createAutoFillService(httpClient);</span></span>
+<span id="L30"><span class="lineNum">      30</span> <span class="tlaGNC">           4 : export const autoFillService = createAutoFillService(httpClient);</span></span>
         </pre>
               </td>
             </tr>

@@ -37,7 +37,7 @@
           </tr>
           <tr>
             <td class="headerItem">Test Date:</td>
-            <td class="headerValue">2026-09-06 21:10:44</td>
+            <td class="headerValue">2026-11-03 01:49:59</td>
             <td></td>
             <td class="headerItem">Functions:</td>
             <td class="headerCovTableEntryHi">100.0&nbsp;%</td>
@@ -64,10 +64,10 @@
 <span id="L2"><span class="lineNum">       2</span>              : import type { HttpClient } from &quot;@/lib/http-client&quot;;</span>
 <span id="L3"><span class="lineNum">       3</span>              : import type { Station } from &quot;@/types&quot;;</span>
 <span id="L4"><span class="lineNum">       4</span>              : </span>
-<span id="L5"><span class="lineNum">       5</span> <span class="tlaGNC tlaBgGNC">          10 : export function createStationsService(client: HttpClient) {</span></span>
-<span id="L6"><span class="lineNum">       6</span> <span class="tlaGNC">          10 :   return {</span></span>
-<span id="L7"><span class="lineNum">       7</span> <span class="tlaGNC">          24 :     list: () =&gt; client.get&lt;Station[]&gt;(&quot;/stations&quot;),</span></span>
-<span id="L8"><span class="lineNum">       8</span> <span class="tlaGNC">          10 :     get: (id: string) =&gt; client.get&lt;Station&gt;(`/stations/${id}`),</span></span>
+<span id="L5"><span class="lineNum">       5</span> <span class="tlaGNC tlaBgGNC">          15 : export function createStationsService(client: HttpClient) {</span></span>
+<span id="L6"><span class="lineNum">       6</span> <span class="tlaGNC">          15 :   return {</span></span>
+<span id="L7"><span class="lineNum">       7</span> <span class="tlaGNC">          31 :     list: () =&gt; client.get&lt;Station[]&gt;(&quot;/stations&quot;),</span></span>
+<span id="L8"><span class="lineNum">       8</span> <span class="tlaGNC">           8 :     get: (id: string) =&gt; client.get&lt;Station&gt;(`/stations/${id}`),</span></span>
 <span id="L9"><span class="lineNum">       9</span> <span class="tlaGNC">           2 :     create: (data: { name: string; description?: string; stream_url?: string; played_limit?: number }) =&gt;</span></span>
 <span id="L10"><span class="lineNum">      10</span> <span class="tlaGNC">           2 :       client.post&lt;Station&gt;(&quot;/stations&quot;, data),</span></span>
 <span id="L11"><span class="lineNum">      11</span> <span class="tlaGNC">           2 :     update: (</span></span>
@@ -87,7 +87,7 @@
 <span id="L25"><span class="lineNum">      25</span>              :   };</span>
 <span id="L26"><span class="lineNum">      26</span>              : }</span>
 <span id="L27"><span class="lineNum">      27</span>              : </span>
-<span id="L28"><span class="lineNum">      28</span> <span class="tlaGNC">          10 : export const stationsService = createStationsService(httpClient);</span></span>
+<span id="L28"><span class="lineNum">      28</span> <span class="tlaGNC">          15 : export const stationsService = createStationsService(httpClient);</span></span>
         </pre>
               </td>
             </tr>

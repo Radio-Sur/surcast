@@ -31,18 +31,18 @@
             <td class="headerValue">lcov.backend.info</td>
             <td></td>
             <td class="headerItem">Lines:</td>
-            <td class="headerCovTableEntryLo">62.6&nbsp;%</td>
+            <td class="headerCovTableEntryLo">57.1&nbsp;%</td>
             <td class="headerCovTableEntry">147</td>
-            <td class="headerCovTableEntry">92</td>
+            <td class="headerCovTableEntry">84</td>
           </tr>
           <tr>
             <td class="headerItem">Test Date:</td>
-            <td class="headerValue">2026-09-06 21:10:43</td>
+            <td class="headerValue">2026-11-03 01:49:58</td>
             <td></td>
             <td class="headerItem">Functions:</td>
-            <td class="headerCovTableEntryLo">39.4&nbsp;%</td>
+            <td class="headerCovTableEntryLo">27.3&nbsp;%</td>
             <td class="headerCovTableEntry">33</td>
-            <td class="headerCovTableEntry">13</td>
+            <td class="headerCovTableEntry">9</td>
           </tr>
                   <tr><td><img src="../../glass.png" width=3 height=3 alt=""></td></tr>
                 </table>
@@ -100,34 +100,34 @@
 <span id="L38"><span class="lineNum">      38</span>              : /// One sample = concurrent connections at that moment (per connection, not</span>
 <span id="L39"><span class="lineNum">      39</span>              : /// per IP: several people behind one NAT count separately). Concurrent</span>
 <span id="L40"><span class="lineNum">      40</span>              : /// pollers writing the same timestamp are ignored via `ON CONFLICT`.</span>
-<span id="L41"><span class="lineNum">      41</span> <span class="tlaGNC tlaBgGNC">         122 : pub async fn insert_samples(db: &amp;PgPool, samples: &amp;[(Uuid, i32)], recorded_at: DateTime&lt;Utc&gt;) -&gt; Result&lt;(), AppError&gt; {</span></span>
-<span id="L42"><span class="lineNum">      42</span> <span class="tlaGNC">         242 :     for (station_id, listeners) in samples {</span></span>
-<span id="L43"><span class="lineNum">      43</span> <span class="tlaGNC">         242 :         sqlx::query(</span></span>
-<span id="L44"><span class="lineNum">      44</span> <span class="tlaGNC">         242 :             &quot;INSERT INTO listener_stats (station_id, listeners, recorded_at) VALUES ($1, $2, $3) \</span></span>
-<span id="L45"><span class="lineNum">      45</span> <span class="tlaGNC">         242 :              ON CONFLICT (station_id, recorded_at) DO NOTHING&quot;,</span></span>
-<span id="L46"><span class="lineNum">      46</span> <span class="tlaGNC">         242 :         )</span></span>
-<span id="L47"><span class="lineNum">      47</span> <span class="tlaGNC">         242 :         .bind(station_id)</span></span>
-<span id="L48"><span class="lineNum">      48</span> <span class="tlaGNC">         242 :         .bind(listeners)</span></span>
-<span id="L49"><span class="lineNum">      49</span> <span class="tlaGNC">         242 :         .bind(recorded_at)</span></span>
-<span id="L50"><span class="lineNum">      50</span> <span class="tlaGNC">         242 :         .execute(db)</span></span>
-<span id="L51"><span class="lineNum">      51</span> <span class="tlaGNC">         242 :         .await</span></span>
-<span id="L52"><span class="lineNum">      52</span> <span class="tlaGNC">         242 :         .db_error(&quot;failed to insert listener sample&quot;)?;</span></span>
+<span id="L41"><span class="lineNum">      41</span> <span class="tlaGNC tlaBgGNC">         121 : pub async fn insert_samples(db: &amp;PgPool, samples: &amp;[(Uuid, i32)], recorded_at: DateTime&lt;Utc&gt;) -&gt; Result&lt;(), AppError&gt; {</span></span>
+<span id="L42"><span class="lineNum">      42</span> <span class="tlaGNC">         241 :     for (station_id, listeners) in samples {</span></span>
+<span id="L43"><span class="lineNum">      43</span> <span class="tlaGNC">         241 :         sqlx::query(</span></span>
+<span id="L44"><span class="lineNum">      44</span> <span class="tlaGNC">         241 :             &quot;INSERT INTO listener_stats (station_id, listeners, recorded_at) VALUES ($1, $2, $3) \</span></span>
+<span id="L45"><span class="lineNum">      45</span> <span class="tlaGNC">         241 :              ON CONFLICT (station_id, recorded_at) DO NOTHING&quot;,</span></span>
+<span id="L46"><span class="lineNum">      46</span> <span class="tlaGNC">         241 :         )</span></span>
+<span id="L47"><span class="lineNum">      47</span> <span class="tlaGNC">         241 :         .bind(station_id)</span></span>
+<span id="L48"><span class="lineNum">      48</span> <span class="tlaGNC">         241 :         .bind(listeners)</span></span>
+<span id="L49"><span class="lineNum">      49</span> <span class="tlaGNC">         241 :         .bind(recorded_at)</span></span>
+<span id="L50"><span class="lineNum">      50</span> <span class="tlaGNC">         241 :         .execute(db)</span></span>
+<span id="L51"><span class="lineNum">      51</span> <span class="tlaGNC">         241 :         .await</span></span>
+<span id="L52"><span class="lineNum">      52</span> <span class="tlaGNC">         241 :         .db_error(&quot;failed to insert listener sample&quot;)?;</span></span>
 <span id="L53"><span class="lineNum">      53</span>              :     }</span>
-<span id="L54"><span class="lineNum">      54</span> <span class="tlaGNC">         122 :     Ok(())</span></span>
-<span id="L55"><span class="lineNum">      55</span> <span class="tlaGNC">         122 : }</span></span>
+<span id="L54"><span class="lineNum">      54</span> <span class="tlaGNC">         121 :     Ok(())</span></span>
+<span id="L55"><span class="lineNum">      55</span> <span class="tlaGNC">         121 : }</span></span>
 <span id="L56"><span class="lineNum">      56</span>              : </span>
 <span id="L57"><span class="lineNum">      57</span>              : /// Deletes samples older than `days`.</span>
-<span id="L58"><span class="lineNum">      58</span> <span class="tlaGNC">           1 : pub async fn prune_older_than(db: &amp;PgPool, days: i64) -&gt; Result&lt;(), AppError&gt; {</span></span>
-<span id="L59"><span class="lineNum">      59</span> <span class="tlaGNC">           1 :     sqlx::query(&quot;DELETE FROM listener_stats WHERE recorded_at &lt; NOW() - $1 * INTERVAL '1 day'&quot;)</span></span>
-<span id="L60"><span class="lineNum">      60</span> <span class="tlaGNC">           1 :         .bind(days)</span></span>
-<span id="L61"><span class="lineNum">      61</span> <span class="tlaGNC">           1 :         .execute(db)</span></span>
-<span id="L62"><span class="lineNum">      62</span> <span class="tlaGNC">           1 :         .await</span></span>
-<span id="L63"><span class="lineNum">      63</span> <span class="tlaGNC">           1 :         .db_error(&quot;failed to prune listener stats&quot;)?;</span></span>
-<span id="L64"><span class="lineNum">      64</span> <span class="tlaGNC">           1 :     Ok(())</span></span>
-<span id="L65"><span class="lineNum">      65</span> <span class="tlaGNC">           1 : }</span></span>
+<span id="L58"><span class="lineNum">      58</span> <span class="tlaUNC tlaBgUNC">           0 : pub async fn prune_older_than(db: &amp;PgPool, days: i64) -&gt; Result&lt;(), AppError&gt; {</span></span>
+<span id="L59"><span class="lineNum">      59</span> <span class="tlaUNC">           0 :     sqlx::query(&quot;DELETE FROM listener_stats WHERE recorded_at &lt; NOW() - $1 * INTERVAL '1 day'&quot;)</span></span>
+<span id="L60"><span class="lineNum">      60</span> <span class="tlaUNC">           0 :         .bind(days)</span></span>
+<span id="L61"><span class="lineNum">      61</span> <span class="tlaUNC">           0 :         .execute(db)</span></span>
+<span id="L62"><span class="lineNum">      62</span> <span class="tlaUNC">           0 :         .await</span></span>
+<span id="L63"><span class="lineNum">      63</span> <span class="tlaUNC">           0 :         .db_error(&quot;failed to prune listener stats&quot;)?;</span></span>
+<span id="L64"><span class="lineNum">      64</span> <span class="tlaUNC">           0 :     Ok(())</span></span>
+<span id="L65"><span class="lineNum">      65</span> <span class="tlaUNC">           0 : }</span></span>
 <span id="L66"><span class="lineNum">      66</span>              : </span>
 <span id="L67"><span class="lineNum">      67</span>              : /// Latest raw sample for a station.</span>
-<span id="L68"><span class="lineNum">      68</span> <span class="tlaUNC tlaBgUNC">           0 : pub async fn latest_for_station(db: &amp;PgPool, station_id: Uuid) -&gt; Result&lt;Option&lt;ListenerSample&gt;, AppError&gt; {</span></span>
+<span id="L68"><span class="lineNum">      68</span> <span class="tlaUNC">           0 : pub async fn latest_for_station(db: &amp;PgPool, station_id: Uuid) -&gt; Result&lt;Option&lt;ListenerSample&gt;, AppError&gt; {</span></span>
 <span id="L69"><span class="lineNum">      69</span> <span class="tlaUNC">           0 :     sqlx::query_as::&lt;_, ListenerSample&gt;(</span></span>
 <span id="L70"><span class="lineNum">      70</span> <span class="tlaUNC">           0 :         &quot;SELECT station_id, listeners, recorded_at FROM listener_stats \</span></span>
 <span id="L71"><span class="lineNum">      71</span> <span class="tlaUNC">           0 :          WHERE station_id = $1 ORDER BY recorded_at DESC LIMIT 1&quot;,</span></span>
@@ -223,7 +223,7 @@
 <span id="L161"><span class="lineNum">     161</span> <span class="tlaGNC">           1 :     async fn aggregate_history_sums_per_station_averages_not_raw_samples() {</span></span>
 <span id="L162"><span class="lineNum">     162</span> <span class="tlaGNC">           2 :         crate::test_db::run_with_test_db(async |db| {</span></span>
 <span id="L163"><span class="lineNum">     163</span> <span class="tlaGNC">           1 :             let user_id = Uuid::new_v4();</span></span>
-<span id="L164"><span class="lineNum">     164</span> <span class="tlaGNC">           1 :             sqlx::query(&quot;INSERT INTO users (id, username, password_hash, name) VALUES ($1, 'agg-test', 'x', 'agg')&quot;)</span></span>
+<span id="L164"><span class="lineNum">     164</span> <span class="tlaGNC">           1 :             sqlx::query(&quot;INSERT INTO users (id, username, password_hash) VALUES ($1, 'agg-test', 'x')&quot;)</span></span>
 <span id="L165"><span class="lineNum">     165</span> <span class="tlaGNC">           1 :                 .bind(user_id)</span></span>
 <span id="L166"><span class="lineNum">     166</span> <span class="tlaGNC">           1 :                 .execute(&amp;db.pool)</span></span>
 <span id="L167"><span class="lineNum">     167</span> <span class="tlaGNC">           1 :                 .await</span></span>

@@ -37,7 +37,7 @@
           </tr>
           <tr>
             <td class="headerItem">Test Date:</td>
-            <td class="headerValue">2026-09-06 21:10:44</td>
+            <td class="headerValue">2026-11-03 01:49:59</td>
             <td></td>
             <td class="headerItem">Functions:</td>
             <td class="headerCovTableEntryHi">100.0&nbsp;%</td>
@@ -63,25 +63,25 @@
 <span id="L1"><span class="lineNum">       1</span>              : import { useMutation, useQuery, useQueryClient } from &quot;@tanstack/react-query&quot;;</span>
 <span id="L2"><span class="lineNum">       2</span>              : import { stationsService } from &quot;@/lib/services/stations&quot;;</span>
 <span id="L3"><span class="lineNum">       3</span>              : </span>
-<span id="L4"><span class="lineNum">       4</span> <span class="tlaGNC tlaBgGNC">          70 : export function useStations() {</span></span>
-<span id="L5"><span class="lineNum">       5</span> <span class="tlaGNC">          70 :   return useQuery({</span></span>
+<span id="L4"><span class="lineNum">       4</span> <span class="tlaGNC tlaBgGNC">         112 : export function useStations() {</span></span>
+<span id="L5"><span class="lineNum">       5</span> <span class="tlaGNC">         112 :   return useQuery({</span></span>
 <span id="L6"><span class="lineNum">       6</span>              :     queryKey: [&quot;stations&quot;],</span>
-<span id="L7"><span class="lineNum">       7</span> <span class="tlaGNC">          24 :     queryFn: () =&gt; stationsService.list(),</span></span>
+<span id="L7"><span class="lineNum">       7</span> <span class="tlaGNC">          31 :     queryFn: () =&gt; stationsService.list(),</span></span>
 <span id="L8"><span class="lineNum">       8</span>              :   });</span>
 <span id="L9"><span class="lineNum">       9</span>              : }</span>
 <span id="L10"><span class="lineNum">      10</span>              : </span>
-<span id="L11"><span class="lineNum">      11</span> <span class="tlaGNC">          36 : export function useStation(id: string) {</span></span>
-<span id="L12"><span class="lineNum">      12</span> <span class="tlaGNC">          36 :   return useQuery({</span></span>
+<span id="L11"><span class="lineNum">      11</span> <span class="tlaGNC">          40 : export function useStation(id: string) {</span></span>
+<span id="L12"><span class="lineNum">      12</span> <span class="tlaGNC">          40 :   return useQuery({</span></span>
 <span id="L13"><span class="lineNum">      13</span>              :     queryKey: [&quot;stations&quot;, id],</span>
-<span id="L14"><span class="lineNum">      14</span> <span class="tlaGNC">          10 :     queryFn: () =&gt; stationsService.get(id),</span></span>
+<span id="L14"><span class="lineNum">      14</span> <span class="tlaGNC">           8 :     queryFn: () =&gt; stationsService.get(id),</span></span>
 <span id="L15"><span class="lineNum">      15</span>              :     enabled: !!id,</span>
 <span id="L16"><span class="lineNum">      16</span>              :   });</span>
 <span id="L17"><span class="lineNum">      17</span>              : }</span>
 <span id="L18"><span class="lineNum">      18</span>              : </span>
-<span id="L19"><span class="lineNum">      19</span> <span class="tlaGNC">          46 : export function useCreateStation() {</span></span>
-<span id="L20"><span class="lineNum">      20</span> <span class="tlaGNC">          46 :   const queryClient = useQueryClient();</span></span>
+<span id="L19"><span class="lineNum">      19</span> <span class="tlaGNC">          58 : export function useCreateStation() {</span></span>
+<span id="L20"><span class="lineNum">      20</span> <span class="tlaGNC">          58 :   const queryClient = useQueryClient();</span></span>
 <span id="L21"><span class="lineNum">      21</span>              : </span>
-<span id="L22"><span class="lineNum">      22</span> <span class="tlaGNC">          46 :   return useMutation({</span></span>
+<span id="L22"><span class="lineNum">      22</span> <span class="tlaGNC">          58 :   return useMutation({</span></span>
 <span id="L23"><span class="lineNum">      23</span> <span class="tlaGNC">           2 :     mutationFn: (data: { name: string; description?: string; stream_url?: string; played_limit?: number }) =&gt;</span></span>
 <span id="L24"><span class="lineNum">      24</span> <span class="tlaGNC">           2 :       stationsService.create(data),</span></span>
 <span id="L25"><span class="lineNum">      25</span> <span class="tlaGNC">           1 :     onSuccess: () =&gt; {</span></span>
@@ -90,10 +90,10 @@
 <span id="L28"><span class="lineNum">      28</span>              :   });</span>
 <span id="L29"><span class="lineNum">      29</span>              : }</span>
 <span id="L30"><span class="lineNum">      30</span>              : </span>
-<span id="L31"><span class="lineNum">      31</span> <span class="tlaGNC">          34 : export function useUpdateStation() {</span></span>
-<span id="L32"><span class="lineNum">      32</span> <span class="tlaGNC">          34 :   const queryClient = useQueryClient();</span></span>
+<span id="L31"><span class="lineNum">      31</span> <span class="tlaGNC">         123 : export function useUpdateStation() {</span></span>
+<span id="L32"><span class="lineNum">      32</span> <span class="tlaGNC">         123 :   const queryClient = useQueryClient();</span></span>
 <span id="L33"><span class="lineNum">      33</span>              : </span>
-<span id="L34"><span class="lineNum">      34</span> <span class="tlaGNC">          34 :   return useMutation({</span></span>
+<span id="L34"><span class="lineNum">      34</span> <span class="tlaGNC">         123 :   return useMutation({</span></span>
 <span id="L35"><span class="lineNum">      35</span> <span class="tlaGNC">           2 :     mutationFn: ({</span></span>
 <span id="L36"><span class="lineNum">      36</span>              :       id,</span>
 <span id="L37"><span class="lineNum">      37</span>              :       data,</span>
@@ -117,10 +117,10 @@
 <span id="L55"><span class="lineNum">      55</span>              :   });</span>
 <span id="L56"><span class="lineNum">      56</span>              : }</span>
 <span id="L57"><span class="lineNum">      57</span>              : </span>
-<span id="L58"><span class="lineNum">      58</span> <span class="tlaGNC">          16 : export function useDeleteStation() {</span></span>
-<span id="L59"><span class="lineNum">      59</span> <span class="tlaGNC">          16 :   const queryClient = useQueryClient();</span></span>
+<span id="L58"><span class="lineNum">      58</span> <span class="tlaGNC">          30 : export function useDeleteStation() {</span></span>
+<span id="L59"><span class="lineNum">      59</span> <span class="tlaGNC">          30 :   const queryClient = useQueryClient();</span></span>
 <span id="L60"><span class="lineNum">      60</span>              : </span>
-<span id="L61"><span class="lineNum">      61</span> <span class="tlaGNC">          16 :   return useMutation({</span></span>
+<span id="L61"><span class="lineNum">      61</span> <span class="tlaGNC">          30 :   return useMutation({</span></span>
 <span id="L62"><span class="lineNum">      62</span> <span class="tlaGNC">           1 :     mutationFn: (id: string) =&gt; stationsService.delete(id),</span></span>
 <span id="L63"><span class="lineNum">      63</span> <span class="tlaGNC">           1 :     onSuccess: () =&gt; {</span></span>
 <span id="L64"><span class="lineNum">      64</span> <span class="tlaGNC">           1 :       queryClient.invalidateQueries({ queryKey: [&quot;stations&quot;] });</span></span>

@@ -37,7 +37,7 @@
           </tr>
           <tr>
             <td class="headerItem">Test Date:</td>
-            <td class="headerValue">2026-09-06 21:10:44</td>
+            <td class="headerValue">2026-11-03 01:49:59</td>
             <td></td>
             <td class="headerItem">Functions:</td>
             <td class="headerCovTableEntryLo">40.0&nbsp;%</td>
@@ -64,8 +64,8 @@
 <span id="L2"><span class="lineNum">       2</span>              : import type { HttpClient } from &quot;@/lib/http-client&quot;;</span>
 <span id="L3"><span class="lineNum">       3</span>              : import type { CreateScheduleEventRequest, ScheduleEvent } from &quot;@/types&quot;;</span>
 <span id="L4"><span class="lineNum">       4</span>              : </span>
-<span id="L5"><span class="lineNum">       5</span> <span class="tlaGNC tlaBgGNC">           3 : export function createScheduleEventsService(client: HttpClient) {</span></span>
-<span id="L6"><span class="lineNum">       6</span> <span class="tlaGNC">           3 :   return {</span></span>
+<span id="L5"><span class="lineNum">       5</span> <span class="tlaGNC tlaBgGNC">           4 : export function createScheduleEventsService(client: HttpClient) {</span></span>
+<span id="L6"><span class="lineNum">       6</span> <span class="tlaGNC">           4 :   return {</span></span>
 <span id="L7"><span class="lineNum">       7</span> <span class="tlaGNC">           2 :     list: (stationId: string, from?: string, to?: string) =&gt; {</span></span>
 <span id="L8"><span class="lineNum">       8</span> <span class="tlaGNC">           2 :       const params = new URLSearchParams();</span></span>
 <span id="L9"><span class="lineNum">       9</span> <span class="tlaGNC">           2 :       if (from) params.set(&quot;from&quot;, from);</span></span>
@@ -80,7 +80,7 @@
 <span id="L18"><span class="lineNum">      18</span>              :   };</span>
 <span id="L19"><span class="lineNum">      19</span>              : }</span>
 <span id="L20"><span class="lineNum">      20</span>              : </span>
-<span id="L21"><span class="lineNum">      21</span> <span class="tlaGNC tlaBgGNC">           3 : export const scheduleEventsService = createScheduleEventsService(httpClient);</span></span>
+<span id="L21"><span class="lineNum">      21</span> <span class="tlaGNC tlaBgGNC">           4 : export const scheduleEventsService = createScheduleEventsService(httpClient);</span></span>
         </pre>
               </td>
             </tr>

@@ -31,18 +31,18 @@
             <td class="headerValue">lcov.backend.info</td>
             <td></td>
             <td class="headerItem">Lines:</td>
-            <td class="headerCovTableEntryLo">41.7&nbsp;%</td>
-            <td class="headerCovTableEntry">24</td>
-            <td class="headerCovTableEntry">10</td>
+            <td class="headerCovTableEntryHi">97.6&nbsp;%</td>
+            <td class="headerCovTableEntry">42</td>
+            <td class="headerCovTableEntry">41</td>
           </tr>
           <tr>
             <td class="headerItem">Test Date:</td>
-            <td class="headerValue">2026-09-06 21:10:43</td>
+            <td class="headerValue">2026-11-03 01:49:58</td>
             <td></td>
             <td class="headerItem">Functions:</td>
-            <td class="headerCovTableEntryLo">12.5&nbsp;%</td>
-            <td class="headerCovTableEntry">16</td>
-            <td class="headerCovTableEntry">2</td>
+            <td class="headerCovTableEntryLo">36.4&nbsp;%</td>
+            <td class="headerCovTableEntry">22</td>
+            <td class="headerCovTableEntry">8</td>
           </tr>
                   <tr><td><img src="../../../glass.png" width=3 height=3 alt=""></td></tr>
                 </table>
@@ -61,46 +61,67 @@
 <pre class="sourceHeading">            Line data    Source code</pre>
 <pre class="source">
 <span id="L1"><span class="lineNum">       1</span>              : use axum::extract::{Path, State};</span>
-<span id="L2"><span class="lineNum">       2</span>              : use axum::response::{IntoResponse, Response};</span>
-<span id="L3"><span class="lineNum">       3</span>              : use sqlx::PgPool;</span>
-<span id="L4"><span class="lineNum">       4</span>              : use uuid::Uuid;</span>
-<span id="L5"><span class="lineNum">       5</span>              : </span>
-<span id="L6"><span class="lineNum">       6</span>              : use super::upload_helper::{cover_mime_from_filename, resolve_audio_path, resolve_cover_path};</span>
-<span id="L7"><span class="lineNum">       7</span>              : use crate::config::Config;</span>
-<span id="L8"><span class="lineNum">       8</span>              : use crate::errors::AppError;</span>
-<span id="L9"><span class="lineNum">       9</span>              : use crate::songs::repository;</span>
-<span id="L10"><span class="lineNum">      10</span>              : </span>
-<span id="L11"><span class="lineNum">      11</span> <span class="tlaGNC tlaBgGNC">           1 : pub async fn serve_song_file(State(db): State&lt;PgPool&gt;, State(config): State&lt;Config&gt;, Path(id): Path&lt;Uuid&gt;) -&gt; Result&lt;Response, AppError&gt; {</span></span>
-<span id="L12"><span class="lineNum">      12</span> <span class="tlaGNC">           1 :     let song = repository::find_song_by_id(&amp;db, id)</span></span>
-<span id="L13"><span class="lineNum">      13</span> <span class="tlaGNC">           1 :         .await?</span></span>
-<span id="L14"><span class="lineNum">      14</span> <span class="tlaGNC">           1 :         .ok_or_else(|| AppError::NotFound(&quot;Song not found&quot;.into()))?;</span></span>
-<span id="L15"><span class="lineNum">      15</span>              : </span>
-<span id="L16"><span class="lineNum">      16</span> <span class="tlaGNC">           1 :     let song_path = resolve_audio_path(&amp;config.upload_dir, &amp;song.file_path);</span></span>
-<span id="L17"><span class="lineNum">      17</span> <span class="tlaGNC">           1 :     let content = tokio::fs::read(&amp;song_path)</span></span>
-<span id="L18"><span class="lineNum">      18</span> <span class="tlaGNC">           1 :         .await</span></span>
-<span id="L19"><span class="lineNum">      19</span> <span class="tlaGNC">           1 :         .map_err(|e| AppError::NotFound(format!(&quot;File not found on disk: {e}&quot;)))?;</span></span>
-<span id="L20"><span class="lineNum">      20</span>              : </span>
-<span id="L21"><span class="lineNum">      21</span> <span class="tlaGNC">           1 :     Ok(([(axum::http::header::CONTENT_TYPE, song.mime_type.clone())], content).into_response())</span></span>
-<span id="L22"><span class="lineNum">      22</span> <span class="tlaGNC">           1 : }</span></span>
-<span id="L23"><span class="lineNum">      23</span>              : </span>
-<span id="L24"><span class="lineNum">      24</span> <span class="tlaUNC tlaBgUNC">           0 : pub async fn serve_song_cover(State(db): State&lt;PgPool&gt;, State(config): State&lt;Config&gt;, Path(id): Path&lt;Uuid&gt;) -&gt; Result&lt;Response, AppError&gt; {</span></span>
-<span id="L25"><span class="lineNum">      25</span> <span class="tlaUNC">           0 :     let song = repository::find_song_by_id(&amp;db, id)</span></span>
-<span id="L26"><span class="lineNum">      26</span> <span class="tlaUNC">           0 :         .await?</span></span>
-<span id="L27"><span class="lineNum">      27</span> <span class="tlaUNC">           0 :         .ok_or_else(|| AppError::NotFound(&quot;Song not found&quot;.into()))?;</span></span>
-<span id="L28"><span class="lineNum">      28</span>              : </span>
-<span id="L29"><span class="lineNum">      29</span> <span class="tlaUNC">           0 :     if song.cover_path.is_empty() {</span></span>
-<span id="L30"><span class="lineNum">      30</span> <span class="tlaUNC">           0 :         return Err(AppError::NotFound(&quot;No cover art&quot;.into()));</span></span>
-<span id="L31"><span class="lineNum">      31</span> <span class="tlaUNC">           0 :     }</span></span>
-<span id="L32"><span class="lineNum">      32</span>              : </span>
-<span id="L33"><span class="lineNum">      33</span> <span class="tlaUNC">           0 :     let cover_path = resolve_cover_path(&amp;config.upload_dir, &amp;song.cover_path);</span></span>
-<span id="L34"><span class="lineNum">      34</span> <span class="tlaUNC">           0 :     let content = tokio::fs::read(&amp;cover_path)</span></span>
-<span id="L35"><span class="lineNum">      35</span> <span class="tlaUNC">           0 :         .await</span></span>
-<span id="L36"><span class="lineNum">      36</span> <span class="tlaUNC">           0 :         .map_err(|_| AppError::NotFound(&quot;Cover file not found on disk&quot;.into()))?;</span></span>
-<span id="L37"><span class="lineNum">      37</span>              : </span>
-<span id="L38"><span class="lineNum">      38</span> <span class="tlaUNC">           0 :     let mime = cover_mime_from_filename(&amp;cover_path);</span></span>
-<span id="L39"><span class="lineNum">      39</span>              : </span>
-<span id="L40"><span class="lineNum">      40</span> <span class="tlaUNC">           0 :     Ok(([(axum::http::header::CONTENT_TYPE, mime)], content).into_response())</span></span>
-<span id="L41"><span class="lineNum">      41</span> <span class="tlaUNC">           0 : }</span></span>
+<span id="L2"><span class="lineNum">       2</span>              : use axum::http::{header, HeaderMap, StatusCode};</span>
+<span id="L3"><span class="lineNum">       3</span>              : use axum::response::{IntoResponse, Response};</span>
+<span id="L4"><span class="lineNum">       4</span>              : use sqlx::PgPool;</span>
+<span id="L5"><span class="lineNum">       5</span>              : use uuid::Uuid;</span>
+<span id="L6"><span class="lineNum">       6</span>              : </span>
+<span id="L7"><span class="lineNum">       7</span>              : use super::upload_helper::resolve_audio_path;</span>
+<span id="L8"><span class="lineNum">       8</span>              : use crate::config::Config;</span>
+<span id="L9"><span class="lineNum">       9</span>              : use crate::errors::AppError;</span>
+<span id="L10"><span class="lineNum">      10</span>              : use crate::songs::repository;</span>
+<span id="L11"><span class="lineNum">      11</span>              : </span>
+<span id="L12"><span class="lineNum">      12</span> <span class="tlaGNC tlaBgGNC">           5 : pub async fn serve_song_file(State(db): State&lt;PgPool&gt;, State(config): State&lt;Config&gt;, Path(id): Path&lt;Uuid&gt;) -&gt; Result&lt;Response, AppError&gt; {</span></span>
+<span id="L13"><span class="lineNum">      13</span> <span class="tlaGNC">           5 :     let song = repository::find_song_by_id(&amp;db, id)</span></span>
+<span id="L14"><span class="lineNum">      14</span> <span class="tlaGNC">           5 :         .await?</span></span>
+<span id="L15"><span class="lineNum">      15</span> <span class="tlaGNC">           5 :         .ok_or_else(|| AppError::not_found(&quot;Song not found&quot;.into()))?;</span></span>
+<span id="L16"><span class="lineNum">      16</span>              : </span>
+<span id="L17"><span class="lineNum">      17</span> <span class="tlaGNC">           4 :     let song_path = resolve_audio_path(&amp;config.music_dir, &amp;song.file_path);</span></span>
+<span id="L18"><span class="lineNum">      18</span> <span class="tlaGNC">           4 :     let content = tokio::fs::read(&amp;song_path)</span></span>
+<span id="L19"><span class="lineNum">      19</span> <span class="tlaGNC">           4 :         .await</span></span>
+<span id="L20"><span class="lineNum">      20</span> <span class="tlaGNC">           4 :         .map_err(|e| AppError::not_found(format!(&quot;File not found on disk: {e}&quot;)))?;</span></span>
+<span id="L21"><span class="lineNum">      21</span>              : </span>
+<span id="L22"><span class="lineNum">      22</span> <span class="tlaGNC">           4 :     Ok(([(header::CONTENT_TYPE, song.mime_type.clone())], content).into_response())</span></span>
+<span id="L23"><span class="lineNum">      23</span> <span class="tlaGNC">           5 : }</span></span>
+<span id="L24"><span class="lineNum">      24</span>              : </span>
+<span id="L25"><span class="lineNum">      25</span>              : /// Serves cover art read straight from the audio file's tags. Nothing is</span>
+<span id="L26"><span class="lineNum">      26</span>              : /// cached on disk; a strong ETag lets browsers keep it for a day.</span>
+<span id="L27"><span class="lineNum">      27</span> <span class="tlaGNC">           4 : pub async fn serve_song_cover(</span></span>
+<span id="L28"><span class="lineNum">      28</span> <span class="tlaGNC">           4 :     State(db): State&lt;PgPool&gt;,</span></span>
+<span id="L29"><span class="lineNum">      29</span> <span class="tlaGNC">           4 :     State(config): State&lt;Config&gt;,</span></span>
+<span id="L30"><span class="lineNum">      30</span> <span class="tlaGNC">           4 :     Path(id): Path&lt;Uuid&gt;,</span></span>
+<span id="L31"><span class="lineNum">      31</span> <span class="tlaGNC">           4 :     headers: HeaderMap,</span></span>
+<span id="L32"><span class="lineNum">      32</span> <span class="tlaGNC">           4 : ) -&gt; Result&lt;Response, AppError&gt; {</span></span>
+<span id="L33"><span class="lineNum">      33</span> <span class="tlaGNC">           4 :     let song = repository::find_song_by_id(&amp;db, id)</span></span>
+<span id="L34"><span class="lineNum">      34</span> <span class="tlaGNC">           4 :         .await?</span></span>
+<span id="L35"><span class="lineNum">      35</span> <span class="tlaGNC">           4 :         .ok_or_else(|| AppError::not_found(&quot;Song not found&quot;.into()))?;</span></span>
+<span id="L36"><span class="lineNum">      36</span>              : </span>
+<span id="L37"><span class="lineNum">      37</span> <span class="tlaGNC">           4 :     if song.missing_since.is_some() || !song.has_cover {</span></span>
+<span id="L38"><span class="lineNum">      38</span> <span class="tlaGNC">           1 :         return Err(AppError::not_found(&quot;No cover art&quot;.into()));</span></span>
+<span id="L39"><span class="lineNum">      39</span> <span class="tlaGNC">           3 :     }</span></span>
+<span id="L40"><span class="lineNum">      40</span>              : </span>
+<span id="L41"><span class="lineNum">      41</span> <span class="tlaGNC">           3 :     let etag = format!(&quot;\&quot;{}\&quot;&quot;, song.audio_hash.clone().unwrap_or_else(|| song.id.to_string()));</span></span>
+<span id="L42"><span class="lineNum">      42</span> <span class="tlaGNC">           3 :     if let Some(if_none_match) = headers.get(header::IF_NONE_MATCH).and_then(|v| v.to_str().ok()) {</span></span>
+<span id="L43"><span class="lineNum">      43</span> <span class="tlaGNC">           1 :         if if_none_match.split(',').any(|tag| tag.trim() == etag) {</span></span>
+<span id="L44"><span class="lineNum">      44</span> <span class="tlaGNC">           1 :             return Ok(StatusCode::NOT_MODIFIED.into_response());</span></span>
+<span id="L45"><span class="lineNum">      45</span> <span class="tlaUNC tlaBgUNC">           0 :         }</span></span>
+<span id="L46"><span class="lineNum">      46</span> <span class="tlaGNC tlaBgGNC">           2 :     }</span></span>
+<span id="L47"><span class="lineNum">      47</span>              : </span>
+<span id="L48"><span class="lineNum">      48</span> <span class="tlaGNC">           2 :     let audio_path = resolve_audio_path(&amp;config.music_dir, &amp;song.file_path);</span></span>
+<span id="L49"><span class="lineNum">      49</span> <span class="tlaGNC">           2 :     let cover = crate::songs::cover::read_embedded_cover(audio_path)</span></span>
+<span id="L50"><span class="lineNum">      50</span> <span class="tlaGNC">           2 :         .await</span></span>
+<span id="L51"><span class="lineNum">      51</span> <span class="tlaGNC">           2 :         .ok_or_else(|| AppError::not_found(&quot;No cover art&quot;.into()))?;</span></span>
+<span id="L52"><span class="lineNum">      52</span>              : </span>
+<span id="L53"><span class="lineNum">      53</span> <span class="tlaGNC">           1 :     Ok((</span></span>
+<span id="L54"><span class="lineNum">      54</span> <span class="tlaGNC">           1 :         [</span></span>
+<span id="L55"><span class="lineNum">      55</span> <span class="tlaGNC">           1 :             (header::CONTENT_TYPE, cover.mime),</span></span>
+<span id="L56"><span class="lineNum">      56</span> <span class="tlaGNC">           1 :             (header::ETAG, etag),</span></span>
+<span id="L57"><span class="lineNum">      57</span> <span class="tlaGNC">           1 :             (header::CACHE_CONTROL, &quot;private, max-age=86400&quot;.to_string()),</span></span>
+<span id="L58"><span class="lineNum">      58</span> <span class="tlaGNC">           1 :         ],</span></span>
+<span id="L59"><span class="lineNum">      59</span> <span class="tlaGNC">           1 :         cover.data,</span></span>
+<span id="L60"><span class="lineNum">      60</span> <span class="tlaGNC">           1 :     )</span></span>
+<span id="L61"><span class="lineNum">      61</span> <span class="tlaGNC">           1 :         .into_response())</span></span>
+<span id="L62"><span class="lineNum">      62</span> <span class="tlaGNC">           4 : }</span></span>
         </pre>
               </td>
             </tr>

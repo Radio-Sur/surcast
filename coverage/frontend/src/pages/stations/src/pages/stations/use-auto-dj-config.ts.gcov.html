@@ -31,13 +31,13 @@
             <td class="headerValue">lcov.info</td>
             <td></td>
             <td class="headerItem">Lines:</td>
-            <td class="headerCovTableEntryLo">47.5&nbsp;%</td>
-            <td class="headerCovTableEntry">59</td>
+            <td class="headerCovTableEntryLo">48.3&nbsp;%</td>
+            <td class="headerCovTableEntry">58</td>
             <td class="headerCovTableEntry">28</td>
           </tr>
           <tr>
             <td class="headerItem">Test Date:</td>
-            <td class="headerValue">2026-09-06 21:10:44</td>
+            <td class="headerValue">2026-11-03 01:49:59</td>
             <td></td>
             <td class="headerItem">Functions:</td>
             <td class="headerCovTableEntryLo">28.6&nbsp;%</td>
@@ -69,63 +69,63 @@
 <span id="L7"><span class="lineNum">       7</span>              :   useUpdateAutoFill,</span>
 <span id="L8"><span class="lineNum">       8</span>              :   useUpdateAutoFillPlaylist,</span>
 <span id="L9"><span class="lineNum">       9</span>              : } from &quot;@/hooks/use-auto-fill&quot;;</span>
-<span id="L10"><span class="lineNum">      10</span>              : import { useSnackbar } from &quot;@/providers/snackbar-provider&quot;;</span>
-<span id="L11"><span class="lineNum">      11</span>              : import type { Playlist, ScheduleSourceType } from &quot;@/types&quot;;</span>
-<span id="L12"><span class="lineNum">      12</span>              : </span>
-<span id="L13"><span class="lineNum">      13</span> <span class="tlaGNC tlaBgGNC">          10 : export function useAutoDjConfig(stationId: string, playlists: Playlist[]) {</span></span>
-<span id="L14"><span class="lineNum">      14</span> <span class="tlaGNC">          10 :   const { showSnackbar } = useSnackbar();</span></span>
-<span id="L15"><span class="lineNum">      15</span> <span class="tlaGNC">          10 :   const { data: config, isLoading, isError, error } = useAutoFill(stationId);</span></span>
-<span id="L16"><span class="lineNum">      16</span> <span class="tlaGNC">          10 :   const updateAutoFill = useUpdateAutoFill(stationId);</span></span>
-<span id="L17"><span class="lineNum">      17</span> <span class="tlaGNC">          10 :   const addAutoFillPlaylist = useAddAutoFillPlaylist(stationId);</span></span>
-<span id="L18"><span class="lineNum">      18</span> <span class="tlaGNC">          10 :   const updateAutoFillPlaylist = useUpdateAutoFillPlaylist(stationId);</span></span>
-<span id="L19"><span class="lineNum">      19</span> <span class="tlaGNC">          10 :   const deleteAutoFillPlaylist = useDeleteAutoFillPlaylist(stationId);</span></span>
-<span id="L20"><span class="lineNum">      20</span> <span class="tlaGNC">          10 :   const triggerAutoFill = useTriggerAutoFill(stationId);</span></span>
-<span id="L21"><span class="lineNum">      21</span>              : </span>
-<span id="L22"><span class="lineNum">      22</span> <span class="tlaGNC">          10 :   const [localEnabled, setLocalEnabled] = useState(true);</span></span>
-<span id="L23"><span class="lineNum">      23</span> <span class="tlaGNC">          10 :   const [localMode, setLocalMode] = useState(&quot;random&quot;);</span></span>
-<span id="L24"><span class="lineNum">      24</span> <span class="tlaGNC">          10 :   const [localSourceType, setLocalSourceType] = useState&lt;ScheduleSourceType&gt;(&quot;station_library&quot;);</span></span>
-<span id="L25"><span class="lineNum">      25</span> <span class="tlaGNC">          10 :   const [localPlaylistId, setLocalPlaylistId] = useState&lt;string | null&gt;(null);</span></span>
-<span id="L26"><span class="lineNum">      26</span> <span class="tlaGNC">          10 :   const [localAvoidRepeat, setLocalAvoidRepeat] = useState(true);</span></span>
-<span id="L27"><span class="lineNum">      27</span> <span class="tlaGNC">          10 :   const [localMinGap, setLocalMinGap] = useState(3);</span></span>
-<span id="L28"><span class="lineNum">      28</span> <span class="tlaGNC">          10 :   const [localSongsAhead, setLocalSongsAhead] = useState(5);</span></span>
-<span id="L29"><span class="lineNum">      29</span> <span class="tlaGNC">          10 :   const [saving, setSaving] = useState(false);</span></span>
-<span id="L30"><span class="lineNum">      30</span>              : </span>
-<span id="L31"><span class="lineNum">      31</span> <span class="tlaGNC">          10 :   const debounceRef = useRef&lt;ReturnType&lt;typeof setTimeout&gt; | null&gt;(null);</span></span>
-<span id="L32"><span class="lineNum">      32</span>              : </span>
-<span id="L33"><span class="lineNum">      33</span> <span class="tlaGNC">          10 :   useEffect(() =&gt; {</span></span>
-<span id="L34"><span class="lineNum">      34</span> <span class="tlaGNC">           7 :     if (config) {</span></span>
-<span id="L35"><span class="lineNum">      35</span> <span class="tlaGNC">           3 :       setLocalEnabled(config.enabled);</span></span>
-<span id="L36"><span class="lineNum">      36</span> <span class="tlaGNC">           3 :       setLocalMode(config.mode);</span></span>
-<span id="L37"><span class="lineNum">      37</span> <span class="tlaGNC">           3 :       setLocalSourceType(config.source_type);</span></span>
-<span id="L38"><span class="lineNum">      38</span> <span class="tlaGNC">           3 :       setLocalPlaylistId(config.source_playlist_id);</span></span>
-<span id="L39"><span class="lineNum">      39</span> <span class="tlaGNC">           3 :       setLocalAvoidRepeat(config.avoid_artist_repeat);</span></span>
-<span id="L40"><span class="lineNum">      40</span> <span class="tlaGNC">           3 :       setLocalMinGap(config.min_song_gap);</span></span>
-<span id="L41"><span class="lineNum">      41</span> <span class="tlaGNC">           3 :       setLocalSongsAhead(config.songs_ahead);</span></span>
-<span id="L42"><span class="lineNum">      42</span>              :     }</span>
-<span id="L43"><span class="lineNum">      43</span>              :   }, [config]);</span>
-<span id="L44"><span class="lineNum">      44</span>              : </span>
-<span id="L45"><span class="lineNum">      45</span> <span class="tlaGNC">          10 :   const autoSave = (overrides: Record&lt;string, unknown&gt; = {}) =&gt; {</span></span>
-<span id="L46"><span class="lineNum">      46</span> <span class="tlaUNC tlaBgUNC">           0 :     if (debounceRef.current) clearTimeout(debounceRef.current);</span></span>
-<span id="L47"><span class="lineNum">      47</span> <span class="tlaUNC">           0 :     debounceRef.current = setTimeout(() =&gt; {</span></span>
-<span id="L48"><span class="lineNum">      48</span> <span class="tlaUNC">           0 :       setSaving(true);</span></span>
-<span id="L49"><span class="lineNum">      49</span> <span class="tlaUNC">           0 :       updateAutoFill.mutate(</span></span>
-<span id="L50"><span class="lineNum">      50</span>              :         {</span>
-<span id="L51"><span class="lineNum">      51</span>              :           enabled: (overrides.enabled as boolean | undefined) ?? localEnabled,</span>
-<span id="L52"><span class="lineNum">      52</span>              :           mode: (overrides.mode as string | undefined) ?? localMode,</span>
-<span id="L53"><span class="lineNum">      53</span>              :           source_type: (overrides.source_type as ScheduleSourceType | undefined) ?? localSourceType,</span>
-<span id="L54"><span class="lineNum">      54</span>              :           source_playlist_id:</span>
-<span id="L55"><span class="lineNum">      55</span>              :             localSourceType === &quot;playlist&quot;</span>
-<span id="L56"><span class="lineNum">      56</span>              :               ? ((overrides.source_playlist_id as string | null | undefined) ?? localPlaylistId)</span>
-<span id="L57"><span class="lineNum">      57</span>              :               : null,</span>
-<span id="L58"><span class="lineNum">      58</span>              :           avoid_artist_repeat: (overrides.avoid_artist_repeat as boolean | undefined) ?? localAvoidRepeat,</span>
-<span id="L59"><span class="lineNum">      59</span>              :           min_song_gap: (overrides.min_song_gap as number | undefined) ?? localMinGap,</span>
-<span id="L60"><span class="lineNum">      60</span>              :           songs_ahead: (overrides.songs_ahead as number | undefined) ?? localSongsAhead,</span>
-<span id="L61"><span class="lineNum">      61</span>              :         },</span>
-<span id="L62"><span class="lineNum">      62</span>              :         {</span>
-<span id="L63"><span class="lineNum">      63</span> <span class="tlaUNC">           0 :           onSettled: () =&gt; setSaving(false),</span></span>
-<span id="L64"><span class="lineNum">      64</span> <span class="tlaUNC">           0 :           onError: (err) =&gt; {</span></span>
-<span id="L65"><span class="lineNum">      65</span> <span class="tlaUNC">           0 :             console.error(&quot;Failed to save auto-DJ config&quot;, err);</span></span>
-<span id="L66"><span class="lineNum">      66</span> <span class="tlaUNC">           0 :             showSnackbar(&quot;Failed to save auto-DJ configuration&quot;, &quot;error&quot;);</span></span>
+<span id="L10"><span class="lineNum">      10</span>              : import { reportHttpError } from &quot;@/lib/report-error&quot;;</span>
+<span id="L11"><span class="lineNum">      11</span>              : import { useSnackbar } from &quot;@/providers/snackbar-provider&quot;;</span>
+<span id="L12"><span class="lineNum">      12</span>              : import type { Playlist, ScheduleSourceType } from &quot;@/types&quot;;</span>
+<span id="L13"><span class="lineNum">      13</span>              : </span>
+<span id="L14"><span class="lineNum">      14</span> <span class="tlaGNC tlaBgGNC">          10 : export function useAutoDjConfig(stationId: string, playlists: Playlist[]) {</span></span>
+<span id="L15"><span class="lineNum">      15</span> <span class="tlaGNC">          10 :   const { showError } = useSnackbar();</span></span>
+<span id="L16"><span class="lineNum">      16</span> <span class="tlaGNC">          10 :   const { data: config, isLoading, isError, error } = useAutoFill(stationId);</span></span>
+<span id="L17"><span class="lineNum">      17</span> <span class="tlaGNC">          10 :   const updateAutoFill = useUpdateAutoFill(stationId);</span></span>
+<span id="L18"><span class="lineNum">      18</span> <span class="tlaGNC">          10 :   const addAutoFillPlaylist = useAddAutoFillPlaylist(stationId);</span></span>
+<span id="L19"><span class="lineNum">      19</span> <span class="tlaGNC">          10 :   const updateAutoFillPlaylist = useUpdateAutoFillPlaylist(stationId);</span></span>
+<span id="L20"><span class="lineNum">      20</span> <span class="tlaGNC">          10 :   const deleteAutoFillPlaylist = useDeleteAutoFillPlaylist(stationId);</span></span>
+<span id="L21"><span class="lineNum">      21</span> <span class="tlaGNC">          10 :   const triggerAutoFill = useTriggerAutoFill(stationId);</span></span>
+<span id="L22"><span class="lineNum">      22</span>              : </span>
+<span id="L23"><span class="lineNum">      23</span> <span class="tlaGNC">          10 :   const [localEnabled, setLocalEnabled] = useState(true);</span></span>
+<span id="L24"><span class="lineNum">      24</span> <span class="tlaGNC">          10 :   const [localMode, setLocalMode] = useState(&quot;random&quot;);</span></span>
+<span id="L25"><span class="lineNum">      25</span> <span class="tlaGNC">          10 :   const [localSourceType, setLocalSourceType] = useState&lt;ScheduleSourceType&gt;(&quot;station_library&quot;);</span></span>
+<span id="L26"><span class="lineNum">      26</span> <span class="tlaGNC">          10 :   const [localPlaylistId, setLocalPlaylistId] = useState&lt;string | null&gt;(null);</span></span>
+<span id="L27"><span class="lineNum">      27</span> <span class="tlaGNC">          10 :   const [localAvoidRepeat, setLocalAvoidRepeat] = useState(false);</span></span>
+<span id="L28"><span class="lineNum">      28</span> <span class="tlaGNC">          10 :   const [localMinGap, setLocalMinGap] = useState(3);</span></span>
+<span id="L29"><span class="lineNum">      29</span> <span class="tlaGNC">          10 :   const [localSongsAhead, setLocalSongsAhead] = useState(5);</span></span>
+<span id="L30"><span class="lineNum">      30</span> <span class="tlaGNC">          10 :   const [saving, setSaving] = useState(false);</span></span>
+<span id="L31"><span class="lineNum">      31</span>              : </span>
+<span id="L32"><span class="lineNum">      32</span> <span class="tlaGNC">          10 :   const debounceRef = useRef&lt;ReturnType&lt;typeof setTimeout&gt; | null&gt;(null);</span></span>
+<span id="L33"><span class="lineNum">      33</span>              : </span>
+<span id="L34"><span class="lineNum">      34</span> <span class="tlaGNC">          10 :   useEffect(() =&gt; {</span></span>
+<span id="L35"><span class="lineNum">      35</span> <span class="tlaGNC">           7 :     if (config) {</span></span>
+<span id="L36"><span class="lineNum">      36</span> <span class="tlaGNC">           3 :       setLocalEnabled(config.enabled);</span></span>
+<span id="L37"><span class="lineNum">      37</span> <span class="tlaGNC">           3 :       setLocalMode(config.mode);</span></span>
+<span id="L38"><span class="lineNum">      38</span> <span class="tlaGNC">           3 :       setLocalSourceType(config.source_type);</span></span>
+<span id="L39"><span class="lineNum">      39</span> <span class="tlaGNC">           3 :       setLocalPlaylistId(config.source_playlist_id);</span></span>
+<span id="L40"><span class="lineNum">      40</span> <span class="tlaGNC">           3 :       setLocalAvoidRepeat(config.avoid_artist_repeat);</span></span>
+<span id="L41"><span class="lineNum">      41</span> <span class="tlaGNC">           3 :       setLocalMinGap(config.min_song_gap);</span></span>
+<span id="L42"><span class="lineNum">      42</span> <span class="tlaGNC">           3 :       setLocalSongsAhead(config.songs_ahead);</span></span>
+<span id="L43"><span class="lineNum">      43</span>              :     }</span>
+<span id="L44"><span class="lineNum">      44</span>              :   }, [config]);</span>
+<span id="L45"><span class="lineNum">      45</span>              : </span>
+<span id="L46"><span class="lineNum">      46</span> <span class="tlaGNC">          10 :   const autoSave = (overrides: Record&lt;string, unknown&gt; = {}) =&gt; {</span></span>
+<span id="L47"><span class="lineNum">      47</span> <span class="tlaUNC tlaBgUNC">           0 :     if (debounceRef.current) clearTimeout(debounceRef.current);</span></span>
+<span id="L48"><span class="lineNum">      48</span> <span class="tlaUNC">           0 :     debounceRef.current = setTimeout(() =&gt; {</span></span>
+<span id="L49"><span class="lineNum">      49</span> <span class="tlaUNC">           0 :       setSaving(true);</span></span>
+<span id="L50"><span class="lineNum">      50</span> <span class="tlaUNC">           0 :       updateAutoFill.mutate(</span></span>
+<span id="L51"><span class="lineNum">      51</span>              :         {</span>
+<span id="L52"><span class="lineNum">      52</span>              :           enabled: (overrides.enabled as boolean | undefined) ?? localEnabled,</span>
+<span id="L53"><span class="lineNum">      53</span>              :           mode: (overrides.mode as string | undefined) ?? localMode,</span>
+<span id="L54"><span class="lineNum">      54</span>              :           source_type: (overrides.source_type as ScheduleSourceType | undefined) ?? localSourceType,</span>
+<span id="L55"><span class="lineNum">      55</span>              :           source_playlist_id:</span>
+<span id="L56"><span class="lineNum">      56</span>              :             localSourceType === &quot;playlist&quot;</span>
+<span id="L57"><span class="lineNum">      57</span>              :               ? ((overrides.source_playlist_id as string | null | undefined) ?? localPlaylistId)</span>
+<span id="L58"><span class="lineNum">      58</span>              :               : null,</span>
+<span id="L59"><span class="lineNum">      59</span>              :           avoid_artist_repeat: (overrides.avoid_artist_repeat as boolean | undefined) ?? localAvoidRepeat,</span>
+<span id="L60"><span class="lineNum">      60</span>              :           min_song_gap: (overrides.min_song_gap as number | undefined) ?? localMinGap,</span>
+<span id="L61"><span class="lineNum">      61</span>              :           songs_ahead: (overrides.songs_ahead as number | undefined) ?? localSongsAhead,</span>
+<span id="L62"><span class="lineNum">      62</span>              :         },</span>
+<span id="L63"><span class="lineNum">      63</span>              :         {</span>
+<span id="L64"><span class="lineNum">      64</span> <span class="tlaUNC">           0 :           onSettled: () =&gt; setSaving(false),</span></span>
+<span id="L65"><span class="lineNum">      65</span> <span class="tlaUNC">           0 :           onError: (err) =&gt; {</span></span>
+<span id="L66"><span class="lineNum">      66</span> <span class="tlaUNC">           0 :             reportHttpError(showError, err, &quot;Failed to save auto-DJ configuration&quot;);</span></span>
 <span id="L67"><span class="lineNum">      67</span>              :           },</span>
 <span id="L68"><span class="lineNum">      68</span>              :         },</span>
 <span id="L69"><span class="lineNum">      69</span>              :       );</span>

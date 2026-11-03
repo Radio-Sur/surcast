@@ -37,7 +37,7 @@
           </tr>
           <tr>
             <td class="headerItem">Test Date:</td>
-            <td class="headerValue">2026-09-06 21:10:44</td>
+            <td class="headerValue">2026-11-03 01:49:59</td>
             <td></td>
             <td class="headerItem">Functions:</td>
             <td class="headerCovTableEntryLo">50.0&nbsp;%</td>
@@ -68,7 +68,7 @@
 <span id="L6"><span class="lineNum">       6</span>              : import { useTranslation } from &quot;react-i18next&quot;;</span>
 <span id="L7"><span class="lineNum">       7</span>              : import type { QueueItem } from &quot;@/types&quot;;</span>
 <span id="L8"><span class="lineNum">       8</span>              : </span>
-<span id="L9"><span class="lineNum">       9</span> <span class="tlaGNC tlaBgGNC">           6 : export function NowPlayingSong({</span></span>
+<span id="L9"><span class="lineNum">       9</span> <span class="tlaGNC tlaBgGNC">           9 : export function NowPlayingSong({</span></span>
 <span id="L10"><span class="lineNum">      10</span>              :   song,</span>
 <span id="L11"><span class="lineNum">      11</span>              :   connected,</span>
 <span id="L12"><span class="lineNum">      12</span>              :   onSkip,</span>
@@ -79,10 +79,10 @@
 <span id="L17"><span class="lineNum">      17</span>              :   onSkip?: () =&gt; void;</span>
 <span id="L18"><span class="lineNum">      18</span>              :   isSkipping?: boolean;</span>
 <span id="L19"><span class="lineNum">      19</span>              : }) {</span>
-<span id="L20"><span class="lineNum">      20</span> <span class="tlaGNC">           6 :   const { t } = useTranslation();</span></span>
+<span id="L20"><span class="lineNum">      20</span> <span class="tlaGNC">           9 :   const { t } = useTranslation();</span></span>
 <span id="L21"><span class="lineNum">      21</span>              : </span>
-<span id="L22"><span class="lineNum">      22</span> <span class="tlaGNC">           6 :   return (</span></span>
-<span id="L23"><span class="lineNum">      23</span>              :     &lt;Box sx={{ mt: 1.5 }}&gt;</span>
+<span id="L22"><span class="lineNum">      22</span> <span class="tlaGNC">           9 :   return (</span></span>
+<span id="L23"><span class="lineNum">      23</span>              :     &lt;Box sx={{ mt: 1.5, minWidth: 0 }}&gt;</span>
 <span id="L24"><span class="lineNum">      24</span>              :       &lt;Box</span>
 <span id="L25"><span class="lineNum">      25</span>              :         sx={{</span>
 <span id="L26"><span class="lineNum">      26</span>              :           display: &quot;flex&quot;,</span>
@@ -91,15 +91,15 @@
 <span id="L29"><span class="lineNum">      29</span>              :         }}</span>
 <span id="L30"><span class="lineNum">      30</span>              :       &gt;</span>
 <span id="L31"><span class="lineNum">      31</span>              :         &lt;Box sx={{ flex: 1, minWidth: 0 }}&gt;</span>
-<span id="L32"><span class="lineNum">      32</span>              :           &lt;Typography variant=&quot;body1&quot; sx={{ fontWeight: 600 }}&gt;</span>
+<span id="L32"><span class="lineNum">      32</span>              :           &lt;Typography variant=&quot;body1&quot; noWrap title={song.title} sx={{ fontWeight: 600 }}&gt;</span>
 <span id="L33"><span class="lineNum">      33</span>              :             {song.title}</span>
 <span id="L34"><span class="lineNum">      34</span>              :           &lt;/Typography&gt;</span>
-<span id="L35"><span class="lineNum">      35</span>              :           &lt;Typography variant=&quot;body2&quot; sx={{ opacity: 0.8 }}&gt;</span>
+<span id="L35"><span class="lineNum">      35</span>              :           &lt;Typography variant=&quot;body2&quot; noWrap title={`${song.artist} · ${song.album}`} sx={{ opacity: 0.8 }}&gt;</span>
 <span id="L36"><span class="lineNum">      36</span>              :             {song.artist || t(&quot;common:unknown_artist&quot;)}</span>
 <span id="L37"><span class="lineNum">      37</span>              :             {song.album ? ` · ${song.album}` : &quot;&quot;}</span>
 <span id="L38"><span class="lineNum">      38</span>              :           &lt;/Typography&gt;</span>
 <span id="L39"><span class="lineNum">      39</span>              :         &lt;/Box&gt;</span>
-<span id="L40"><span class="lineNum">      40</span>              :         &lt;Box sx={{ display: &quot;flex&quot;, alignItems: &quot;center&quot;, gap: 1, ml: 1 }}&gt;</span>
+<span id="L40"><span class="lineNum">      40</span>              :         &lt;Box sx={{ display: &quot;flex&quot;, alignItems: &quot;center&quot;, gap: 1, ml: 1, flexShrink: 0 }}&gt;</span>
 <span id="L41"><span class="lineNum">      41</span>              :           &lt;Box</span>
 <span id="L42"><span class="lineNum">      42</span>              :             sx={{</span>
 <span id="L43"><span class="lineNum">      43</span>              :               width: 8,</span>

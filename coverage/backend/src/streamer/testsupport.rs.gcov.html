@@ -37,7 +37,7 @@
           </tr>
           <tr>
             <td class="headerItem">Test Date:</td>
-            <td class="headerValue">2026-09-06 21:10:43</td>
+            <td class="headerValue">2026-11-03 01:49:58</td>
             <td></td>
             <td class="headerItem">Functions:</td>
             <td class="headerCovTableEntryLo">38.7&nbsp;%</td>
@@ -93,30 +93,30 @@
 <span id="L31"><span class="lineNum">      31</span>              : </span>
 <span id="L32"><span class="lineNum">      32</span>              : /// A normal queued song: distinct queue and song ids, title and position set</span>
 <span id="L33"><span class="lineNum">      33</span>              : /// by the caller, everything else at neutral defaults.</span>
-<span id="L34"><span class="lineNum">      34</span> <span class="tlaGNC tlaBgGNC">         285 : pub(crate) fn queued_song(title: &amp;str, position: i32) -&gt; SongInfo {</span></span>
-<span id="L35"><span class="lineNum">      35</span> <span class="tlaGNC">         285 :     SongInfo {</span></span>
-<span id="L36"><span class="lineNum">      36</span> <span class="tlaGNC">         285 :         queue_item_id: Uuid::new_v4(),</span></span>
-<span id="L37"><span class="lineNum">      37</span> <span class="tlaGNC">         285 :         song_id: Uuid::new_v4(),</span></span>
-<span id="L38"><span class="lineNum">      38</span> <span class="tlaGNC">         285 :         title: title.to_owned(),</span></span>
-<span id="L39"><span class="lineNum">      39</span> <span class="tlaGNC">         285 :         artist: String::new(),</span></span>
-<span id="L40"><span class="lineNum">      40</span> <span class="tlaGNC">         285 :         duration: 1,</span></span>
-<span id="L41"><span class="lineNum">      41</span> <span class="tlaGNC">         285 :         file_path: String::new(),</span></span>
-<span id="L42"><span class="lineNum">      42</span> <span class="tlaGNC">         285 :         position,</span></span>
-<span id="L43"><span class="lineNum">      43</span> <span class="tlaGNC">         285 :         cue_in: 0.0,</span></span>
-<span id="L44"><span class="lineNum">      44</span> <span class="tlaGNC">         285 :         cue_out: 0.0,</span></span>
-<span id="L45"><span class="lineNum">      45</span> <span class="tlaGNC">         285 :         cross_start_next: 0.0,</span></span>
-<span id="L46"><span class="lineNum">      46</span> <span class="tlaGNC">         285 :         analyzed: false,</span></span>
-<span id="L47"><span class="lineNum">      47</span> <span class="tlaGNC">         285 :     }</span></span>
-<span id="L48"><span class="lineNum">      48</span> <span class="tlaGNC">         285 : }</span></span>
+<span id="L34"><span class="lineNum">      34</span> <span class="tlaGNC tlaBgGNC">         310 : pub(crate) fn queued_song(title: &amp;str, position: i32) -&gt; SongInfo {</span></span>
+<span id="L35"><span class="lineNum">      35</span> <span class="tlaGNC">         310 :     SongInfo {</span></span>
+<span id="L36"><span class="lineNum">      36</span> <span class="tlaGNC">         310 :         queue_item_id: Uuid::new_v4(),</span></span>
+<span id="L37"><span class="lineNum">      37</span> <span class="tlaGNC">         310 :         song_id: Uuid::new_v4(),</span></span>
+<span id="L38"><span class="lineNum">      38</span> <span class="tlaGNC">         310 :         title: title.to_owned(),</span></span>
+<span id="L39"><span class="lineNum">      39</span> <span class="tlaGNC">         310 :         artist: String::new(),</span></span>
+<span id="L40"><span class="lineNum">      40</span> <span class="tlaGNC">         310 :         duration: 1,</span></span>
+<span id="L41"><span class="lineNum">      41</span> <span class="tlaGNC">         310 :         file_path: String::new(),</span></span>
+<span id="L42"><span class="lineNum">      42</span> <span class="tlaGNC">         310 :         position,</span></span>
+<span id="L43"><span class="lineNum">      43</span> <span class="tlaGNC">         310 :         cue_in: 0.0,</span></span>
+<span id="L44"><span class="lineNum">      44</span> <span class="tlaGNC">         310 :         cue_out: 0.0,</span></span>
+<span id="L45"><span class="lineNum">      45</span> <span class="tlaGNC">         310 :         cross_start_next: 0.0,</span></span>
+<span id="L46"><span class="lineNum">      46</span> <span class="tlaGNC">         310 :         analyzed: false,</span></span>
+<span id="L47"><span class="lineNum">      47</span> <span class="tlaGNC">         310 :     }</span></span>
+<span id="L48"><span class="lineNum">      48</span> <span class="tlaGNC">         310 : }</span></span>
 <span id="L49"><span class="lineNum">      49</span>              : </span>
 <span id="L50"><span class="lineNum">      50</span>              : /// A queue of songs named after their titles, in position order.</span>
-<span id="L51"><span class="lineNum">      51</span> <span class="tlaGNC">         100 : pub(crate) fn queued_songs(titles: &amp;[&amp;str]) -&gt; Vec&lt;SongInfo&gt; {</span></span>
-<span id="L52"><span class="lineNum">      52</span> <span class="tlaGNC">         100 :     titles</span></span>
-<span id="L53"><span class="lineNum">      53</span> <span class="tlaGNC">         100 :         .iter()</span></span>
-<span id="L54"><span class="lineNum">      54</span> <span class="tlaGNC">         100 :         .enumerate()</span></span>
-<span id="L55"><span class="lineNum">      55</span> <span class="tlaGNC">         257 :         .map(|(position, title)| queued_song(title, position as i32))</span></span>
-<span id="L56"><span class="lineNum">      56</span> <span class="tlaGNC">         100 :         .collect()</span></span>
-<span id="L57"><span class="lineNum">      57</span> <span class="tlaGNC">         100 : }</span></span>
+<span id="L51"><span class="lineNum">      51</span> <span class="tlaGNC">         111 : pub(crate) fn queued_songs(titles: &amp;[&amp;str]) -&gt; Vec&lt;SongInfo&gt; {</span></span>
+<span id="L52"><span class="lineNum">      52</span> <span class="tlaGNC">         111 :     titles</span></span>
+<span id="L53"><span class="lineNum">      53</span> <span class="tlaGNC">         111 :         .iter()</span></span>
+<span id="L54"><span class="lineNum">      54</span> <span class="tlaGNC">         111 :         .enumerate()</span></span>
+<span id="L55"><span class="lineNum">      55</span> <span class="tlaGNC">         281 :         .map(|(position, title)| queued_song(title, position as i32))</span></span>
+<span id="L56"><span class="lineNum">      56</span> <span class="tlaGNC">         111 :         .collect()</span></span>
+<span id="L57"><span class="lineNum">      57</span> <span class="tlaGNC">         111 : }</span></span>
 <span id="L58"><span class="lineNum">      58</span>              : </span>
 <span id="L59"><span class="lineNum">      59</span>              : /// A fresh track identity; the queue item and song ids are unrelated.</span>
 <span id="L60"><span class="lineNum">      60</span> <span class="tlaGNC">          16 : pub(crate) fn track_key() -&gt; TrackKey {</span></span>
@@ -143,25 +143,25 @@
 <span id="L81"><span class="lineNum">      81</span> <span class="tlaGNC">          15 : }</span></span>
 <span id="L82"><span class="lineNum">      82</span>              : </span>
 <span id="L83"><span class="lineNum">      83</span>              : /// The default Icecast target used across the unit tests.</span>
-<span id="L84"><span class="lineNum">      84</span> <span class="tlaGNC">          95 : pub(crate) fn target() -&gt; IcecastTarget {</span></span>
-<span id="L85"><span class="lineNum">      85</span> <span class="tlaGNC">          95 :     IcecastTarget::parse(&quot;localhost:8000&quot;, &quot;secret&quot;.into(), &quot;test&quot;, &quot;test&quot;.into()).unwrap()</span></span>
-<span id="L86"><span class="lineNum">      86</span> <span class="tlaGNC">          95 : }</span></span>
+<span id="L84"><span class="lineNum">      84</span> <span class="tlaGNC">         102 : pub(crate) fn target() -&gt; IcecastTarget {</span></span>
+<span id="L85"><span class="lineNum">      85</span> <span class="tlaGNC">         102 :     IcecastTarget::parse(&quot;localhost:8000&quot;, &quot;secret&quot;.into(), &quot;test&quot;, &quot;test&quot;.into()).unwrap()</span></span>
+<span id="L86"><span class="lineNum">      86</span> <span class="tlaGNC">         102 : }</span></span>
 <span id="L87"><span class="lineNum">      87</span>              : </span>
 <span id="L88"><span class="lineNum">      88</span>              : /// The default (off, no fade) persisted playback configuration.</span>
-<span id="L89"><span class="lineNum">      89</span> <span class="tlaGNC">          67 : pub(crate) fn playback_config() -&gt; StationPlaybackConfig {</span></span>
-<span id="L90"><span class="lineNum">      90</span> <span class="tlaGNC">          67 :     StationPlaybackConfig::from_persisted(&quot;off&quot;, 0, 0, 0).unwrap()</span></span>
-<span id="L91"><span class="lineNum">      91</span> <span class="tlaGNC">          67 : }</span></span>
+<span id="L89"><span class="lineNum">      89</span> <span class="tlaGNC">          74 : pub(crate) fn playback_config() -&gt; StationPlaybackConfig {</span></span>
+<span id="L90"><span class="lineNum">      90</span> <span class="tlaGNC">          74 :     StationPlaybackConfig::from_persisted(&quot;off&quot;, 0, 0, 0).unwrap()</span></span>
+<span id="L91"><span class="lineNum">      91</span> <span class="tlaGNC">          74 : }</span></span>
 <span id="L92"><span class="lineNum">      92</span>              : </span>
 <span id="L93"><span class="lineNum">      93</span>              : /// A lazily-connected pool against a port that is never listening: every</span>
 <span id="L94"><span class="lineNum">      94</span>              : /// acquire fails fast, so controller tests that must not touch a real</span>
 <span id="L95"><span class="lineNum">      95</span>              : /// database (or must exercise the AutoDJ failure path) get a pool that can</span>
 <span id="L96"><span class="lineNum">      96</span>              : /// be constructed anywhere.</span>
-<span id="L97"><span class="lineNum">      97</span> <span class="tlaGNC">          62 : pub(crate) fn unavailable_db() -&gt; sqlx::PgPool {</span></span>
-<span id="L98"><span class="lineNum">      98</span> <span class="tlaGNC">          62 :     sqlx::postgres::PgPoolOptions::new()</span></span>
-<span id="L99"><span class="lineNum">      99</span> <span class="tlaGNC">          62 :         .acquire_timeout(Duration::from_millis(10))</span></span>
-<span id="L100"><span class="lineNum">     100</span> <span class="tlaGNC">          62 :         .connect_lazy(&quot;postgres://surcast:surcast@127.0.0.1:1/surcast&quot;)</span></span>
-<span id="L101"><span class="lineNum">     101</span> <span class="tlaGNC">          62 :         .unwrap()</span></span>
-<span id="L102"><span class="lineNum">     102</span> <span class="tlaGNC">          62 : }</span></span>
+<span id="L97"><span class="lineNum">      97</span> <span class="tlaGNC">          71 : pub(crate) fn unavailable_db() -&gt; sqlx::PgPool {</span></span>
+<span id="L98"><span class="lineNum">      98</span> <span class="tlaGNC">          71 :     sqlx::postgres::PgPoolOptions::new()</span></span>
+<span id="L99"><span class="lineNum">      99</span> <span class="tlaGNC">          71 :         .acquire_timeout(Duration::from_millis(10))</span></span>
+<span id="L100"><span class="lineNum">     100</span> <span class="tlaGNC">          71 :         .connect_lazy(&quot;postgres://surcast:surcast@127.0.0.1:1/surcast&quot;)</span></span>
+<span id="L101"><span class="lineNum">     101</span> <span class="tlaGNC">          71 :         .unwrap()</span></span>
+<span id="L102"><span class="lineNum">     102</span> <span class="tlaGNC">          71 : }</span></span>
 <span id="L103"><span class="lineNum">     103</span>              : </span>
 <span id="L104"><span class="lineNum">     104</span>              : /// The default pipeline config for GStreamer harness tests.</span>
 <span id="L105"><span class="lineNum">     105</span> <span class="tlaGNC">          15 : pub(crate) fn pipeline_config() -&gt; PipelineConfig {</span></span>
@@ -181,8 +181,8 @@
 <span id="L119"><span class="lineNum">     119</span>              : /// wait is bounded by actual progress of the condition.</span>
 <span id="L120"><span class="lineNum">     120</span> <span class="tlaGNC">          12 : pub(crate) async fn wait_for_timeout(timeout: Duration, what: &amp;str, mut cond: impl FnMut() -&gt; bool) {</span></span>
 <span id="L121"><span class="lineNum">     121</span> <span class="tlaGNC">          12 :     tokio::time::timeout(timeout, async {</span></span>
-<span id="L122"><span class="lineNum">     122</span> <span class="tlaGNC">      240263 :         while !cond() {</span></span>
-<span id="L123"><span class="lineNum">     123</span> <span class="tlaGNC">      240251 :             tokio::task::yield_now().await;</span></span>
+<span id="L122"><span class="lineNum">     122</span> <span class="tlaGNC">      229043 :         while !cond() {</span></span>
+<span id="L123"><span class="lineNum">     123</span> <span class="tlaGNC">      229031 :             tokio::task::yield_now().await;</span></span>
 <span id="L124"><span class="lineNum">     124</span>              :         }</span>
 <span id="L125"><span class="lineNum">     125</span> <span class="tlaGNC">          12 :     })</span></span>
 <span id="L126"><span class="lineNum">     126</span> <span class="tlaGNC">          12 :     .await</span></span>
@@ -240,24 +240,24 @@
 <span id="L178"><span class="lineNum">     178</span>              : }</span>
 <span id="L179"><span class="lineNum">     179</span>              : </span>
 <span id="L180"><span class="lineNum">     180</span>              : impl Gate {</span>
-<span id="L181"><span class="lineNum">     181</span> <span class="tlaGNC">          26 :     pub(crate) fn new() -&gt; Arc&lt;Self&gt; {</span></span>
-<span id="L182"><span class="lineNum">     182</span> <span class="tlaGNC">          26 :         Arc::new(Self {</span></span>
-<span id="L183"><span class="lineNum">     183</span> <span class="tlaGNC">          26 :             started: Notify::new(),</span></span>
-<span id="L184"><span class="lineNum">     184</span> <span class="tlaGNC">          26 :             release: Semaphore::new(0),</span></span>
-<span id="L185"><span class="lineNum">     185</span> <span class="tlaGNC">          26 :         })</span></span>
-<span id="L186"><span class="lineNum">     186</span> <span class="tlaGNC">          26 :     }</span></span>
+<span id="L181"><span class="lineNum">     181</span> <span class="tlaGNC">          30 :     pub(crate) fn new() -&gt; Arc&lt;Self&gt; {</span></span>
+<span id="L182"><span class="lineNum">     182</span> <span class="tlaGNC">          30 :         Arc::new(Self {</span></span>
+<span id="L183"><span class="lineNum">     183</span> <span class="tlaGNC">          30 :             started: Notify::new(),</span></span>
+<span id="L184"><span class="lineNum">     184</span> <span class="tlaGNC">          30 :             release: Semaphore::new(0),</span></span>
+<span id="L185"><span class="lineNum">     185</span> <span class="tlaGNC">          30 :         })</span></span>
+<span id="L186"><span class="lineNum">     186</span> <span class="tlaGNC">          30 :     }</span></span>
 <span id="L187"><span class="lineNum">     187</span>              : </span>
-<span id="L188"><span class="lineNum">     188</span> <span class="tlaGNC">          21 :     pub(crate) async fn wait_started(&amp;self) {</span></span>
-<span id="L189"><span class="lineNum">     189</span> <span class="tlaGNC">          21 :         self.started.notified().await;</span></span>
-<span id="L190"><span class="lineNum">     190</span> <span class="tlaGNC">          21 :     }</span></span>
+<span id="L188"><span class="lineNum">     188</span> <span class="tlaGNC">          23 :     pub(crate) async fn wait_started(&amp;self) {</span></span>
+<span id="L189"><span class="lineNum">     189</span> <span class="tlaGNC">          23 :         self.started.notified().await;</span></span>
+<span id="L190"><span class="lineNum">     190</span> <span class="tlaGNC">          23 :     }</span></span>
 <span id="L191"><span class="lineNum">     191</span>              : </span>
-<span id="L192"><span class="lineNum">     192</span> <span class="tlaGNC">          24 :     pub(crate) fn release(&amp;self) {</span></span>
-<span id="L193"><span class="lineNum">     193</span> <span class="tlaGNC">          24 :         self.release.add_permits(1);</span></span>
-<span id="L194"><span class="lineNum">     194</span> <span class="tlaGNC">          24 :     }</span></span>
+<span id="L192"><span class="lineNum">     192</span> <span class="tlaGNC">          26 :     pub(crate) fn release(&amp;self) {</span></span>
+<span id="L193"><span class="lineNum">     193</span> <span class="tlaGNC">          26 :         self.release.add_permits(1);</span></span>
+<span id="L194"><span class="lineNum">     194</span> <span class="tlaGNC">          26 :     }</span></span>
 <span id="L195"><span class="lineNum">     195</span>              : </span>
-<span id="L196"><span class="lineNum">     196</span> <span class="tlaGNC">          24 :     pub(crate) async fn wait_released(&amp;self) {</span></span>
-<span id="L197"><span class="lineNum">     197</span> <span class="tlaGNC">          24 :         self.release.acquire().await.expect(&quot;gate semaphore is never closed&quot;).forget();</span></span>
-<span id="L198"><span class="lineNum">     198</span> <span class="tlaGNC">          24 :     }</span></span>
+<span id="L196"><span class="lineNum">     196</span> <span class="tlaGNC">          26 :     pub(crate) async fn wait_released(&amp;self) {</span></span>
+<span id="L197"><span class="lineNum">     197</span> <span class="tlaGNC">          26 :         self.release.acquire().await.expect(&quot;gate semaphore is never closed&quot;).forget();</span></span>
+<span id="L198"><span class="lineNum">     198</span> <span class="tlaGNC">          26 :     }</span></span>
 <span id="L199"><span class="lineNum">     199</span>              : }</span>
 <span id="L200"><span class="lineNum">     200</span>              : </span>
 <span id="L201"><span class="lineNum">     201</span>              : /// Programmable stand-in for the real GStreamer pipeline.</span>
@@ -288,33 +288,33 @@
 <span id="L226"><span class="lineNum">     226</span>              : }</span>
 <span id="L227"><span class="lineNum">     227</span>              : </span>
 <span id="L228"><span class="lineNum">     228</span>              : impl RecordingPipeline {</span>
-<span id="L229"><span class="lineNum">     229</span> <span class="tlaGNC">          92 :     pub(crate) fn new() -&gt; Self {</span></span>
-<span id="L230"><span class="lineNum">     230</span> <span class="tlaGNC">          92 :         Self {</span></span>
-<span id="L231"><span class="lineNum">     231</span> <span class="tlaGNC">          92 :             calls: Mutex::new(Vec::new()),</span></span>
-<span id="L232"><span class="lineNum">     232</span> <span class="tlaGNC">          92 :             rolls: Mutex::new(Vec::new()),</span></span>
-<span id="L233"><span class="lineNum">     233</span> <span class="tlaGNC">          92 :             fail: Mutex::new(HashSet::new()),</span></span>
-<span id="L234"><span class="lineNum">     234</span> <span class="tlaGNC">          92 :             fail_once: Mutex::new(HashSet::new()),</span></span>
-<span id="L235"><span class="lineNum">     235</span> <span class="tlaGNC">          92 :             fail_nth: Mutex::new(HashSet::new()),</span></span>
-<span id="L236"><span class="lineNum">     236</span> <span class="tlaGNC">          92 :             attempts: Mutex::new(HashMap::new()),</span></span>
-<span id="L237"><span class="lineNum">     237</span> <span class="tlaGNC">          92 :             snapshot: Mutex::new(PipelineSnapshot {</span></span>
-<span id="L238"><span class="lineNum">     238</span> <span class="tlaGNC">          92 :                 state: PipelineState::Stopped,</span></span>
-<span id="L239"><span class="lineNum">     239</span> <span class="tlaGNC">          92 :                 elapsed: Duration::ZERO,</span></span>
-<span id="L240"><span class="lineNum">     240</span> <span class="tlaGNC">          92 :             }),</span></span>
-<span id="L241"><span class="lineNum">     241</span> <span class="tlaGNC">          92 :             replace_gate: Mutex::new(None),</span></span>
-<span id="L242"><span class="lineNum">     242</span> <span class="tlaGNC">          92 :             reconnect_gate: Mutex::new(None),</span></span>
-<span id="L243"><span class="lineNum">     243</span> <span class="tlaGNC">          92 :             stop_gate: Mutex::new(None),</span></span>
-<span id="L244"><span class="lineNum">     244</span> <span class="tlaGNC">          92 :             roll_gate: Mutex::new(None),</span></span>
-<span id="L245"><span class="lineNum">     245</span> <span class="tlaGNC">          92 :         }</span></span>
-<span id="L246"><span class="lineNum">     246</span> <span class="tlaGNC">          92 :     }</span></span>
+<span id="L229"><span class="lineNum">     229</span> <span class="tlaGNC">         101 :     pub(crate) fn new() -&gt; Self {</span></span>
+<span id="L230"><span class="lineNum">     230</span> <span class="tlaGNC">         101 :         Self {</span></span>
+<span id="L231"><span class="lineNum">     231</span> <span class="tlaGNC">         101 :             calls: Mutex::new(Vec::new()),</span></span>
+<span id="L232"><span class="lineNum">     232</span> <span class="tlaGNC">         101 :             rolls: Mutex::new(Vec::new()),</span></span>
+<span id="L233"><span class="lineNum">     233</span> <span class="tlaGNC">         101 :             fail: Mutex::new(HashSet::new()),</span></span>
+<span id="L234"><span class="lineNum">     234</span> <span class="tlaGNC">         101 :             fail_once: Mutex::new(HashSet::new()),</span></span>
+<span id="L235"><span class="lineNum">     235</span> <span class="tlaGNC">         101 :             fail_nth: Mutex::new(HashSet::new()),</span></span>
+<span id="L236"><span class="lineNum">     236</span> <span class="tlaGNC">         101 :             attempts: Mutex::new(HashMap::new()),</span></span>
+<span id="L237"><span class="lineNum">     237</span> <span class="tlaGNC">         101 :             snapshot: Mutex::new(PipelineSnapshot {</span></span>
+<span id="L238"><span class="lineNum">     238</span> <span class="tlaGNC">         101 :                 state: PipelineState::Stopped,</span></span>
+<span id="L239"><span class="lineNum">     239</span> <span class="tlaGNC">         101 :                 elapsed: Duration::ZERO,</span></span>
+<span id="L240"><span class="lineNum">     240</span> <span class="tlaGNC">         101 :             }),</span></span>
+<span id="L241"><span class="lineNum">     241</span> <span class="tlaGNC">         101 :             replace_gate: Mutex::new(None),</span></span>
+<span id="L242"><span class="lineNum">     242</span> <span class="tlaGNC">         101 :             reconnect_gate: Mutex::new(None),</span></span>
+<span id="L243"><span class="lineNum">     243</span> <span class="tlaGNC">         101 :             stop_gate: Mutex::new(None),</span></span>
+<span id="L244"><span class="lineNum">     244</span> <span class="tlaGNC">         101 :             roll_gate: Mutex::new(None),</span></span>
+<span id="L245"><span class="lineNum">     245</span> <span class="tlaGNC">         101 :         }</span></span>
+<span id="L246"><span class="lineNum">     246</span> <span class="tlaGNC">         101 :     }</span></span>
 <span id="L247"><span class="lineNum">     247</span>              : </span>
 <span id="L248"><span class="lineNum">     248</span>              :     /// A pipeline whose `replace` and `reconnect` block until released.</span>
-<span id="L249"><span class="lineNum">     249</span> <span class="tlaGNC">          11 :     pub(crate) fn with_gates() -&gt; Self {</span></span>
-<span id="L250"><span class="lineNum">     250</span> <span class="tlaGNC">          11 :         Self {</span></span>
-<span id="L251"><span class="lineNum">     251</span> <span class="tlaGNC">          11 :             replace_gate: Mutex::new(Some(Gate::new())),</span></span>
-<span id="L252"><span class="lineNum">     252</span> <span class="tlaGNC">          11 :             reconnect_gate: Mutex::new(Some(Gate::new())),</span></span>
-<span id="L253"><span class="lineNum">     253</span> <span class="tlaGNC">          11 :             ..Self::new()</span></span>
-<span id="L254"><span class="lineNum">     254</span> <span class="tlaGNC">          11 :         }</span></span>
-<span id="L255"><span class="lineNum">     255</span> <span class="tlaGNC">          11 :     }</span></span>
+<span id="L249"><span class="lineNum">     249</span> <span class="tlaGNC">          13 :     pub(crate) fn with_gates() -&gt; Self {</span></span>
+<span id="L250"><span class="lineNum">     250</span> <span class="tlaGNC">          13 :         Self {</span></span>
+<span id="L251"><span class="lineNum">     251</span> <span class="tlaGNC">          13 :             replace_gate: Mutex::new(Some(Gate::new())),</span></span>
+<span id="L252"><span class="lineNum">     252</span> <span class="tlaGNC">          13 :             reconnect_gate: Mutex::new(Some(Gate::new())),</span></span>
+<span id="L253"><span class="lineNum">     253</span> <span class="tlaGNC">          13 :             ..Self::new()</span></span>
+<span id="L254"><span class="lineNum">     254</span> <span class="tlaGNC">          13 :         }</span></span>
+<span id="L255"><span class="lineNum">     255</span> <span class="tlaGNC">          13 :     }</span></span>
 <span id="L256"><span class="lineNum">     256</span>              : </span>
 <span id="L257"><span class="lineNum">     257</span>              :     /// A pipeline whose `stop` blocks until released — used to prove that</span>
 <span id="L258"><span class="lineNum">     258</span>              :     /// terminal cleanup survives caller cancellation mid-shutdown.</span>
@@ -334,21 +334,21 @@
 <span id="L272"><span class="lineNum">     272</span> <span class="tlaUNC">           0 :         }</span></span>
 <span id="L273"><span class="lineNum">     273</span> <span class="tlaUNC">           0 :     }</span></span>
 <span id="L274"><span class="lineNum">     274</span>              : </span>
-<span id="L275"><span class="lineNum">     275</span> <span class="tlaGNC tlaBgGNC">          44 :     pub(crate) fn replace_gate(&amp;self) -&gt; Option&lt;Arc&lt;Gate&gt;&gt; {</span></span>
-<span id="L276"><span class="lineNum">     276</span> <span class="tlaGNC">          44 :         self.replace_gate.lock().clone()</span></span>
-<span id="L277"><span class="lineNum">     277</span> <span class="tlaGNC">          44 :     }</span></span>
+<span id="L275"><span class="lineNum">     275</span> <span class="tlaGNC tlaBgGNC">          48 :     pub(crate) fn replace_gate(&amp;self) -&gt; Option&lt;Arc&lt;Gate&gt;&gt; {</span></span>
+<span id="L276"><span class="lineNum">     276</span> <span class="tlaGNC">          48 :         self.replace_gate.lock().clone()</span></span>
+<span id="L277"><span class="lineNum">     277</span> <span class="tlaGNC">          48 :     }</span></span>
 <span id="L278"><span class="lineNum">     278</span>              : </span>
 <span id="L279"><span class="lineNum">     279</span> <span class="tlaGNC">          10 :     pub(crate) fn reconnect_gate(&amp;self) -&gt; Option&lt;Arc&lt;Gate&gt;&gt; {</span></span>
 <span id="L280"><span class="lineNum">     280</span> <span class="tlaGNC">          10 :         self.reconnect_gate.lock().clone()</span></span>
 <span id="L281"><span class="lineNum">     281</span> <span class="tlaGNC">          10 :     }</span></span>
 <span id="L282"><span class="lineNum">     282</span>              : </span>
-<span id="L283"><span class="lineNum">     283</span> <span class="tlaGNC">          29 :     pub(crate) fn stop_gate(&amp;self) -&gt; Option&lt;Arc&lt;Gate&gt;&gt; {</span></span>
-<span id="L284"><span class="lineNum">     284</span> <span class="tlaGNC">          29 :         self.stop_gate.lock().clone()</span></span>
-<span id="L285"><span class="lineNum">     285</span> <span class="tlaGNC">          29 :     }</span></span>
+<span id="L283"><span class="lineNum">     283</span> <span class="tlaGNC">          31 :     pub(crate) fn stop_gate(&amp;self) -&gt; Option&lt;Arc&lt;Gate&gt;&gt; {</span></span>
+<span id="L284"><span class="lineNum">     284</span> <span class="tlaGNC">          31 :         self.stop_gate.lock().clone()</span></span>
+<span id="L285"><span class="lineNum">     285</span> <span class="tlaGNC">          31 :     }</span></span>
 <span id="L286"><span class="lineNum">     286</span>              : </span>
-<span id="L287"><span class="lineNum">     287</span> <span class="tlaGNC">           7 :     pub(crate) fn roll_gate(&amp;self) -&gt; Option&lt;Arc&lt;Gate&gt;&gt; {</span></span>
-<span id="L288"><span class="lineNum">     288</span> <span class="tlaGNC">           7 :         self.roll_gate.lock().clone()</span></span>
-<span id="L289"><span class="lineNum">     289</span> <span class="tlaGNC">           7 :     }</span></span>
+<span id="L287"><span class="lineNum">     287</span> <span class="tlaGNC">           6 :     pub(crate) fn roll_gate(&amp;self) -&gt; Option&lt;Arc&lt;Gate&gt;&gt; {</span></span>
+<span id="L288"><span class="lineNum">     288</span> <span class="tlaGNC">           6 :         self.roll_gate.lock().clone()</span></span>
+<span id="L289"><span class="lineNum">     289</span> <span class="tlaGNC">           6 :     }</span></span>
 <span id="L290"><span class="lineNum">     290</span>              : </span>
 <span id="L291"><span class="lineNum">     291</span> <span class="tlaGNC">           5 :     pub(crate) fn set_replace_gate(&amp;self, gate: Option&lt;Arc&lt;Gate&gt;&gt;) {</span></span>
 <span id="L292"><span class="lineNum">     292</span> <span class="tlaGNC">           5 :         *self.replace_gate.lock() = gate;</span></span>
@@ -361,9 +361,9 @@
 <span id="L299"><span class="lineNum">     299</span> <span class="tlaUNC">           0 :     }</span></span>
 <span id="L300"><span class="lineNum">     300</span>              : </span>
 <span id="L301"><span class="lineNum">     301</span>              :     /// Every future call of `call` fails with an injected pipeline error.</span>
-<span id="L302"><span class="lineNum">     302</span> <span class="tlaGNC tlaBgGNC">           5 :     pub(crate) fn fail(&amp;self, call: Call) {</span></span>
-<span id="L303"><span class="lineNum">     303</span> <span class="tlaGNC">           5 :         self.fail.lock().insert(call);</span></span>
-<span id="L304"><span class="lineNum">     304</span> <span class="tlaGNC">           5 :     }</span></span>
+<span id="L302"><span class="lineNum">     302</span> <span class="tlaGNC tlaBgGNC">           6 :     pub(crate) fn fail(&amp;self, call: Call) {</span></span>
+<span id="L303"><span class="lineNum">     303</span> <span class="tlaGNC">           6 :         self.fail.lock().insert(call);</span></span>
+<span id="L304"><span class="lineNum">     304</span> <span class="tlaGNC">           6 :     }</span></span>
 <span id="L305"><span class="lineNum">     305</span>              : </span>
 <span id="L306"><span class="lineNum">     306</span>              :     /// The next call of `call` fails; later calls succeed.</span>
 <span id="L307"><span class="lineNum">     307</span> <span class="tlaGNC">           2 :     pub(crate) fn fail_once(&amp;self, call: Call) {</span></span>
@@ -377,9 +377,9 @@
 <span id="L315"><span class="lineNum">     315</span> <span class="tlaGNC">           5 :     }</span></span>
 <span id="L316"><span class="lineNum">     316</span>              : </span>
 <span id="L317"><span class="lineNum">     317</span>              :     /// How many times `call` has been invoked (including failed attempts).</span>
-<span id="L318"><span class="lineNum">     318</span> <span class="tlaGNC">      240311 :     pub(crate) fn count(&amp;self, call: Call) -&gt; usize {</span></span>
-<span id="L319"><span class="lineNum">     319</span> <span class="tlaGNC">      240378 :         self.calls.lock().iter().filter(|recorded| **recorded == call).count()</span></span>
-<span id="L320"><span class="lineNum">     320</span> <span class="tlaGNC">      240311 :     }</span></span>
+<span id="L318"><span class="lineNum">     318</span> <span class="tlaGNC">      229095 :     pub(crate) fn count(&amp;self, call: Call) -&gt; usize {</span></span>
+<span id="L319"><span class="lineNum">     319</span> <span class="tlaGNC">      229162 :         self.calls.lock().iter().filter(|recorded| **recorded == call).count()</span></span>
+<span id="L320"><span class="lineNum">     320</span> <span class="tlaGNC">      229095 :     }</span></span>
 <span id="L321"><span class="lineNum">     321</span>              : </span>
 <span id="L322"><span class="lineNum">     322</span>              :     /// The exact sequence of calls, in invocation order.</span>
 <span id="L323"><span class="lineNum">     323</span> <span class="tlaGNC">           3 :     pub(crate) fn calls(&amp;self) -&gt; Vec&lt;Call&gt; {</span></span>
@@ -416,24 +416,24 @@
 <span id="L354"><span class="lineNum">     354</span> <span class="tlaUNC tlaBgUNC">           0 :         }</span></span>
 <span id="L355"><span class="lineNum">     355</span> <span class="tlaGNC tlaBgGNC">           1 :     }</span></span>
 <span id="L356"><span class="lineNum">     356</span>              : </span>
-<span id="L357"><span class="lineNum">     357</span> <span class="tlaGNC">         106 :     fn record(&amp;self, call: Call) -&gt; Result&lt;(), PipelineError&gt; {</span></span>
-<span id="L358"><span class="lineNum">     358</span> <span class="tlaGNC">         106 :         self.calls.lock().push(call);</span></span>
-<span id="L359"><span class="lineNum">     359</span> <span class="tlaGNC">         106 :         let mut attempts = self.attempts.lock();</span></span>
-<span id="L360"><span class="lineNum">     360</span> <span class="tlaGNC">         106 :         let attempt = attempts.entry(call).or_default();</span></span>
-<span id="L361"><span class="lineNum">     361</span> <span class="tlaGNC">         106 :         if self.fail_once.lock().remove(&amp;call) {</span></span>
+<span id="L357"><span class="lineNum">     357</span> <span class="tlaGNC">         109 :     fn record(&amp;self, call: Call) -&gt; Result&lt;(), PipelineError&gt; {</span></span>
+<span id="L358"><span class="lineNum">     358</span> <span class="tlaGNC">         109 :         self.calls.lock().push(call);</span></span>
+<span id="L359"><span class="lineNum">     359</span> <span class="tlaGNC">         109 :         let mut attempts = self.attempts.lock();</span></span>
+<span id="L360"><span class="lineNum">     360</span> <span class="tlaGNC">         109 :         let attempt = attempts.entry(call).or_default();</span></span>
+<span id="L361"><span class="lineNum">     361</span> <span class="tlaGNC">         109 :         if self.fail_once.lock().remove(&amp;call) {</span></span>
 <span id="L362"><span class="lineNum">     362</span> <span class="tlaGNC">           2 :             *attempt += 1;</span></span>
 <span id="L363"><span class="lineNum">     363</span> <span class="tlaGNC">           2 :             return Err(PipelineError::Pipeline(&quot;injected failure&quot;.into()));</span></span>
-<span id="L364"><span class="lineNum">     364</span> <span class="tlaGNC">         104 :         }</span></span>
-<span id="L365"><span class="lineNum">     365</span> <span class="tlaGNC">         104 :         if self.fail_nth.lock().remove(&amp;(call, *attempt)) {</span></span>
+<span id="L364"><span class="lineNum">     364</span> <span class="tlaGNC">         107 :         }</span></span>
+<span id="L365"><span class="lineNum">     365</span> <span class="tlaGNC">         107 :         if self.fail_nth.lock().remove(&amp;(call, *attempt)) {</span></span>
 <span id="L366"><span class="lineNum">     366</span> <span class="tlaGNC">           5 :             *attempt += 1;</span></span>
 <span id="L367"><span class="lineNum">     367</span> <span class="tlaGNC">           5 :             return Err(PipelineError::Pipeline(&quot;injected failure&quot;.into()));</span></span>
-<span id="L368"><span class="lineNum">     368</span> <span class="tlaGNC">          99 :         }</span></span>
-<span id="L369"><span class="lineNum">     369</span> <span class="tlaGNC">          99 :         *attempt += 1;</span></span>
-<span id="L370"><span class="lineNum">     370</span> <span class="tlaGNC">          99 :         if self.fail.lock().contains(&amp;call) {</span></span>
-<span id="L371"><span class="lineNum">     371</span> <span class="tlaGNC">           5 :             return Err(PipelineError::Pipeline(&quot;injected failure&quot;.into()));</span></span>
-<span id="L372"><span class="lineNum">     372</span> <span class="tlaGNC">          94 :         }</span></span>
-<span id="L373"><span class="lineNum">     373</span> <span class="tlaGNC">          94 :         Ok(())</span></span>
-<span id="L374"><span class="lineNum">     374</span> <span class="tlaGNC">         106 :     }</span></span>
+<span id="L368"><span class="lineNum">     368</span> <span class="tlaGNC">         102 :         }</span></span>
+<span id="L369"><span class="lineNum">     369</span> <span class="tlaGNC">         102 :         *attempt += 1;</span></span>
+<span id="L370"><span class="lineNum">     370</span> <span class="tlaGNC">         102 :         if self.fail.lock().contains(&amp;call) {</span></span>
+<span id="L371"><span class="lineNum">     371</span> <span class="tlaGNC">           6 :             return Err(PipelineError::Pipeline(&quot;injected failure&quot;.into()));</span></span>
+<span id="L372"><span class="lineNum">     372</span> <span class="tlaGNC">          96 :         }</span></span>
+<span id="L373"><span class="lineNum">     373</span> <span class="tlaGNC">          96 :         Ok(())</span></span>
+<span id="L374"><span class="lineNum">     374</span> <span class="tlaGNC">         109 :     }</span></span>
 <span id="L375"><span class="lineNum">     375</span>              : }</span>
 <span id="L376"><span class="lineNum">     376</span>              : </span>
 <span id="L377"><span class="lineNum">     377</span>              : /// Declarative expectations on operations recorded by [`RecordingPipeline`].</span>
@@ -489,7 +489,7 @@
 <span id="L427"><span class="lineNum">     427</span>              : </span>
 <span id="L428"><span class="lineNum">     428</span>              : #[async_trait]</span>
 <span id="L429"><span class="lineNum">     429</span>              : impl crate::streamer::pipeline::PlaybackPipeline for RecordingPipeline {</span>
-<span id="L430"><span class="lineNum">     430</span> <span class="tlaGNC tlaBgGNC">          34 :     async fn replace(&amp;self, plan: PairPlan) -&gt; Result&lt;(), PipelineError&gt; {</span></span>
+<span id="L430"><span class="lineNum">     430</span> <span class="tlaGNC tlaBgGNC">          36 :     async fn replace(&amp;self, plan: PairPlan) -&gt; Result&lt;(), PipelineError&gt; {</span></span>
 <span id="L431"><span class="lineNum">     431</span>              :         let result = self.record(Call::Replace);</span>
 <span id="L432"><span class="lineNum">     432</span>              :         let gate = self.replace_gate();</span>
 <span id="L433"><span class="lineNum">     433</span>              :         if let Some(gate) = &amp;gate {</span>
@@ -504,8 +504,8 @@
 <span id="L442"><span class="lineNum">     442</span>              :             snapshot.state = PipelineState::Playing;</span>
 <span id="L443"><span class="lineNum">     443</span>              :         }</span>
 <span id="L444"><span class="lineNum">     444</span>              :         Ok(())</span>
-<span id="L445"><span class="lineNum">     445</span> <span class="tlaGNC">          34 :     }</span></span>
-<span id="L446"><span class="lineNum">     446</span> <span class="tlaGNC">           7 :     async fn roll(&amp;self, plan: RollingPlan) -&gt; Result&lt;(), PipelineError&gt; {</span></span>
+<span id="L445"><span class="lineNum">     445</span> <span class="tlaGNC">          36 :     }</span></span>
+<span id="L446"><span class="lineNum">     446</span> <span class="tlaGNC">           6 :     async fn roll(&amp;self, plan: RollingPlan) -&gt; Result&lt;(), PipelineError&gt; {</span></span>
 <span id="L447"><span class="lineNum">     447</span>              :         self.rolls.lock().push(plan);</span>
 <span id="L448"><span class="lineNum">     448</span>              :         let result = self.record(Call::Roll);</span>
 <span id="L449"><span class="lineNum">     449</span>              :         let gate = self.roll_gate();</span>
@@ -515,7 +515,7 @@
 <span id="L453"><span class="lineNum">     453</span>              :         }</span>
 <span id="L454"><span class="lineNum">     454</span>              :         result?;</span>
 <span id="L455"><span class="lineNum">     455</span>              :         Ok(())</span>
-<span id="L456"><span class="lineNum">     456</span> <span class="tlaGNC">           7 :     }</span></span>
+<span id="L456"><span class="lineNum">     456</span> <span class="tlaGNC">           6 :     }</span></span>
 <span id="L457"><span class="lineNum">     457</span>              : </span>
 <span id="L458"><span class="lineNum">     458</span> <span class="tlaUNC tlaBgUNC">           0 :     async fn apply_output(&amp;self, _: OutputConfig) -&gt; Result&lt;(), PipelineError&gt; {</span></span>
 <span id="L459"><span class="lineNum">     459</span>              :         self.record(Call::ApplyOutput)</span>
@@ -543,7 +543,7 @@
 <span id="L481"><span class="lineNum">     481</span>              :         Ok(self.snapshot.lock().clone())</span>
 <span id="L482"><span class="lineNum">     482</span> <span class="tlaGNC">          15 :     }</span></span>
 <span id="L483"><span class="lineNum">     483</span>              : </span>
-<span id="L484"><span class="lineNum">     484</span> <span class="tlaGNC">          29 :     async fn stop(&amp;self) -&gt; Result&lt;(), PipelineError&gt; {</span></span>
+<span id="L484"><span class="lineNum">     484</span> <span class="tlaGNC">          31 :     async fn stop(&amp;self) -&gt; Result&lt;(), PipelineError&gt; {</span></span>
 <span id="L485"><span class="lineNum">     485</span>              :         self.record(Call::Stop)?;</span>
 <span id="L486"><span class="lineNum">     486</span>              :         let gate = self.stop_gate();</span>
 <span id="L487"><span class="lineNum">     487</span>              :         if let Some(gate) = &amp;gate {</span>
@@ -552,7 +552,7 @@
 <span id="L490"><span class="lineNum">     490</span>              :         }</span>
 <span id="L491"><span class="lineNum">     491</span>              :         self.snapshot.lock().state = PipelineState::Stopped;</span>
 <span id="L492"><span class="lineNum">     492</span>              :         Ok(())</span>
-<span id="L493"><span class="lineNum">     493</span> <span class="tlaGNC">          29 :     }</span></span>
+<span id="L493"><span class="lineNum">     493</span> <span class="tlaGNC">          31 :     }</span></span>
 <span id="L494"><span class="lineNum">     494</span>              : }</span>
 <span id="L495"><span class="lineNum">     495</span>              : </span>
 <span id="L496"><span class="lineNum">     496</span>              : /// Writes a short stereo PCM WAV file with a constant sample (44.1 kHz).</span>

@@ -37,7 +37,7 @@
           </tr>
           <tr>
             <td class="headerItem">Test Date:</td>
-            <td class="headerValue">2026-09-06 21:10:43</td>
+            <td class="headerValue">2026-11-03 01:49:58</td>
             <td></td>
             <td class="headerItem">Functions:</td>
             <td class="headerCovTableEntryLo">60.0&nbsp;%</td>
@@ -74,19 +74,19 @@
 <span id="L12"><span class="lineNum">      12</span>              : use crate::auth::middleware::AuthUser;</span>
 <span id="L13"><span class="lineNum">      13</span>              : use crate::errors::{AppError, DbResult};</span>
 <span id="L14"><span class="lineNum">      14</span>              : </span>
-<span id="L15"><span class="lineNum">      15</span> <span class="tlaGNC tlaBgGNC">          10 : fn generate_api_key() -&gt; (String, String, String) {</span></span>
-<span id="L16"><span class="lineNum">      16</span> <span class="tlaGNC">          10 :     let mut rng = rand::rng();</span></span>
-<span id="L17"><span class="lineNum">      17</span> <span class="tlaGNC">          10 :     let random_part: String = (0..40)</span></span>
-<span id="L18"><span class="lineNum">      18</span> <span class="tlaGNC">         400 :         .map(|_| {</span></span>
-<span id="L19"><span class="lineNum">      19</span> <span class="tlaGNC">         400 :             let idx = rng.random_range(0..62);</span></span>
-<span id="L20"><span class="lineNum">      20</span> <span class="tlaGNC">         400 :             b&quot;abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789&quot;[idx] as char</span></span>
-<span id="L21"><span class="lineNum">      21</span> <span class="tlaGNC">         400 :         })</span></span>
-<span id="L22"><span class="lineNum">      22</span> <span class="tlaGNC">          10 :         .collect();</span></span>
-<span id="L23"><span class="lineNum">      23</span> <span class="tlaGNC">          10 :     let full_key = format!(&quot;sur_{}&quot;, random_part);</span></span>
-<span id="L24"><span class="lineNum">      24</span> <span class="tlaGNC">          10 :     let prefix = format!(&quot;sur_{}&quot;, &amp;random_part[..8]);</span></span>
-<span id="L25"><span class="lineNum">      25</span> <span class="tlaGNC">          10 :     let hash = hex::encode(Sha256::digest(full_key.as_bytes()));</span></span>
-<span id="L26"><span class="lineNum">      26</span> <span class="tlaGNC">          10 :     (full_key, hash, prefix)</span></span>
-<span id="L27"><span class="lineNum">      27</span> <span class="tlaGNC">          10 : }</span></span>
+<span id="L15"><span class="lineNum">      15</span> <span class="tlaGNC tlaBgGNC">           9 : fn generate_api_key() -&gt; (String, String, String) {</span></span>
+<span id="L16"><span class="lineNum">      16</span> <span class="tlaGNC">           9 :     let mut rng = rand::rng();</span></span>
+<span id="L17"><span class="lineNum">      17</span> <span class="tlaGNC">           9 :     let random_part: String = (0..40)</span></span>
+<span id="L18"><span class="lineNum">      18</span> <span class="tlaGNC">         360 :         .map(|_| {</span></span>
+<span id="L19"><span class="lineNum">      19</span> <span class="tlaGNC">         360 :             let idx = rng.random_range(0..62);</span></span>
+<span id="L20"><span class="lineNum">      20</span> <span class="tlaGNC">         360 :             b&quot;abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789&quot;[idx] as char</span></span>
+<span id="L21"><span class="lineNum">      21</span> <span class="tlaGNC">         360 :         })</span></span>
+<span id="L22"><span class="lineNum">      22</span> <span class="tlaGNC">           9 :         .collect();</span></span>
+<span id="L23"><span class="lineNum">      23</span> <span class="tlaGNC">           9 :     let full_key = format!(&quot;sur_{}&quot;, random_part);</span></span>
+<span id="L24"><span class="lineNum">      24</span> <span class="tlaGNC">           9 :     let prefix = format!(&quot;sur_{}&quot;, &amp;random_part[..8]);</span></span>
+<span id="L25"><span class="lineNum">      25</span> <span class="tlaGNC">           9 :     let hash = hex::encode(Sha256::digest(full_key.as_bytes()));</span></span>
+<span id="L26"><span class="lineNum">      26</span> <span class="tlaGNC">           9 :     (full_key, hash, prefix)</span></span>
+<span id="L27"><span class="lineNum">      27</span> <span class="tlaGNC">           9 : }</span></span>
 <span id="L28"><span class="lineNum">      28</span>              : </span>
 <span id="L29"><span class="lineNum">      29</span> <span class="tlaGNC">           1 : pub async fn list_api_keys(</span></span>
 <span id="L30"><span class="lineNum">      30</span> <span class="tlaGNC">           1 :     Extension(auth_user): Extension&lt;AuthUser&gt;,</span></span>
@@ -101,42 +101,42 @@
 <span id="L39"><span class="lineNum">      39</span> <span class="tlaGNC">           1 :     Ok(Json(keys.into_iter().map(Into::into).collect()))</span></span>
 <span id="L40"><span class="lineNum">      40</span> <span class="tlaGNC">           1 : }</span></span>
 <span id="L41"><span class="lineNum">      41</span>              : </span>
-<span id="L42"><span class="lineNum">      42</span> <span class="tlaGNC">           6 : pub async fn create_api_key(</span></span>
-<span id="L43"><span class="lineNum">      43</span> <span class="tlaGNC">           6 :     Extension(auth_user): Extension&lt;AuthUser&gt;,</span></span>
-<span id="L44"><span class="lineNum">      44</span> <span class="tlaGNC">           6 :     State(db): State&lt;PgPool&gt;,</span></span>
-<span id="L45"><span class="lineNum">      45</span> <span class="tlaGNC">           6 :     Json(req): Json&lt;CreateApiKeyRequest&gt;,</span></span>
-<span id="L46"><span class="lineNum">      46</span> <span class="tlaGNC">           6 : ) -&gt; Result&lt;(StatusCode, Json&lt;ApiKeyCreatedResponse&gt;), AppError&gt; {</span></span>
-<span id="L47"><span class="lineNum">      47</span> <span class="tlaGNC">           6 :     if req.name.is_empty() {</span></span>
-<span id="L48"><span class="lineNum">      48</span> <span class="tlaUNC tlaBgUNC">           0 :         return Err(AppError::BadRequest(&quot;API key name is required&quot;.into()));</span></span>
-<span id="L49"><span class="lineNum">      49</span> <span class="tlaGNC tlaBgGNC">           6 :     }</span></span>
+<span id="L42"><span class="lineNum">      42</span> <span class="tlaGNC">           5 : pub async fn create_api_key(</span></span>
+<span id="L43"><span class="lineNum">      43</span> <span class="tlaGNC">           5 :     Extension(auth_user): Extension&lt;AuthUser&gt;,</span></span>
+<span id="L44"><span class="lineNum">      44</span> <span class="tlaGNC">           5 :     State(db): State&lt;PgPool&gt;,</span></span>
+<span id="L45"><span class="lineNum">      45</span> <span class="tlaGNC">           5 :     Json(req): Json&lt;CreateApiKeyRequest&gt;,</span></span>
+<span id="L46"><span class="lineNum">      46</span> <span class="tlaGNC">           5 : ) -&gt; Result&lt;(StatusCode, Json&lt;ApiKeyCreatedResponse&gt;), AppError&gt; {</span></span>
+<span id="L47"><span class="lineNum">      47</span> <span class="tlaGNC">           5 :     if req.name.is_empty() {</span></span>
+<span id="L48"><span class="lineNum">      48</span> <span class="tlaUNC tlaBgUNC">           0 :         return Err(AppError::bad_request(&quot;API key name is required&quot;.into()));</span></span>
+<span id="L49"><span class="lineNum">      49</span> <span class="tlaGNC tlaBgGNC">           5 :     }</span></span>
 <span id="L50"><span class="lineNum">      50</span>              : </span>
-<span id="L51"><span class="lineNum">      51</span> <span class="tlaGNC">           6 :     let key_id = Uuid::new_v4();</span></span>
-<span id="L52"><span class="lineNum">      52</span> <span class="tlaGNC">           6 :     let (full_key, key_hash, key_prefix) = generate_api_key();</span></span>
+<span id="L51"><span class="lineNum">      51</span> <span class="tlaGNC">           5 :     let key_id = Uuid::new_v4();</span></span>
+<span id="L52"><span class="lineNum">      52</span> <span class="tlaGNC">           5 :     let (full_key, key_hash, key_prefix) = generate_api_key();</span></span>
 <span id="L53"><span class="lineNum">      53</span>              : </span>
-<span id="L54"><span class="lineNum">      54</span> <span class="tlaGNC">           6 :     sqlx::query(&quot;INSERT INTO api_keys (id, user_id, name, key_hash, key_prefix, expires_at) VALUES ($1, $2, $3, $4, $5, $6)&quot;)</span></span>
-<span id="L55"><span class="lineNum">      55</span> <span class="tlaGNC">           6 :         .bind(key_id)</span></span>
-<span id="L56"><span class="lineNum">      56</span> <span class="tlaGNC">           6 :         .bind(auth_user.id)</span></span>
-<span id="L57"><span class="lineNum">      57</span> <span class="tlaGNC">           6 :         .bind(&amp;req.name)</span></span>
-<span id="L58"><span class="lineNum">      58</span> <span class="tlaGNC">           6 :         .bind(&amp;key_hash)</span></span>
-<span id="L59"><span class="lineNum">      59</span> <span class="tlaGNC">           6 :         .bind(&amp;key_prefix)</span></span>
-<span id="L60"><span class="lineNum">      60</span> <span class="tlaGNC">           6 :         .bind(req.expires_at)</span></span>
-<span id="L61"><span class="lineNum">      61</span> <span class="tlaGNC">           6 :         .execute(&amp;db)</span></span>
-<span id="L62"><span class="lineNum">      62</span> <span class="tlaGNC">           6 :         .await</span></span>
-<span id="L63"><span class="lineNum">      63</span> <span class="tlaGNC">           6 :         .db_error(&quot;failed to create API key&quot;)?;</span></span>
+<span id="L54"><span class="lineNum">      54</span> <span class="tlaGNC">           5 :     sqlx::query(&quot;INSERT INTO api_keys (id, user_id, name, key_hash, key_prefix, expires_at) VALUES ($1, $2, $3, $4, $5, $6)&quot;)</span></span>
+<span id="L55"><span class="lineNum">      55</span> <span class="tlaGNC">           5 :         .bind(key_id)</span></span>
+<span id="L56"><span class="lineNum">      56</span> <span class="tlaGNC">           5 :         .bind(auth_user.id)</span></span>
+<span id="L57"><span class="lineNum">      57</span> <span class="tlaGNC">           5 :         .bind(&amp;req.name)</span></span>
+<span id="L58"><span class="lineNum">      58</span> <span class="tlaGNC">           5 :         .bind(&amp;key_hash)</span></span>
+<span id="L59"><span class="lineNum">      59</span> <span class="tlaGNC">           5 :         .bind(&amp;key_prefix)</span></span>
+<span id="L60"><span class="lineNum">      60</span> <span class="tlaGNC">           5 :         .bind(req.expires_at)</span></span>
+<span id="L61"><span class="lineNum">      61</span> <span class="tlaGNC">           5 :         .execute(&amp;db)</span></span>
+<span id="L62"><span class="lineNum">      62</span> <span class="tlaGNC">           5 :         .await</span></span>
+<span id="L63"><span class="lineNum">      63</span> <span class="tlaGNC">           5 :         .db_error(&quot;failed to create API key&quot;)?;</span></span>
 <span id="L64"><span class="lineNum">      64</span>              : </span>
-<span id="L65"><span class="lineNum">      65</span> <span class="tlaGNC">           6 :     Ok((</span></span>
-<span id="L66"><span class="lineNum">      66</span> <span class="tlaGNC">           6 :         StatusCode::CREATED,</span></span>
-<span id="L67"><span class="lineNum">      67</span> <span class="tlaGNC">           6 :         Json(ApiKeyCreatedResponse {</span></span>
-<span id="L68"><span class="lineNum">      68</span> <span class="tlaGNC">           6 :             id: key_id,</span></span>
-<span id="L69"><span class="lineNum">      69</span> <span class="tlaGNC">           6 :             name: req.name,</span></span>
-<span id="L70"><span class="lineNum">      70</span> <span class="tlaGNC">           6 :             key: full_key,</span></span>
-<span id="L71"><span class="lineNum">      71</span> <span class="tlaGNC">           6 :             key_prefix,</span></span>
-<span id="L72"><span class="lineNum">      72</span> <span class="tlaGNC">           6 :             is_active: true,</span></span>
-<span id="L73"><span class="lineNum">      73</span> <span class="tlaGNC">           6 :             expires_at: req.expires_at,</span></span>
-<span id="L74"><span class="lineNum">      74</span> <span class="tlaGNC">           6 :             created_at: Utc::now(),</span></span>
-<span id="L75"><span class="lineNum">      75</span> <span class="tlaGNC">           6 :         }),</span></span>
-<span id="L76"><span class="lineNum">      76</span> <span class="tlaGNC">           6 :     ))</span></span>
-<span id="L77"><span class="lineNum">      77</span> <span class="tlaGNC">           6 : }</span></span>
+<span id="L65"><span class="lineNum">      65</span> <span class="tlaGNC">           5 :     Ok((</span></span>
+<span id="L66"><span class="lineNum">      66</span> <span class="tlaGNC">           5 :         StatusCode::CREATED,</span></span>
+<span id="L67"><span class="lineNum">      67</span> <span class="tlaGNC">           5 :         Json(ApiKeyCreatedResponse {</span></span>
+<span id="L68"><span class="lineNum">      68</span> <span class="tlaGNC">           5 :             id: key_id,</span></span>
+<span id="L69"><span class="lineNum">      69</span> <span class="tlaGNC">           5 :             name: req.name,</span></span>
+<span id="L70"><span class="lineNum">      70</span> <span class="tlaGNC">           5 :             key: full_key,</span></span>
+<span id="L71"><span class="lineNum">      71</span> <span class="tlaGNC">           5 :             key_prefix,</span></span>
+<span id="L72"><span class="lineNum">      72</span> <span class="tlaGNC">           5 :             is_active: true,</span></span>
+<span id="L73"><span class="lineNum">      73</span> <span class="tlaGNC">           5 :             expires_at: req.expires_at,</span></span>
+<span id="L74"><span class="lineNum">      74</span> <span class="tlaGNC">           5 :             created_at: Utc::now(),</span></span>
+<span id="L75"><span class="lineNum">      75</span> <span class="tlaGNC">           5 :         }),</span></span>
+<span id="L76"><span class="lineNum">      76</span> <span class="tlaGNC">           5 :     ))</span></span>
+<span id="L77"><span class="lineNum">      77</span> <span class="tlaGNC">           5 : }</span></span>
 <span id="L78"><span class="lineNum">      78</span>              : </span>
 <span id="L79"><span class="lineNum">      79</span> <span class="tlaGNC">           1 : pub async fn update_api_key(</span></span>
 <span id="L80"><span class="lineNum">      80</span> <span class="tlaGNC">           1 :     Extension(auth_user): Extension&lt;AuthUser&gt;,</span></span>
@@ -150,7 +150,7 @@
 <span id="L88"><span class="lineNum">      88</span> <span class="tlaGNC">           1 :         .fetch_optional(&amp;db)</span></span>
 <span id="L89"><span class="lineNum">      89</span> <span class="tlaGNC">           1 :         .await</span></span>
 <span id="L90"><span class="lineNum">      90</span> <span class="tlaGNC">           1 :         .db_error(&quot;failed to find API key for update&quot;)?</span></span>
-<span id="L91"><span class="lineNum">      91</span> <span class="tlaGNC">           1 :         .ok_or_else(|| AppError::NotFound(&quot;API key not found&quot;.into()))?;</span></span>
+<span id="L91"><span class="lineNum">      91</span> <span class="tlaGNC">           1 :         .ok_or_else(|| AppError::not_found(&quot;API key not found&quot;.into()))?;</span></span>
 <span id="L92"><span class="lineNum">      92</span>              : </span>
 <span id="L93"><span class="lineNum">      93</span> <span class="tlaGNC">           1 :     let name = req.name.unwrap_or(key.name);</span></span>
 <span id="L94"><span class="lineNum">      94</span> <span class="tlaGNC">           1 :     let is_active = req.is_active.unwrap_or(key.is_active);</span></span>
@@ -185,7 +185,7 @@
 <span id="L123"><span class="lineNum">     123</span> <span class="tlaGNC">           1 :         .db_error(&quot;failed to delete API key&quot;)?;</span></span>
 <span id="L124"><span class="lineNum">     124</span>              : </span>
 <span id="L125"><span class="lineNum">     125</span> <span class="tlaGNC">           1 :     if result.rows_affected() == 0 {</span></span>
-<span id="L126"><span class="lineNum">     126</span> <span class="tlaUNC tlaBgUNC">           0 :         return Err(AppError::NotFound(&quot;API key not found&quot;.into()));</span></span>
+<span id="L126"><span class="lineNum">     126</span> <span class="tlaUNC tlaBgUNC">           0 :         return Err(AppError::not_found(&quot;API key not found&quot;.into()));</span></span>
 <span id="L127"><span class="lineNum">     127</span> <span class="tlaGNC tlaBgGNC">           1 :     }</span></span>
 <span id="L128"><span class="lineNum">     128</span>              : </span>
 <span id="L129"><span class="lineNum">     129</span> <span class="tlaGNC">           1 :     Ok(StatusCode::NO_CONTENT)</span></span>
