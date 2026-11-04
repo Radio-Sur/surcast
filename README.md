@@ -4,6 +4,10 @@ Internet radio broadcast management software.
 
 Try the [live demo](https://surcast.surradio.live/).
 
+Username: `demo`
+
+Password: `demo1234`
+
 > [!WARNING]  
 > ⚠️ Project is in early development. Expect breaking changes and incomplete features.
 
