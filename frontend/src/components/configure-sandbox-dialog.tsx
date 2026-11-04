@@ -1,12 +1,11 @@
 import Alert from "@mui/material/Alert";
+import Autocomplete from "@mui/material/Autocomplete";
 import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
-import Checkbox from "@mui/material/Checkbox";
 import Dialog from "@mui/material/Dialog";
 import DialogActions from "@mui/material/DialogActions";
 import DialogContent from "@mui/material/DialogContent";
 import DialogTitle from "@mui/material/DialogTitle";
-import FormControlLabel from "@mui/material/FormControlLabel";
 import TextField from "@mui/material/TextField";
 import Typography from "@mui/material/Typography";
 import { useMutation, useQuery } from "@tanstack/react-query";
@@ -73,7 +72,7 @@ export function ConfigureSandboxDialog({ userId, onClose }: { userId: string; on
             {t("users:sandbox_ready", { station: status.data.station, count: status.data.songs })}
           </Alert>
         )}
-        {(save.isSuccess || reset.isSuccess) && <Alert severity="success">{t("users:sandbox_saved")}</Alert>}
+        {reset.isSuccess && <Alert severity="success">{t("users:sandbox_saved")}</Alert>}
         <TextField
           select
           label={t("users:sandbox_source")}
@@ -90,24 +89,19 @@ export function ConfigureSandboxDialog({ userId, onClose }: { userId: string; on
             </option>
           ))}
         </TextField>
-        <Box>
-          <Typography variant="subtitle2">{t("users:sandbox_playlists")}</Typography>
-          {playlists?.map((playlist) => (
-            <FormControlLabel
-              key={playlist.id}
-              label={playlist.name}
-              control={
-                <Checkbox
-                  disabled={busy}
-                  checked={selected.includes(playlist.id)}
-                  onChange={(_, checked) =>
-                    setSelected((ids) => (checked ? [...ids, playlist.id] : ids.filter((id) => id !== playlist.id)))
-                  }
-                />
-              }
-            />
-          ))}
-        </Box>
+        <Autocomplete
+          multiple
+          disableCloseOnSelect
+          filterSelectedOptions
+          disabled={busy}
+          options={playlists ?? []}
+          value={(playlists ?? []).filter((playlist) => selected.includes(playlist.id))}
+          getOptionLabel={(playlist) => playlist.name}
+          getOptionKey={(playlist) => playlist.id}
+          isOptionEqualToValue={(option, value) => option.id === value.id}
+          onChange={(_, values) => setSelected(values.map((playlist) => playlist.id))}
+          renderInput={(params) => <TextField {...params} label={t("users:sandbox_playlists")} />}
+        />
         {status.data?.ready && <Alert severity="warning">{t("users:sandbox_replace_warning")}</Alert>}
         {status.data?.ready && (
           <Box>

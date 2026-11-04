@@ -31,13 +31,25 @@ fn build_response(p: &Playlist, count: i64, total_dur: i64) -> PlaylistResponse 
 }
 
 pub async fn list_playlists(
-    Extension(_auth_user): Extension<AuthUser>,
+    Extension(auth_user): Extension<AuthUser>,
     State(db): State<PgPool>,
 ) -> Result<Json<Vec<PlaylistResponse>>, AppError> {
     let playlists = repository::find_all_playlists(&db).await?;
+    let demo_owners: Vec<Uuid> = sqlx::query_scalar("SELECT id FROM users WHERE role='demo'")
+        .fetch_all(&db)
+        .await
+        .map_err(|e| AppError::internal(e.to_string()))?;
 
     let mut results = Vec::new();
     for p in playlists {
+        let visible = if auth_user.role == crate::auth::models::Role::Demo {
+            p.created_by == auth_user.id
+        } else {
+            !demo_owners.contains(&p.created_by)
+        };
+        if !visible {
+            continue;
+        }
         let (count, total_dur) = repository::playlist_song_stats(&db, p.id).await?;
         results.push(build_response(&p, count, total_dur));
     }
@@ -171,15 +183,37 @@ pub async fn list_playlist_songs(
 
 pub async fn add_playlist_songs(
     Extension(_auth_user): Extension<AuthUser>,
+    workspace: Option<Extension<Arc<crate::demo::Workspace>>>,
     State(db): State<PgPool>,
     Path(id_or_slug): Path<String>,
-    Json(req): Json<AddPlaylistSongsRequest>,
+    Json(mut req): Json<AddPlaylistSongsRequest>,
 ) -> Result<(StatusCode, Json<Vec<PlaylistSongResponse>>), AppError> {
     let id = repository::resolve_playlist_id(&db, &id_or_slug).await?;
 
     let exists = repository::playlist_exists(&db, id).await?;
     if !exists {
         return Err(AppError::not_found("Playlist not found".into()));
+    }
+
+    if let Some(Extension(workspace)) = workspace {
+        // Artist/album shortcuts must expand only within the demo's copied library.
+        for artist in req.artist_names.drain(..) {
+            let ids: Vec<Uuid> = sqlx::query_scalar("SELECT id FROM songs WHERE artist=$1 ORDER BY album,title")
+                .bind(artist)
+                .fetch_all(&workspace.db)
+                .await
+                .map_err(|e| AppError::internal(e.to_string()))?;
+            req.song_ids.extend(ids);
+        }
+        for album in req.album_selectors.drain(..) {
+            let ids: Vec<Uuid> = sqlx::query_scalar("SELECT id FROM songs WHERE artist=$1 AND album=$2 ORDER BY title")
+                .bind(album.artist)
+                .bind(album.album)
+                .fetch_all(&workspace.db)
+                .await
+                .map_err(|e| AppError::internal(e.to_string()))?;
+            req.song_ids.extend(ids);
+        }
     }
 
     let mut tx = db.begin().await.map_err(|e| AppError::internal(e.to_string()))?;

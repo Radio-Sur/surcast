@@ -8,12 +8,18 @@ beforeEach(() => {
   setupAuth();
   server.use(
     http.get("/api/stations", () => HttpResponse.json([{ id: "source", name: "Source station" }])),
-    http.get("/api/playlists", () => HttpResponse.json([{ id: "playlist", name: "Source playlist" }])),
+    http.get("/api/playlists", () =>
+      HttpResponse.json([
+        { id: "playlist", name: "Source playlist" },
+        { id: "second", name: "Second playlist" },
+        { id: "other", name: "Other music" },
+      ]),
+    ),
     http.get("/api/users/demo/sandbox", () => HttpResponse.json({ ready: true, station: "Demo station", songs: 3 })),
   );
 });
 
-it("prepares independent copies from the selected station and playlists", async () => {
+it("assigns a shared station and searches and selects multiple playlists without checkboxes", async () => {
   const submitted = vi.fn();
   server.use(
     http.post("/api/users/demo/sandbox", async ({ request }) => {
@@ -25,9 +31,18 @@ it("prepares independent copies from the selected station and playlists", async 
   const user = userEvent.setup();
   await screen.findByRole("option", { name: "Source station" });
   await user.selectOptions(screen.getByLabelText("Source station"), "source");
-  await user.click(await screen.findByLabelText("Source playlist"));
+  const picker = screen.getByRole("combobox", { name: "Playlists to copy" });
+  await user.type(picker, "Source");
+  expect(screen.queryByRole("option", { name: "Other music" })).not.toBeInTheDocument();
+  await user.click(await screen.findByRole("option", { name: "Source playlist" }));
+  await user.type(picker, "Second");
+  await user.click(await screen.findByRole("option", { name: "Second playlist" }));
+  expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
+  await user.keyboard("{Escape}");
   await user.click(screen.getByRole("button", { name: "Prepare sandbox" }));
-  await waitFor(() => expect(submitted).toHaveBeenCalledWith({ station_id: "source", playlist_ids: ["playlist"] }));
+  await waitFor(() =>
+    expect(submitted).toHaveBeenCalledWith({ station_id: "source", playlist_ids: ["playlist", "second"] }),
+  );
 });
 
 it("requires confirmation before resetting guest changes", async () => {

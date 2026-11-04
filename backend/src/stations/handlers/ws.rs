@@ -108,13 +108,13 @@ pub async fn global_ws(
 
 async fn handle_connection(
     socket: WebSocket,
-    mut db: PgPool,
-    mut streamers: StreamersMap,
-    mut lifecycle: Arc<StationLifecycleLocks>,
-    mut music_dir: String,
+    db: PgPool,
+    streamers: StreamersMap,
+    lifecycle: Arc<StationLifecycleLocks>,
+    music_dir: String,
     jwt_secret: String,
     token_from_query: Option<String>,
-    mut listeners: Arc<ListenersState>,
+    listeners: Arc<ListenersState>,
     state: crate::api::router::AppState,
 ) {
     let (mut sender, mut receiver) = socket.split();
@@ -141,12 +141,6 @@ async fn handle_connection(
                 let Ok(workspace) = crate::demo::workspace(&state, user.id).await else {
                     return;
                 };
-                let scoped = crate::demo::scoped(&state, user.id, &workspace);
-                db = scoped.db;
-                streamers = scoped.streamers;
-                lifecycle = scoped.lifecycle;
-                music_dir = scoped.config.music_dir;
-                listeners = scoped.listeners;
                 demo_cancel = Some(workspace.cancelled.subscribe());
                 demo_workspace = Some(workspace);
             }
@@ -159,7 +153,8 @@ async fn handle_connection(
 
     let (out_tx, out_rx) = mpsc::unbounded_channel();
     let mut send_task = tokio::spawn(ws_send_task(sender, out_rx));
-    let mut listeners_task = tokio::spawn(forward_listeners(listeners, out_tx.clone()));
+    let station_filter = demo_workspace.as_ref().map(|workspace| workspace.station_id);
+    let mut listeners_task = tokio::spawn(forward_listeners(listeners, out_tx.clone(), station_filter));
     let auth_db = state.auth_db.clone();
     let session_token = token.clone();
     let mut recv_task = tokio::spawn(ws_recv_task(
@@ -293,12 +288,15 @@ async fn ws_send_task(mut sender: SplitSink<WebSocket, Message>, mut out_rx: mps
 /// Subscribing before reading the cache closes the reconnect race: updates
 /// published during the snapshot read remain queued. Timestamps suppress any
 /// queued update already represented by that snapshot.
-async fn forward_listeners(listeners: Arc<ListenersState>, out_tx: mpsc::UnboundedSender<Outbound>) {
+async fn forward_listeners(listeners: Arc<ListenersState>, out_tx: mpsc::UnboundedSender<Outbound>, station_filter: Option<Uuid>) {
     let mut rx = listeners.subscribe();
     let snapshot = listeners.live_all().await;
     let mut latest = HashMap::with_capacity(snapshot.len());
 
     for (station_id, live) in snapshot {
+        if station_filter.is_some_and(|id| id != station_id) {
+            continue;
+        }
         latest.insert(station_id, live.updated_at);
         if out_tx
             .send(Outbound::Listeners {
@@ -316,6 +314,9 @@ async fn forward_listeners(listeners: Arc<ListenersState>, out_tx: mpsc::Unbound
     loop {
         match rx.recv().await {
             Ok(update) => {
+                if station_filter.is_some_and(|id| id != update.station_id) {
+                    continue;
+                }
                 if latest
                     .get(&update.station_id)
                     .is_some_and(|updated_at| *updated_at >= update.updated_at)
@@ -395,6 +396,27 @@ async fn ws_recv_task(
                 continue;
             }
         };
+
+        if let Some(workspace) = &demo_workspace {
+            let station = match &cmd {
+                Inbound::Auth { .. } => None,
+                Inbound::Subscribe { station_id }
+                | Inbound::Unsubscribe { station_id }
+                | Inbound::Skip { station_id }
+                | Inbound::Play { station_id }
+                | Inbound::Pause { station_id } => Some(station_id),
+            };
+            if let Some(station) = station {
+                if !resolve_station_id(&db, station).await.is_ok_and(|id| id == workspace.station_id) {
+                    let _ = out_tx.send(Outbound::Error {
+                        station_id: None,
+                        code: "NOT_FOUND",
+                        data: "unknown station".into(),
+                    });
+                    continue;
+                }
+            }
+        }
 
         match cmd {
             Inbound::Auth { token } => {

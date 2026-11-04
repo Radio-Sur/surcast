@@ -93,6 +93,21 @@ async fn test_insert_and_find_playlist(db: PgPool) {
     assert_eq!(pl.created_by, user_id);
     assert_eq!(pl.slug, Some("my-playlist".to_string()));
 }
+
+#[sqlx::test(migrations = "./migrations")]
+async fn source_playlist_slug_is_not_shadowed_by_a_demo_copy(db: PgPool) {
+    let demo = Uuid::new_v4();
+    auth_repo::insert_user(&db, demo, "demo", "hash", &Role::Demo).await.unwrap();
+    repository::insert_playlist(&db, Uuid::new_v4(), "Demo copy", "", "same-slug", demo)
+        .await
+        .unwrap();
+    let admin = make_user(&db).await;
+    let source = Uuid::new_v4();
+    repository::insert_playlist(&db, source, "Original", "", "same-slug", admin)
+        .await
+        .unwrap();
+    assert_eq!(repository::resolve_playlist_id(&db, "same-slug").await.unwrap(), source);
+}
 #[ignore]
 #[sqlx::test(migrations = "./migrations")]
 async fn test_find_all_playlists(db: PgPool) {

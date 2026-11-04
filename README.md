@@ -2,6 +2,8 @@
 
 Internet radio broadcast management software.
 
+Try the [live demo](https://surcast.surradio.live/).
+
 > [!WARNING]  
 > ⚠️ Project is in early development. Expect breaking changes and incomplete features.
 

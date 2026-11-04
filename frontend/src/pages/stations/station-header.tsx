@@ -47,12 +47,15 @@ export function StationHeader({
                   : t("stations:stream_status_stopped")
             }
             size="small"
+            color={playing ? "success" : "default"}
             variant={playing ? "filled" : "outlined"}
-            sx={
-              playing
-                ? { bgcolor: "success.main", color: "success.contrastText", fontWeight: 700, alignSelf: "center" }
-                : { alignSelf: "center" }
-            }
+            sx={(theme) => ({
+              alignSelf: "center",
+              color: theme.palette.getContrastText(
+                playing ? theme.palette.success.light : theme.palette.background.paper,
+              ),
+              ...(playing && { bgcolor: theme.palette.success.light, fontWeight: 700 }),
+            })}
           />
         </Box>
         <Typography variant="body2" color="text.secondary" sx={{ mt: 0.25 }}>

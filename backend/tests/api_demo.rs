@@ -21,9 +21,14 @@ async fn ws_json(socket: &mut axum_test::TestWebSocket) -> Value {
 }
 
 #[sqlx::test(migrations = "./migrations")]
-async fn demo_files_are_limited_to_playlists(pool: PgPool) {
+async fn demo_files_include_the_entire_station_library_and_selected_playlists(pool: PgPool) {
     let config = api_common::test_config();
-    for path in ["Included/visible.mp3", "Excluded/hidden.mp3"] {
+    for path in [
+        "Included/visible.mp3",
+        "Excluded/hidden.mp3",
+        "Outside/other.mp3",
+        "PlaylistOnly/extra.mp3",
+    ] {
         let path = std::path::Path::new(&config.music_dir).join(path);
         tokio::fs::create_dir_all(path.parent().unwrap()).await.unwrap();
         tokio::fs::write(path, b"audio").await.unwrap();
@@ -77,6 +82,24 @@ async fn demo_files_are_limited_to_playlists(pool: PgPool) {
         .execute(&pool)
         .await
         .unwrap();
+    let extra = Uuid::new_v4();
+    sqlx::query("INSERT INTO songs(id,title,file_path) VALUES($1,'Playlist only','PlaylistOnly/extra.mp3')")
+        .bind(extra)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let second_playlist = Uuid::new_v4();
+    sqlx::query("INSERT INTO playlists(id,name,created_by) VALUES($1,'Second',(SELECT id FROM users WHERE username='admin'))")
+        .bind(second_playlist)
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO playlist_songs(playlist_id,song_id) VALUES($1,$2)")
+        .bind(second_playlist)
+        .bind(extra)
+        .execute(&pool)
+        .await
+        .unwrap();
     let user: Value = server
         .post("/api/users")
         .add_header("Authorization", &auth)
@@ -87,7 +110,7 @@ async fn demo_files_are_limited_to_playlists(pool: PgPool) {
     let prepared = server
         .post(&format!("/api/users/{user}/sandbox"))
         .add_header("Authorization", &auth)
-        .json(&json!({"station_id":station,"playlist_ids":[playlist]}))
+        .json(&json!({"station_id":station,"playlist_ids":[playlist,second_playlist]}))
         .await;
     assert_eq!(prepared.status_code(), 200, "{}", prepared.text());
     let login: Value = server
@@ -96,6 +119,37 @@ async fn demo_files_are_limited_to_playlists(pool: PgPool) {
         .await
         .json();
     let demo = format!("Bearer {}", login["access_token"].as_str().unwrap());
+    let copies: Vec<Value> = server.get("/api/playlists").add_header("Authorization", &demo).await.json();
+    assert_eq!(copies.len(), 2);
+    assert!(copies
+        .iter()
+        .all(|p| p["id"] != playlist.to_string() && p["id"] != second_playlist.to_string()));
+    for source in [playlist, second_playlist] {
+        server
+            .get(&format!("/api/playlists/{source}"))
+            .add_header("Authorization", &demo)
+            .await
+            .assert_status_not_found();
+    }
+    let copy = copies.iter().find(|p| p["name"] == "Selected").unwrap()["id"].as_str().unwrap();
+    server
+        .put(&format!("/api/playlists/{copy}"))
+        .add_header("Authorization", &demo)
+        .json(&json!({"name":"Guest edit"}))
+        .await
+        .assert_status_ok();
+    let original: Value = server
+        .get(&format!("/api/playlists/{playlist}"))
+        .add_header("Authorization", &auth)
+        .await
+        .json();
+    assert_eq!(original["name"], "Selected");
+    server
+        .put(&format!("/api/stations/{station}/auto-fill"))
+        .add_header("Authorization", &demo)
+        .json(&json!({"source_playlist_id":playlist}))
+        .await
+        .assert_status_not_found();
 
     let root: Value = server.get("/api/files").add_header("Authorization", &demo).await.json();
     let folders: Vec<&str> = root["folders"]
@@ -104,7 +158,7 @@ async fn demo_files_are_limited_to_playlists(pool: PgPool) {
         .iter()
         .map(|folder| folder["name"].as_str().unwrap())
         .collect();
-    assert_eq!(folders, ["Included"]);
+    assert_eq!(folders, ["Excluded", "Included", "PlaylistOnly"]);
     assert!(root["files"].as_array().unwrap().is_empty());
     let included: Value = server
         .get("/api/files?path=Included")
@@ -115,13 +169,21 @@ async fn demo_files_are_limited_to_playlists(pool: PgPool) {
     assert_eq!(files.len(), 1);
     assert_eq!(files[0]["name"], "visible.mp3");
     assert_eq!(files[0]["song"]["title"], "Included/visible.mp3");
-    server
+    let excluded: Value = server
         .get("/api/files?path=Excluded")
+        .add_header("Authorization", &demo)
+        .await
+        .json();
+    assert_eq!(excluded["files"][0]["name"], "hidden.mp3");
+    server
+        .get("/api/files?path=Outside")
         .add_header("Authorization", &demo)
         .await
         .assert_status_not_found();
     let folders: Vec<String> = server.get("/api/files/folders").add_header("Authorization", &demo).await.json();
-    assert_eq!(folders, ["Included"]);
+    assert_eq!(folders, ["Excluded", "Included", "PlaylistOnly"]);
+    let library: Vec<Value> = server.get("/api/songs").add_header("Authorization", &demo).await.json();
+    assert_eq!(library.len(), 3);
 
     // The same sandbox on the admin account remains unrestricted.
     let root: Value = server.get("/api/files").add_header("Authorization", &auth).await.json();
@@ -131,11 +193,11 @@ async fn demo_files_are_limited_to_playlists(pool: PgPool) {
         .iter()
         .map(|folder| folder["name"].as_str().unwrap())
         .collect();
-    assert_eq!(folders, ["Excluded", "Included"]);
+    assert_eq!(folders, ["Excluded", "Included", "Outside", "PlaylistOnly"]);
 }
 
 #[sqlx::test(migrations = "./migrations")]
-async fn sandbox_isolated_configured_and_reset(pool: PgPool) {
+async fn sandbox_shares_the_station_but_keeps_private_playlists_and_audio(pool: PgPool) {
     let config = api_common::test_config();
     let source_path = "Rock/Artist - Track.mp3";
     tokio::fs::create_dir_all(std::path::Path::new(&config.music_dir).join("Rock"))
@@ -165,8 +227,22 @@ async fn sandbox_isolated_configured_and_reset(pool: PgPool) {
         .await
         .json();
     let station: Uuid = source["id"].as_str().unwrap().parse().unwrap();
+    let other_station: Value = server
+        .post("/api/stations")
+        .add_header("Authorization", &auth)
+        .json(&json!({"name":"Unassigned station"}))
+        .await
+        .json();
+    let other_station = other_station["id"].as_str().unwrap();
+    let other_station_id: Uuid = other_station.parse().unwrap();
+    let outside = Uuid::new_v4();
+    sqlx::query("INSERT INTO songs(id,title,file_path,artist,album) VALUES($1,'Outside song','outside.mp3','Artist','Album')")
+        .bind(outside)
+        .execute(&pool)
+        .await
+        .unwrap();
     let song = Uuid::new_v4();
-    sqlx::query("INSERT INTO songs(id,title,file_path) VALUES($1,'Original song',$2)")
+    sqlx::query("INSERT INTO songs(id,title,file_path,artist,album) VALUES($1,'Original song',$2,'Artist','Album')")
         .bind(song)
         .bind(source_path)
         .execute(&pool)
@@ -205,6 +281,21 @@ async fn sandbox_isolated_configured_and_reset(pool: PgPool) {
         demos.push((user, format!("Bearer {}", login["access_token"].as_str().unwrap())));
     }
     let (user, demo) = &demos[0];
+    sqlx::query("UPDATE stations SET is_started=true WHERE id=$1")
+        .bind(station)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let private_playlist: Value = server.get("/api/playlists/demo").add_header("Authorization", demo).await.json();
+    let other_private: Value = server
+        .get("/api/playlists/demo")
+        .add_header("Authorization", &demos[1].1)
+        .await
+        .json();
+    assert_ne!(
+        private_playlist["id"], other_private["id"],
+        "identical private slugs must resolve within each demo account"
+    );
     let other: Vec<Value> = server.get("/api/stations").add_header("Authorization", &demos[1].1).await.json();
     let list = server.get("/api/stations").add_header("Authorization", demo).await;
     assert_eq!(list.status_code(), 200, "{}", list.text());
@@ -212,10 +303,16 @@ async fn sandbox_isolated_configured_and_reset(pool: PgPool) {
     assert_eq!(list.len(), 1);
     let demo_station = list[0]["id"].as_str().unwrap();
     assert_eq!(list[0]["stream_url"], "configured-radio.mp3");
-    let demo_mount = list[0]["output_mount"].as_str().unwrap();
-    assert!(demo_mount.starts_with("demo-"));
-    assert_ne!(demo_mount, "configured-radio.mp3");
-    assert_ne!(list[0]["output_mount"], other[0]["output_mount"]);
+    assert_eq!(list[0]["id"], source["id"]);
+    assert_eq!(list[0]["slug"], source["slug"]);
+    assert_eq!(list[0]["output_mount"], source["output_mount"]);
+    assert_eq!(list[0]["id"], other[0]["id"]);
+    let started: bool = sqlx::query_scalar("SELECT is_started FROM stations WHERE id=$1")
+        .bind(station)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert!(started, "opening demo must not stop the shared station");
     let demo_slug = list[0]["slug"].clone();
     let settings = server.put(&format!("/api/stations/{demo_station}")).add_header("Authorization", demo)
         .json(&json!({"prebuffer_bytes":32768,"played_limit":200,"default_fade_ms":4000,"transition_mode":"crossfade","autocue_fade_max_ms":6000})).await;
@@ -245,7 +342,7 @@ async fn sandbox_isolated_configured_and_reset(pool: PgPool) {
         .add_header("Authorization", &auth)
         .await
         .json();
-    assert_eq!(root["prebuffer_bytes"], 16384);
+    assert_eq!(root["prebuffer_bytes"], 32768);
     assert_eq!(root["stream_url"], "configured-radio.mp3");
     let settings = server.get("/api/admin/icecast").add_header("Authorization", demo).await;
     assert_eq!(settings.status_code(), 200, "{}", settings.text());
@@ -256,9 +353,9 @@ async fn sandbox_isolated_configured_and_reset(pool: PgPool) {
     assert!(settings["settings"]["external_admin_pw"].is_null());
     assert_eq!(settings["settings"]["external_url"], "http://example.com:8000/");
     assert!(!settings.to_string().contains("secret"));
-    assert_ne!(demo_station, station.to_string());
+    assert_eq!(demo_station, station.to_string());
     server
-        .get(&format!("/api/stations/{station}"))
+        .get(&format!("/api/stations/{other_station}"))
         .add_header("Authorization", demo)
         .await
         .assert_status_not_found();
@@ -266,12 +363,12 @@ async fn sandbox_isolated_configured_and_reset(pool: PgPool) {
         .get(&format!("/api/stations/{demo_station}"))
         .add_header("Authorization", &demos[1].1)
         .await
-        .assert_status_not_found();
+        .assert_status_ok();
     let songs: Value = server.get("/api/songs").add_header("Authorization", demo).await.json();
     let songs = songs.as_array().or_else(|| songs["songs"].as_array()).unwrap();
     assert_eq!(songs.len(), 1);
     let copied_song = songs[0]["id"].as_str().unwrap();
-    assert_ne!(copied_song, song.to_string());
+    assert_eq!(copied_song, song.to_string());
     assert_eq!(songs[0]["file_path"], source_path);
     let details: Value = server
         .get(&format!("/api/songs/{copied_song}/details"))
@@ -282,7 +379,7 @@ async fn sandbox_isolated_configured_and_reset(pool: PgPool) {
     let foreign_song = server
         .post(&format!("/api/stations/{demo_station}/queue"))
         .add_header("Authorization", demo)
-        .json(&json!({"song_ids":[song]}))
+        .json(&json!({"song_ids":[outside]}))
         .await;
     assert_eq!(foreign_song.status_code(), 400);
     let audio = server
@@ -292,7 +389,7 @@ async fn sandbox_isolated_configured_and_reset(pool: PgPool) {
     assert_eq!(audio.status_code(), 200);
     assert_eq!(audio.as_bytes().as_ref(), b"original-audio");
     server
-        .get(&format!("/api/songs/{song}/file"))
+        .get(&format!("/api/songs/{outside}/file"))
         .add_header("Authorization", demo)
         .await
         .assert_status_not_found();
@@ -332,13 +429,78 @@ async fn sandbox_isolated_configured_and_reset(pool: PgPool) {
         .json(&json!({"name":"Guest playlist"}))
         .await;
     assert_eq!(playlist.status_code(), 201, "{}", playlist.text());
+    let guest_playlist = playlist.json::<Value>()["id"].as_str().unwrap().to_owned();
+    let admin_playlists: Vec<Value> = server.get("/api/playlists").add_header("Authorization", &auth).await.json();
+    assert!(admin_playlists.is_empty(), "demo playlists stay out of the main account's picker");
+    server
+        .get(&format!("/api/playlists/{guest_playlist}"))
+        .add_header("Authorization", &demos[1].1)
+        .await
+        .assert_status_not_found();
+    let response = server
+        .post(&format!("/api/playlists/{guest_playlist}/songs"))
+        .add_header("Authorization", demo)
+        .json(&json!({"artist_names":["Artist"],"album_selectors":[{"artist":"Artist","album":"Album"}]}))
+        .await;
+    assert_eq!(response.status_code(), 201, "{}", response.text());
+    let entries = response.json::<Vec<Value>>();
     assert_eq!(
-        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM playlists")
-            .fetch_one(&pool)
-            .await
-            .unwrap(),
-        0
+        entries.len(),
+        1,
+        "artist/album expansion must not include songs outside the demo library"
     );
+    assert_eq!(entries[0]["song_id"], song.to_string());
+    let response = server
+        .post(&format!("/api/playlists/{guest_playlist}/add-to-queue/{station}"))
+        .add_header("Authorization", demo)
+        .await;
+    assert_eq!(response.status_code(), 201, "{}", response.text());
+    let main_queue: Vec<Value> = server
+        .get(&format!("/api/stations/{station}/queue"))
+        .add_header("Authorization", &auth)
+        .await
+        .json();
+    assert_eq!(main_queue.len(), 1);
+    assert_eq!(main_queue[0]["song_id"], song.to_string());
+    let foreign_queue = Uuid::new_v4();
+    sqlx::query("INSERT INTO station_queue(id,station_id,song_id,position) VALUES($1,$2,$3,42)")
+        .bind(foreign_queue)
+        .bind(other_station_id)
+        .bind(outside)
+        .execute(&pool)
+        .await
+        .unwrap();
+    server
+        .put(&format!("/api/stations/{station}/queue/reorder"))
+        .add_header("Authorization", demo)
+        .json(&json!({"queue_item_ids":[foreign_queue]}))
+        .await
+        .assert_status_not_found();
+    let position: i32 = sqlx::query_scalar("SELECT position FROM station_queue WHERE id=$1")
+        .bind(foreign_queue)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(position, 42);
+    server
+        .post(&format!("/api/playlists/{guest_playlist}/add-to-queue/{other_station}"))
+        .add_header("Authorization", demo)
+        .await
+        .assert_status_not_found();
+    let foreign_event = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO station_schedule_events(id,station_id,start_date,start_time,end_time) VALUES($1,$2,'2030-01-01','08:00','09:00')",
+    )
+    .bind(foreign_event)
+    .bind(other_station_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    server
+        .delete(&format!("/api/stations/{station}/schedule-events/{foreign_event}"))
+        .add_header("Authorization", demo)
+        .await
+        .assert_status_not_found();
     let auto_fill = format!("/api/stations/{demo_station}/auto-fill");
     let response = server.get(&auto_fill).add_header("Authorization", demo).await;
     assert_eq!(response.json::<Value>()["avoid_artist_repeat"], false);
@@ -381,7 +543,7 @@ async fn sandbox_isolated_configured_and_reset(pool: PgPool) {
             .add_header("Authorization", demo)
             .await
             .assert_status_no_content();
-        // Leave a guest entry to verify reset removes it as well.
+        // Leave a shared entry to verify reset preserves it.
         let response = server.post(&path).add_header("Authorization", demo).json(&body).await;
         assert_eq!(response.status_code(), 201, "{}", response.text());
     }
@@ -390,14 +552,14 @@ async fn sandbox_isolated_configured_and_reset(pool: PgPool) {
             .fetch_one(&pool)
             .await
             .unwrap(),
-        0
+        2
     );
     assert_eq!(
         sqlx::query_scalar::<_, i64>("SELECT count(*) FROM station_schedules")
             .fetch_one(&pool)
             .await
             .unwrap(),
-        0
+        1
     );
     assert!(
         !sqlx::query_scalar::<_, bool>("SELECT avoid_artist_repeat FROM station_auto_fill WHERE station_id=$1")
@@ -412,22 +574,44 @@ async fn sandbox_isolated_configured_and_reset(pool: PgPool) {
         .await;
     let message = ws_json(&mut socket).await;
     assert_eq!(message["type"], "auth_ok");
-    socket.send_json(&json!({"type":"subscribe","station_id":station})).await;
+    socket.send_json(&json!({"type":"subscribe","station_id":other_station})).await;
     let message = ws_json(&mut socket).await;
     assert_eq!(message["type"], "error");
     assert_eq!(message["data"], "unknown station");
     socket.send_json(&json!({"type":"subscribe","station_id":demo_station})).await;
-    // A stopped sandbox still emits its own queue snapshot, not real data.
+    // Demo and admin observe the very same station queue and lifecycle.
     let mut saw_queue = false;
     for _ in 0..3 {
         let message = ws_json(&mut socket).await;
         assert_eq!(message["station_id"], demo_station);
         if message["type"] == "queue_update" {
+            assert!(message.to_string().contains(&song.to_string()));
             saw_queue = true;
             break;
         }
     }
     assert!(saw_queue);
+    sqlx::query("UPDATE stations SET is_started=true WHERE id=$1")
+        .bind(station)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let stopped = server
+        .post(&format!("/api/stations/{station}/stream/stop"))
+        .add_header("Authorization", demo)
+        .await;
+    assert_eq!(stopped.status_code(), 200, "{}", stopped.text());
+    let started: bool = sqlx::query_scalar("SELECT is_started FROM stations WHERE id=$1")
+        .bind(station)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert!(!started, "demo Stop controls the real station");
+    sqlx::query("UPDATE stations SET is_started=true WHERE id=$1")
+        .bind(station)
+        .execute(&pool)
+        .await
+        .unwrap();
     let response = server
         .post(&format!("/api/users/{user}/sandbox/reset"))
         .add_header("Authorization", &auth)
@@ -442,19 +626,25 @@ async fn sandbox_isolated_configured_and_reset(pool: PgPool) {
         .await
         .json();
     assert_eq!(restored["stream_url"], "configured-radio.mp3");
-    assert_ne!(restored["output_mount"], list[0]["output_mount"]);
-    assert_eq!(restored["prebuffer_bytes"], 16384);
+    assert_eq!(restored["output_mount"], list[0]["output_mount"]);
+    assert_eq!(restored["prebuffer_bytes"], 32768);
+    let started: bool = sqlx::query_scalar("SELECT is_started FROM stations WHERE id=$1")
+        .bind(station)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert!(started, "reset must not stop the real station");
     for resource in ["schedule-events", "schedules"] {
         let items: Vec<Value> = server
             .get(&format!("/api/stations/{demo_station}/{resource}"))
             .add_header("Authorization", demo)
             .await
             .json();
-        assert!(items.is_empty());
+        assert_eq!(items.len(), 1, "reset must not erase shared station schedules");
     }
     let response = server.get(&auto_fill).add_header("Authorization", demo).await;
     assert_eq!(response.json::<Value>()["avoid_artist_repeat"], false);
-    assert_eq!(response.json::<Value>()["songs_ahead"], 4);
+    assert_eq!(response.json::<Value>()["songs_ahead"], 8);
     let queue: Vec<Value> = server
         .get(&format!("/api/stations/{demo_station}/queue"))
         .add_header("Authorization", demo)
@@ -491,7 +681,7 @@ async fn sandbox_isolated_configured_and_reset(pool: PgPool) {
             .fetch_one(&pool)
             .await
             .unwrap(),
-        1
+        2
     );
     // Replacing a seed retires its audio without touching other sandboxes.
     let old_library: String = sqlx::query_scalar("SELECT seed->>'library_id' FROM demo_sandboxes WHERE user_id=$1")
@@ -527,12 +717,24 @@ async fn sandbox_isolated_configured_and_reset(pool: PgPool) {
         .add_header("Authorization", &demos[1].1)
         .await;
     assert_eq!(other_audio.as_bytes().as_ref(), b"original-audio");
-    // Deleting a demo account also retires its isolated output/schema.
+    // Deleting a demo account retires only its private state, never the shared station.
     server
         .delete(&format!("/api/users/{user}"))
         .add_header("Authorization", &auth)
         .await
         .assert_status_no_content();
+    let main_station: Value = server
+        .get(&format!("/api/stations/{station}"))
+        .add_header("Authorization", &auth)
+        .await
+        .json();
+    let started: bool = sqlx::query_scalar("SELECT is_started FROM stations WHERE id=$1")
+        .bind(station)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert!(started, "retiring demo must not stop the real station");
+    assert_eq!(main_station["prebuffer_bytes"], 32768);
     assert_eq!(
         sqlx::query_scalar::<_, i64>("SELECT count(*) FROM pg_namespace WHERE nspname LIKE 'demo_%'")
             .fetch_one(&pool)
@@ -545,4 +747,107 @@ async fn sandbox_isolated_configured_and_reset(pool: PgPool) {
         .add_header("Authorization", demo)
         .await
         .assert_status_unauthorized();
+    // Legacy isolated seeds need explicit re-provisioning, not an accidental
+    // match by station name or mount that could grant the wrong station.
+    let remaining = &demos[1].0;
+    sqlx::query("UPDATE demo_sandboxes SET seed=seed-'station_id' WHERE user_id=$1")
+        .bind(remaining.parse::<Uuid>().unwrap())
+        .execute(&pool)
+        .await
+        .unwrap();
+    let status: Value = server
+        .get(&format!("/api/users/{remaining}/sandbox"))
+        .add_header("Authorization", &auth)
+        .await
+        .json();
+    assert_eq!(status["ready"], false);
+    let login = server
+        .post("/api/auth/login")
+        .json(&json!({"username":"demo-two","password":"password123"}))
+        .await;
+    assert_eq!(login.status_code(), 403);
+    assert_eq!(login.json::<Value>()["code"], "DEMO_NOT_READY");
+    server
+        .post(&format!("/api/users/{remaining}/sandbox"))
+        .add_header("Authorization", &auth)
+        .json(&json!({"station_id":station}))
+        .await
+        .assert_status_ok();
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn demo_copies_more_than_1000_station_songs_without_cloning_the_station(pool: PgPool) {
+    let config = api_common::test_config();
+    tokio::fs::create_dir_all(&config.music_dir).await.unwrap();
+    tokio::fs::write(std::path::Path::new(&config.music_dir).join("shared.mp3"), b"audio")
+        .await
+        .unwrap();
+    let server = TestServer::new(api_common::create_test_app_with_config(pool.clone(), config));
+    server
+        .post("/api/setup/init")
+        .json(&json!({"username":"admin","password":"password123"}))
+        .await
+        .assert_status(axum::http::StatusCode::CREATED);
+    let login: Value = server
+        .post("/api/auth/login")
+        .json(&json!({"username":"admin","password":"password123"}))
+        .await
+        .json();
+    let auth = format!("Bearer {}", login["access_token"].as_str().unwrap());
+    let station: Value = server
+        .post("/api/stations")
+        .add_header("Authorization", &auth)
+        .json(&json!({"name":"Large library"}))
+        .await
+        .json();
+    let station_id: Uuid = station["id"].as_str().unwrap().parse().unwrap();
+    sqlx::query("INSERT INTO songs(title,file_path) SELECT 'Track '||n, 'shared.mp3' FROM generate_series(1,1001) n")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO station_songs(station_id,song_id) SELECT $1,id FROM songs")
+        .bind(station_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let demo: Value = server
+        .post("/api/users")
+        .add_header("Authorization", &auth)
+        .json(&json!({"username":"demo","password":"password123","role":"demo"}))
+        .await
+        .json();
+    let user = demo["id"].as_str().unwrap();
+    let prepared = server
+        .post(&format!("/api/users/{user}/sandbox"))
+        .add_header("Authorization", &auth)
+        .json(&json!({"station_id":station_id}))
+        .await;
+    assert_eq!(prepared.status_code(), 200, "{}", prepared.text());
+    assert_eq!(prepared.json::<Value>()["songs"], 1001);
+    let generation: Uuid = sqlx::query_scalar("SELECT generation FROM demo_sandboxes WHERE user_id=$1")
+        .bind(user.parse::<Uuid>().unwrap())
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let relation: String = sqlx::query_scalar(
+        "SELECT c.relkind::text FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=$1 AND c.relname='stations'",
+    )
+    .bind(format!("demo_{}", generation.simple()))
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        relation, "v",
+        "the sandbox references the real station through a view, never a copied row"
+    );
+    let station_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM stations").fetch_one(&pool).await.unwrap();
+    assert_eq!(station_count, 1);
+    let queue_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM station_queue")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        queue_count, 0,
+        "provisioning must not populate or otherwise change the shared queue"
+    );
 }

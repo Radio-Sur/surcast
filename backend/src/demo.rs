@@ -1,5 +1,4 @@
-//! Sandbox control plane. Data-plane handlers run unchanged against a dedicated
-//! pool whose search_path contains ONLY the sandbox schema (never public).
+//! Demo libraries are private copies; the assigned station and its runtime are shared.
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -39,16 +38,6 @@ impl Registry {
             if let Some(workspace) = guard.take() {
                 let _operations = workspace.gate.write().await;
                 workspace.cancelled.send_replace(true);
-                let active: Vec<_> = workspace
-                    .streamers
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .drain()
-                    .map(|(_, streamer)| streamer)
-                    .collect();
-                for streamer in active {
-                    streamer.shutdown().await;
-                }
                 workspace.db.close().await;
             }
         }
@@ -58,12 +47,10 @@ impl Registry {
 pub struct Workspace {
     pub gate: Arc<RwLock<()>>,
     pub generation: Uuid,
+    pub station_id: Uuid,
     pub db: PgPool,
     pub music_dir: String,
     pub cancelled: watch::Sender<bool>,
-    pub streamers: crate::api::StreamersMap,
-    pub lifecycle: Arc<crate::stations::handlers::stream::StationLifecycleLocks>,
-    pub listeners: Arc<crate::listeners::ListenersState>,
 }
 
 fn schema(generation: Uuid) -> String {
@@ -81,11 +68,13 @@ pub fn unavailable() -> AppError {
 }
 
 pub async fn ready(db: &PgPool, user: Uuid) -> Result<bool, AppError> {
-    sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM demo_sandboxes WHERE user_id=$1 AND ready)")
-        .bind(user)
-        .fetch_one(db)
-        .await
-        .db_error("check demo readiness")
+    sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM demo_sandboxes d JOIN stations s ON s.id=(d.seed->>'station_id')::uuid WHERE user_id=$1 AND ready)",
+    )
+    .bind(user)
+    .fetch_one(db)
+    .await
+    .db_error("check demo readiness")
 }
 
 async fn open_pool(state: &AppState, generation: Uuid) -> Result<PgPool, AppError> {
@@ -105,13 +94,13 @@ async fn open_pool(state: &AppState, generation: Uuid) -> Result<PgPool, AppErro
 pub async fn workspace(state: &AppState, user: Uuid) -> Result<Arc<Workspace>, AppError> {
     let slot = state.demos.slot(user).await;
     let mut guard = slot.write().await;
-    let stored: Option<(Uuid, Option<String>)> =
-        sqlx::query_as("SELECT generation, seed->>'library_id' FROM demo_sandboxes WHERE user_id=$1 AND ready")
+    let stored: Option<(Uuid, Option<String>, Uuid)> =
+        sqlx::query_as("SELECT generation, seed->>'library_id', (seed->>'station_id')::uuid FROM demo_sandboxes WHERE user_id=$1 AND ready AND seed ? 'station_id'")
             .bind(user)
             .fetch_optional(&state.auth_db)
             .await
             .db_error("load sandbox")?;
-    let (generation, library_id) =
+    let (generation, library_id, station_id) =
         stored.ok_or_else(|| AppError::forbidden("Demo sandbox is not yet configured".into()).with_code("DEMO_NOT_READY"))?;
     if let Some(current) = guard.as_ref().filter(|w| w.generation == generation) {
         return Ok(current.clone());
@@ -124,22 +113,14 @@ pub async fn workspace(state: &AppState, user: Uuid) -> Result<Arc<Workspace>, A
             .map_err(|_| AppError::internal("Invalid sandbox library identifier".into()))?;
         library_dir.push(library_id.to_string());
     }
-    // A sandbox does not auto-broadcast after a server restart. Only a guest's
-    // explicit Play starts its isolated output again.
-    sqlx::query("UPDATE stations SET is_started=false")
-        .execute(&db)
-        .await
-        .db_error("initialize demo playback")?;
     let (cancelled, _) = watch::channel(false);
     let result = Arc::new(Workspace {
         gate: Arc::new(RwLock::new(())),
         generation,
+        station_id,
         db,
         music_dir: library_dir.to_string_lossy().into_owned(),
         cancelled,
-        streamers: Arc::new(std::sync::Mutex::new(HashMap::new())),
-        lifecycle: Arc::new(Default::default()),
-        listeners: crate::listeners::ListenersState::new(),
     });
     *guard = Some(result.clone());
     Ok(result)
@@ -149,9 +130,6 @@ pub fn scoped(state: &AppState, user: Uuid, workspace: &Workspace) -> AppState {
     let mut state = state.clone();
     state.db = workspace.db.clone();
     state.config.music_dir = workspace.music_dir.clone();
-    state.streamers = workspace.streamers.clone();
-    state.lifecycle = workspace.lifecycle.clone();
-    state.listeners = workspace.listeners.clone();
     state.sandbox = Some(user);
     state
 }
@@ -237,14 +215,141 @@ pub async fn dispatch(State(state): State<AppState>, mut req: Request<Body>, nex
     if path == "/api/auth/me" {
         return next.run(req).await;
     }
-    let mut router = router_for_state(scoped(&state, user.id, &workspace));
+    if let Err(error) = check_shared_access(&state, user.id, &workspace, &mut req).await {
+        return error.into_response();
+    }
+    let shared = path.starts_with("/api/stations/") || path.starts_with("/api/playlists");
+    let mut target = if shared {
+        state.clone()
+    } else {
+        scoped(&state, user.id, &workspace)
+    };
+    target.sandbox = Some(user.id);
+    let mut router = router_for_state(target);
     // The root router already extracted URL parameters. Do not accumulate
     // them a second time when routing the request into the sandbox.
     req.extensions_mut().clear();
+    req.extensions_mut().insert(workspace.clone());
     match Box::pin(router.call(req)).await {
         Ok(response) => response,
         Err(never) => match never {},
     }
+}
+
+// Station handlers use the real database/runtime, but a demo may reach only
+// its assigned station and its own playlist copies, including nested IDs.
+async fn check_shared_access(state: &AppState, user: Uuid, workspace: &Workspace, req: &mut Request<Body>) -> Result<(), AppError> {
+    let path = req.uri().path().to_owned();
+    let parts: Vec<_> = path.trim_start_matches('/').split('/').collect();
+    match parts.as_slice() {
+        ["api", "stations", station, rest @ ..] => {
+            let id = crate::stations::handlers::resolve_station_id(&state.auth_db, station).await?;
+            if id != workspace.station_id {
+                return Err(AppError::not_found("Station not found".into()));
+            }
+            let child = match rest {
+                ["schedules", id] => Some(("station_schedules", id)),
+                ["schedule-events", id] => Some(("station_schedule_events", id)),
+                ["auto-fill", "playlists", id] => Some(("station_auto_fill_playlists", id)),
+                _ => None,
+            };
+            if let Some((table, id)) = child {
+                let id: Uuid = id.parse().map_err(|_| AppError::not_found("Station item not found".into()))?;
+                let exists: bool = sqlx::query_scalar(&format!("SELECT EXISTS(SELECT 1 FROM {table} WHERE id=$1 AND station_id=$2)"))
+                    .bind(id)
+                    .bind(workspace.station_id)
+                    .fetch_one(&state.auth_db)
+                    .await
+                    .db_error("check station item access")?;
+                if !exists {
+                    return Err(AppError::not_found("Station item not found".into()));
+                }
+            }
+        }
+        ["api", "playlists", playlist, rest @ ..] => {
+            let id = crate::playlists::repository::resolve_playlist_id(&workspace.db, playlist).await?;
+            let owned: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM playlists WHERE id=$1 AND created_by=$2)")
+                .bind(id)
+                .bind(user)
+                .fetch_one(&state.auth_db)
+                .await
+                .db_error("check demo playlist access")?;
+            if !owned {
+                return Err(AppError::not_found("Playlist not found".into()));
+            }
+            if let ["add-to-queue", station] = rest {
+                let station = crate::stations::handlers::resolve_station_id(&state.auth_db, station).await?;
+                if station != workspace.station_id {
+                    return Err(AppError::not_found("Station not found".into()));
+                }
+            }
+            // Slugs can be identical on private copies; route by the checked ID.
+            *req.uri_mut() = req
+                .uri()
+                .to_string()
+                .replacen(&format!("/api/playlists/{playlist}"), &format!("/api/playlists/{id}"), 1)
+                .parse()
+                .map_err(|_| AppError::bad_request("Invalid playlist URL".into()))?;
+        }
+        _ => return Ok(()),
+    }
+    if matches!(req.method().as_str(), "GET" | "HEAD" | "DELETE") {
+        return Ok(());
+    }
+    let bytes = axum::body::to_bytes(std::mem::replace(req.body_mut(), Body::empty()), 2 * 1024 * 1024)
+        .await
+        .map_err(|_| AppError::bad_request("Request body is too large".into()))?;
+    if !bytes.is_empty() {
+        let body: Value = serde_json::from_slice(&bytes).map_err(|_| AppError::bad_request("Invalid JSON request".into()))?;
+        for field in ["playlist_id", "source_playlist_id"] {
+            if let Some(value) = body.get(field).filter(|v| !v.is_null()) {
+                let id: Uuid = serde_json::from_value(value.clone()).map_err(|_| AppError::bad_request("Invalid playlist ID".into()))?;
+                let owned: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM playlists WHERE id=$1 AND created_by=$2)")
+                    .bind(id)
+                    .bind(user)
+                    .fetch_one(&state.auth_db)
+                    .await
+                    .db_error("check demo playlist reference")?;
+                if !owned {
+                    return Err(AppError::not_found("Playlist not found".into()));
+                }
+            }
+        }
+        if let Some(ids) = body.get("queue_item_ids") {
+            let ids: Vec<Uuid> = serde_json::from_value(ids.clone()).map_err(|_| AppError::bad_request("Invalid queue IDs".into()))?;
+            let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM station_queue WHERE station_id=$1 AND id=ANY($2)")
+                .bind(workspace.station_id)
+                .bind(&ids)
+                .fetch_one(&state.auth_db)
+                .await
+                .db_error("check demo queue access")?;
+            if count as usize != ids.iter().collect::<HashSet<_>>().len() {
+                return Err(AppError::not_found("Queue item not found".into()));
+            }
+        }
+        if let Some(ids) = body.get("song_ids") {
+            let ids: Vec<Uuid> = serde_json::from_value(ids.clone()).map_err(|_| AppError::bad_request("Invalid song IDs".into()))?;
+            check_songs(workspace, &ids).await?;
+        }
+        if let Some(id) = body.get("song_id") {
+            let id: Uuid = serde_json::from_value(id.clone()).map_err(|_| AppError::bad_request("Invalid song ID".into()))?;
+            check_songs(workspace, &[id]).await?;
+        }
+    }
+    *req.body_mut() = Body::from(bytes);
+    Ok(())
+}
+
+async fn check_songs(workspace: &Workspace, ids: &[Uuid]) -> Result<(), AppError> {
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM songs WHERE id=ANY($1)")
+        .bind(ids)
+        .fetch_one(&workspace.db)
+        .await
+        .db_error("check demo song access")?;
+    if count as usize != ids.iter().collect::<HashSet<_>>().len() {
+        return Err(AppError::bad_request("Song is not in the demo library".into()));
+    }
+    Ok(())
 }
 
 #[derive(Deserialize)]
@@ -263,8 +368,8 @@ pub async fn status(State(state): State<AppState>, Path(user): Path<Uuid>) -> Re
         .await
         .db_error("sandbox status")?;
     Ok(Json(match row {
-        Some((ready, seed)) => {
-            json!({"ready":ready, "songs":seed["songs"].as_array().map(Vec::len).unwrap_or(0), "station":seed["stations"][0]["name"], "playlists":seed["playlists"].as_array().map(Vec::len).unwrap_or(0)})
+        Some((is_ready, seed)) => {
+            json!({"ready":is_ready && ready(&state.auth_db, user).await?, "songs":seed["songs"].as_array().map(Vec::len).unwrap_or(0), "station":seed["station_name"], "playlists":seed["playlists"].as_array().map(Vec::len).unwrap_or(0)})
         }
         None => json!({"ready":false}),
     }))
@@ -311,7 +416,7 @@ async fn configure_inner(state: AppState, user: Uuid, config: Configure) -> Resu
         return Err(AppError::bad_request("Select at most 100 playlists".into()));
     }
     let db = &state.auth_db;
-    let mut stations = rows(db, "SELECT to_jsonb(t) FROM stations t WHERE id=ANY($1)", &[config.station_id]).await?;
+    let stations = rows(db, "SELECT to_jsonb(t) FROM stations t WHERE id=ANY($1)", &[config.station_id]).await?;
     if stations.is_empty() {
         return Err(AppError::not_found("Source station not found".into()));
     }
@@ -319,13 +424,13 @@ async fn configure_inner(state: AppState, user: Uuid, config: Configure) -> Resu
     if playlists.len() != config.playlist_ids.iter().collect::<HashSet<_>>().len() {
         return Err(AppError::not_found("Source playlist not found".into()));
     }
-    let mut library = rows(
+    let library = rows(
         db,
         "SELECT to_jsonb(t) FROM station_songs t WHERE station_id=ANY($1) ORDER BY position",
         &[config.station_id],
     )
     .await?;
-    let mut queue = rows(
+    let queue = rows(
         db,
         "SELECT to_jsonb(t) FROM station_queue t WHERE station_id=ANY($1) ORDER BY position",
         &[config.station_id],
@@ -343,9 +448,6 @@ async fn configure_inner(state: AppState, user: Uuid, config: Configure) -> Resu
         .chain(playlist_songs.iter())
         .filter_map(|r| r["song_id"].as_str()?.parse().ok())
         .collect();
-    if ids.is_empty() || ids.len() > 1000 {
-        return Err(AppError::bad_request("Sandbox must contain 1–1000 songs".into()));
-    }
     let mut songs = rows(
         db,
         "SELECT to_jsonb(t) FROM songs t WHERE id=ANY($1) AND missing_since IS NULL",
@@ -355,9 +457,7 @@ async fn configure_inner(state: AppState, user: Uuid, config: Configure) -> Resu
     if songs.len() != ids.len() {
         return Err(AppError::bad_request("Some source songs are missing".into()));
     }
-    let song_map: HashMap<Uuid, Uuid> = ids.into_iter().map(|id| (id, Uuid::new_v4())).collect();
     let playlist_map: HashMap<Uuid, Uuid> = config.playlist_ids.iter().map(|id| (*id, Uuid::new_v4())).collect();
-    let station_id = Uuid::new_v4();
     // Each prepared seed gets immutable audio storage. Normal relative paths
     // are preserved without overwriting the active sandbox during provisioning.
     let library_id = Uuid::new_v4();
@@ -393,7 +493,6 @@ async fn configure_inner(state: AppState, user: Uuid, config: Configure) -> Resu
                     .await
                     .map_err(|e| AppError::internal(format!("Create sandbox audio folder: {e}")))?;
             }
-            remap(song, "id", &song_map);
             tokio::fs::copy(&source, &destination)
                 .await
                 .map_err(|e| AppError::internal(format!("Copy sandbox audio: {e}")))?;
@@ -409,48 +508,19 @@ async fn configure_inner(state: AppState, user: Uuid, config: Configure) -> Resu
         }
         return Err(error);
     }
-    for station in &mut stations {
-        station["id"] = json!(station_id);
-        station["created_by"] = json!(user);
-        station["is_started"] = json!(false);
-        station["current_song_index"] = json!(0);
-        station["current_queue_item_id"] = Value::Null;
-        station["consumed_queue_item_ids"] = json!([]);
-        station["current_queue_cursor_format"] = json!(0);
-    }
     for playlist in &mut playlists {
         remap(playlist, "id", &playlist_map);
         playlist["created_by"] = json!(user);
     }
-    for row in library.iter_mut().chain(queue.iter_mut()) {
-        row["id"] = json!(Uuid::new_v4());
-        row["station_id"] = json!(station_id);
-        remap(row, "song_id", &song_map);
-        if row.get("origin_playlist_id").is_some() {
-            remap(row, "origin_playlist_id", &playlist_map);
-        }
-    }
-    // Every selected song is available in the station library, including songs
-    // originating only from the queue or a selected playlist.
-    let library_ids: HashSet<Value> = library.iter().map(|r| r["song_id"].clone()).collect();
-    for song in &songs {
-        if !library_ids.contains(&song["id"]) {
-            library.push(json!({"id":Uuid::new_v4(),"station_id":station_id,"song_id":song["id"],"position":library.len(),"created_at":chrono::Utc::now()}));
-        }
-    }
-    if queue.is_empty() {
-        queue = library.iter().enumerate().map(|(position,r)| json!({"id":Uuid::new_v4(),"station_id":station_id,"song_id":r["song_id"],"position":position,"is_auto_dj":false,"origin_playlist_id":null,"created_at":chrono::Utc::now()})).collect();
-    }
     for row in &mut playlist_songs {
         row["id"] = json!(Uuid::new_v4());
-        remap(row, "song_id", &song_map);
         remap(row, "playlist_id", &playlist_map);
     }
     if playlists.is_empty() {
         let playlist = Uuid::new_v4();
         let now = chrono::Utc::now();
         playlists.push(json!({"id":playlist,"name":"Demo","description":"Demo sandbox library","slug":"demo","created_by":user,"created_at":now,"updated_at":now}));
-        playlist_songs = library.iter().enumerate().map(|(position, row)| json!({"id":Uuid::new_v4(),"playlist_id":playlist,"song_id":row["song_id"],"position":position,"created_at":now})).collect();
+        playlist_songs = songs.iter().enumerate().map(|(position, row)| json!({"id":Uuid::new_v4(),"playlist_id":playlist,"song_id":row["id"],"position":position,"created_at":now})).collect();
     }
     let mut owner: Value = sqlx::query_scalar("SELECT to_jsonb(t) FROM users t WHERE id=$1")
         .bind(user)
@@ -460,7 +530,7 @@ async fn configure_inner(state: AppState, user: Uuid, config: Configure) -> Resu
     // The local user row exists only for foreign keys. Authentication always
     // uses auth_db, so neither the seed nor the sandbox needs a password hash.
     owner["password_hash"] = json!("!sandbox-no-login");
-    let seed = json!({"library_id":library_id,"users":[owner],"songs":songs,"stations":stations,"station_songs":library,"station_queue":queue,"playlists":playlists,"playlist_songs":playlist_songs});
+    let seed = json!({"station_id":config.station_id,"station_name":stations[0]["name"],"library_id":library_id,"users":[owner],"songs":songs,"playlists":playlists,"playlist_songs":playlist_songs});
     if let Err(error) = install(&state, user, seed).await {
         // A post-commit retirement error must not remove the newly published audio.
         let active: Result<Option<String>, _> = sqlx::query_scalar("SELECT seed->>'library_id' FROM demo_sandboxes WHERE user_id=$1")
@@ -486,6 +556,9 @@ pub async fn reset(State(state): State<AppState>, Path(user): Path<Uuid>) -> Res
         .await
         .db_error("load sandbox seed")?
         .ok_or_else(|| AppError::bad_request("Configure the sandbox first".into()))?;
+    if seed.get("station_id").is_none() {
+        return Err(AppError::bad_request("Prepare the sandbox again to assign a shared station".into()));
+    }
     let owned = state.clone();
     tokio::spawn(async move { install(&owned, user, seed).await })
         .await
@@ -493,8 +566,7 @@ pub async fn reset(State(state): State<AppState>, Path(user): Path<Uuid>) -> Res
     status(State(state), Path(user)).await
 }
 
-/// Revoke sockets and stop the isolated output when an account is removed or
-/// promoted. No sandbox process may outlive its account's permissions.
+/// Revoke demo sockets and files, without stopping the shared station.
 pub async fn retire(state: &AppState, user: Uuid) -> Result<(), AppError> {
     let slot = state.demos.slot(user).await;
     let mut guard = slot.write().await;
@@ -506,16 +578,14 @@ pub async fn retire(state: &AppState, user: Uuid) -> Result<(), AppError> {
     if let Some(workspace) = guard.take() {
         let _operations = workspace.gate.write().await;
         workspace.cancelled.send_replace(true);
-        let ids: Vec<Uuid> = sqlx::query_scalar("SELECT id FROM stations")
-            .fetch_all(&workspace.db)
-            .await
-            .db_error("list sandbox stations")?;
-        for id in ids {
-            crate::stations::handlers::stream::stop_station(&workspace.db, &workspace.streamers, &workspace.lifecycle, id).await?;
-        }
         workspace.db.close().await;
     }
     if let Some(generation) = generation {
+        sqlx::query("DELETE FROM public.playlists WHERE created_by=$1")
+            .bind(user)
+            .execute(&state.auth_db)
+            .await
+            .db_error("remove demo playlists")?;
         sqlx::query(&format!("DROP SCHEMA IF EXISTS {} CASCADE", schema(generation)))
             .execute(&state.auth_db)
             .await
@@ -552,6 +622,16 @@ fn install(
         if role != Some(Role::Demo) {
             return Err(AppError::bad_request("Sandbox requires a demo account".into()));
         }
+        let station: Uuid = serde_json::from_value(seed["station_id"].clone())
+            .map_err(|_| AppError::bad_request("Prepare the sandbox again to assign a shared station".into()))?;
+        let exists: Option<Uuid> = sqlx::query_scalar("SELECT id FROM public.stations WHERE id=$1 FOR KEY SHARE")
+            .bind(station)
+            .fetch_optional(&mut *tx)
+            .await
+            .db_error("lock shared demo station")?;
+        if exists.is_none() {
+            return Err(AppError::not_found("Source station not found".into()));
+        }
         let retired: Option<(Uuid, Value)> = sqlx::query_as("SELECT generation, seed FROM public.demo_sandboxes WHERE user_id=$1")
             .bind(user)
             .fetch_optional(&mut *tx)
@@ -565,31 +645,59 @@ fn install(
             .execute(include_str!("../migrations/0001_initial.sql"))
             .await
             .db_error("initialize sandbox schema")?;
-        for table in [
-            "users",
-            "songs",
-            "stations",
-            "playlists",
-            "station_songs",
-            "station_queue",
-            "playlist_songs",
-        ] {
-            let mut data = seed[table].clone();
-            if table == "stations" {
-                for row in data.as_array_mut().unwrap() {
-                    row["slug"] = json!(format!("demo-{}", user.simple()));
-                    row["output_mount"] = json!(format!("demo-{}-{}.mp3", user.simple(), generation.simple()));
-                }
-            }
+        for table in ["users", "songs"] {
             sqlx::query(&format!(
                 "INSERT INTO {schema}.{table} SELECT * FROM jsonb_populate_recordset(NULL::{schema}.{table}, $1)"
             ))
-            .bind(data)
+            .bind(&seed[table])
             .execute(&mut *tx)
             .await
             .db_error("populate sandbox")?;
         }
-        // Share connection settings, never the production mount.
+        // Real playlist rows keep station queue/schedule foreign keys valid;
+        // request scoping keeps each demo's copies private from other accounts.
+        let playlist_ids: Vec<Uuid> = seed["playlists"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| serde_json::from_value(p["id"].clone()))
+            .collect::<Result<_, _>>()
+            .map_err(|_| AppError::internal("Invalid demo playlist seed".into()))?;
+        sqlx::query("DELETE FROM public.playlists WHERE created_by=$1 AND NOT(id=ANY($2))")
+            .bind(user)
+            .bind(&playlist_ids)
+            .execute(&mut *tx)
+            .await
+            .db_error("replace demo playlists")?;
+        sqlx::query("DELETE FROM public.playlist_songs WHERE playlist_id IN (SELECT id FROM public.playlists WHERE created_by=$1)")
+            .bind(user)
+            .execute(&mut *tx)
+            .await
+            .db_error("restore demo playlist songs")?;
+        for table in ["playlists", "playlist_songs"] {
+            let conflict = if table == "playlists" {
+                "ON CONFLICT(id) DO UPDATE SET name=EXCLUDED.name, description=EXCLUDED.description, slug=EXCLUDED.slug, updated_at=EXCLUDED.updated_at"
+            } else {
+                ""
+            };
+            sqlx::query(&format!(
+                "INSERT INTO public.{table} SELECT * FROM jsonb_populate_recordset(NULL::public.{table}, $1) {conflict}"
+            ))
+            .bind(&seed[table])
+            .execute(&mut *tx)
+            .await
+            .db_error("copy demo playlists")?;
+        }
+        // Read-only catalog requests see only the assigned real station.
+        (&mut *tx).execute(format!(
+            "DROP TABLE {schema}.station_songs, {schema}.listener_stats, {schema}.playlist_songs CASCADE;
+             DROP TABLE {schema}.stations, {schema}.playlists CASCADE;
+             CREATE VIEW {schema}.stations AS SELECT * FROM public.stations WHERE id='{station}';
+             CREATE VIEW {schema}.station_songs AS SELECT * FROM public.station_songs WHERE station_id='{station}';
+             CREATE VIEW {schema}.listener_stats AS SELECT * FROM public.listener_stats WHERE station_id='{station}';
+             CREATE VIEW {schema}.playlists AS SELECT * FROM public.playlists WHERE created_by='{user}';
+             CREATE VIEW {schema}.playlist_songs AS SELECT ps.* FROM public.playlist_songs ps JOIN {schema}.playlists p ON p.id=ps.playlist_id;"
+        ).as_str()).await.db_error("scope demo catalog")?;
         sqlx::query(&format!("DELETE FROM {schema}.icecast_settings"))
             .execute(&mut *tx)
             .await
@@ -606,13 +714,6 @@ fn install(
         if let Some(previous) = guard.take() {
             let _operations = previous.gate.write().await;
             previous.cancelled.send_replace(true);
-            let stations: Vec<Uuid> = sqlx::query_scalar("SELECT id FROM stations")
-                .fetch_all(&previous.db)
-                .await
-                .db_error("list old demo stations")?;
-            for station in stations {
-                crate::stations::handlers::stream::stop_station(&previous.db, &previous.streamers, &previous.lifecycle, station).await?;
-            }
             previous.db.close().await;
         }
         if let Some((retired, old_seed)) = retired {

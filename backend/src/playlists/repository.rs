@@ -20,7 +20,11 @@ pub async fn find_playlist_by_id(db: &PgPool, id: Uuid) -> Result<Option<Playlis
 }
 
 pub async fn find_playlist_by_slug(db: &PgPool, slug: &str) -> Result<Option<Playlist>, AppError> {
-    sqlx::query_as::<_, Playlist>("SELECT * FROM playlists WHERE slug = $1")
+    // Demo copies retain the source slug; main-account links must prefer originals.
+    // Inside a demo catalog view, only that demo's playlists are visible anyway.
+    sqlx::query_as::<_, Playlist>(
+        "SELECT p.* FROM playlists p JOIN users u ON u.id=p.created_by WHERE p.slug=$1 ORDER BY (u.role='admin') DESC, p.created_at, p.id LIMIT 1",
+    )
         .bind(slug)
         .fetch_optional(db)
         .await
