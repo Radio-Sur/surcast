@@ -27,9 +27,8 @@ services:
       DATABASE_URL: postgres://surcast:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}@postgres:5432/surcast
       MUSIC_DIR: /workspace/music
     ports:
-      # Reverse proxy on the host owns 80/443; both services stay local.
-      - "127.0.0.1:6767:3001"
-      - "127.0.0.1:8000:8000"
+      - "6767:3001"
+      - "8000:8000"
     volumes:
       - music:/workspace/music
       - sandbox_music:/workspace/music.sandboxes
